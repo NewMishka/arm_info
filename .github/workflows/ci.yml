@@ -16,11 +16,13 @@ jobs:
       - name: Install ShellCheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Syntax
-        run: bash -n arm_info.sh install.sh tests/test_cli.sh packaging/build-rpm.sh
+        run: bash -n arm_info.sh arm_info-enterprise.sh install.sh tests/test_cli.sh tests/test_enterprise.sh packaging/build-rpm.sh
       - name: ShellCheck
-        run: shellcheck --severity=error arm_info.sh install.sh tests/test_cli.sh packaging/build-rpm.sh
-      - name: CLI tests
+        run: shellcheck --severity=error arm_info.sh arm_info-enterprise.sh install.sh tests/test_cli.sh tests/test_enterprise.sh packaging/build-rpm.sh
+      - name: Base CLI tests
         run: bash tests/test_cli.sh
+      - name: Enterprise profile tests
+        run: bash tests/test_enterprise.sh
 
   compatibility-syntax:
     runs-on: ubuntu-latest
@@ -34,4 +36,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Bash syntax in ${{ matrix.image }}
-        run: docker run --rm -v "$PWD:/src:ro" "${{ matrix.image }}" bash -n /src/arm_info.sh
+        run: docker run --rm -v "$PWD:/src:ro" "${{ matrix.image }}" bash -c 'bash -n /src/arm_info.sh && bash -n /src/arm_info-enterprise.sh'
