@@ -1,0 +1,49 @@
+name: Apply corp alias v1.2.1
+
+on:
+  push:
+    branches: [feature/single-file-v1.2.1]
+    paths:
+      - .github/workflows/apply-corp-alias-v121.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add --corp alias
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('arm_info.sh')
+          s=p.read_text(encoding='utf-8')
+
+          s=s.replace('  arm_info --profile enterprise [--privacy] [--json] [-o FILE]\n',
+                      '  arm_info --corp [--privacy] [--json] [-o FILE]\n  arm_info --profile enterprise [--privacy] [--json] [-o FILE]\n',1)
+          s=s.replace('  enterprise   domain + network + print\n',
+                      '  enterprise   domain + network + print (без инвентаризации ПО)\n',1)
+          s=s.replace('        --profile)\n',
+                      '        --corp) PROFILE=enterprise; shift ;;\n        --profile)\n',1)
+          s=s.replace('        --profile|--profile=*|--compare) _arm_enterprise_requested=1; break ;;',
+                      '        --corp|--profile|--profile=*|--compare) _arm_enterprise_requested=1; break ;;',1)
+          s=s.replace('  --profile NAME          domain|network|print|software|enterprise\n',
+                      '  --corp                  сокращённый запуск corporate-профиля: domain+network+print\n  --profile NAME          domain|network|print|software|enterprise\n',1)
+
+          p.write_text(s,encoding='utf-8')
+          PY
+      - name: Validate alias
+        run: |
+          bash -n arm_info.sh
+          test "$(bash arm_info.sh --corp --version)" = "arm_info enterprise 1.2.1"
+          bash arm_info.sh --corp --help | grep -q -- '--corp'
+          grep -q 'enterprise   domain + network + print (без инвентаризации ПО)' arm_info.sh
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add arm_info.sh
+          git commit -m "feat: add --corp alias for enterprise diagnostics"
+          git push
