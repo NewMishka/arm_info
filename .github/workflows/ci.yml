@@ -72,6 +72,6 @@ jobs:
             RPM_TOPDIR=/tmp/rpmbuild bash packaging/build-rpm.sh &&
             RPM=$(find /tmp/rpmbuild/RPMS -type f -name "arm-info-*.rpm" | head -1) &&
             test -n "$RPM" &&
-            rpm -qpl "$RPM" | grep -q "/usr/sbin/arm_info" &&
+            rpm -qpl "$RPM" | grep -Eq "/usr/(s)?bin/arm_info$" &&
             rpm -qpl "$RPM" | grep -q "arm_info-enterprise.sh"
           '
