@@ -1,0 +1,21 @@
+name: Предложение
+description: Предложить новую проверку или возможность
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: task
+    attributes:
+      label: Задача
+      description: Какую проблему администратора должна решать функция?
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Источник данных
+      description: Какая команда, /proc, /sys или API предоставляет показатель?
+  - type: textarea
+    id: false_positive
+    attributes:
+      label: Риски ложных срабатываний

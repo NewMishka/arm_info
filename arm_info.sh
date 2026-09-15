@@ -2,7 +2,7 @@
 
 (
 # ============================================================
-# arm_info 1.0.0 — диагностика АРМ для РЕД ОС 7 / 8
+# arm_info 1.1.0 — диагностика АРМ для РЕД ОС 7 / 8
 # Запуск: через bash-файл или целиком вставить в root-терминал.
 # Результат одновременно выводится на экран и сохраняется в TXT.
 # ============================================================
@@ -11,6 +11,112 @@ if [ -z "${BASH_VERSION:-}" ]; then
     echo "Ошибка: скрипт необходимо запускать через bash." >&2
     exit 1
 fi
+
+ARM_INFO_VERSION="1.1.0"
+
+# -------------------- НАСТРОЙКИ ПО УМОЛЧАНИЮ --------------------
+# Значения можно переопределить в /etc/arm_info.conf или через --config.
+FS_WARN=80
+FS_HIGH=90
+FS_CRIT=95
+INODE_WARN=80
+CPU_TEMP_WARN=80
+CPU_TEMP_HIGH=85
+CPU_TEMP_VHIGH=90
+CPU_TEMP_CRIT=95
+HDD_TEMP_WARN=50
+HDD_TEMP_HIGH=60
+HDD_TEMP_CRIT=65
+SSD_TEMP_WARN=60
+SSD_TEMP_HIGH=70
+SSD_TEMP_CRIT=80
+NVME_TEMP_WARN=70
+NVME_TEMP_HIGH=80
+NVME_TEMP_CRIT=90
+SSD_LIFE_PLAN=30
+SSD_LIFE_WARN=20
+SSD_LIFE_CRIT=10
+NET_ERROR_NOTICE_PPM=10
+NET_ERROR_WARN_PPM=100
+NET_ERROR_CRIT_PPM=1000
+NET_DROP_WARN_PPM=1000
+NET_DROP_HIGH_PPM=5000
+NET_DROP_CRIT_PPM=10000
+REPORT_DIR_DEFAULT=""
+PRIVACY_DEFAULT=0
+
+CONFIG_FILE="/etc/arm_info.conf"
+PRIVACY_MODE=$PRIVACY_DEFAULT
+SAVE_REPORT=1
+QUIET_MODE=0
+JSON_MODE=0
+OUTPUT_PATH=""
+SHOW_HELP=0
+
+usage() {
+    cat <<'EOF'
+arm_info — диагностика технического состояния Linux-АРМ
+
+Использование:
+  bash arm_info.sh [параметры]
+
+Параметры:
+  -h, --help              показать справку
+  -V, --version           показать версию
+  --privacy               обезличить hostname, IP, MAC, DNS и имена интерфейсов
+  --no-save               не сохранять отчёт в файл
+  -o, --output PATH       сохранить отчёт в указанный файл или каталог
+  -q, --quiet             не выводить отчёт в терминал (имеет смысл с сохранением)
+  --json                  вывести отчёт в JSON вместо текстового формата
+  --config PATH           использовать другой конфигурационный файл
+
+Коды завершения:
+  0  состояние нормальное, проверка достаточно полная
+  1  обнаружены предупреждения/неудовлетворительное состояние
+  2  обнаружено критическое состояние
+  3  состояние нормальное, но диагностика неполная
+EOF
+}
+
+# Разбираем CLI только при запуске как файла; при вставке в терминал аргументов нет.
+while (($#)); do
+    case "$1" in
+        -h|--help) SHOW_HELP=1; shift ;;
+        -V|--version) echo "arm_info $ARM_INFO_VERSION"; exit 0 ;;
+        --privacy) PRIVACY_MODE=1; shift ;;
+        --no-save) SAVE_REPORT=0; shift ;;
+        -q|--quiet) QUIET_MODE=1; shift ;;
+        --json) JSON_MODE=1; shift ;;
+        -o|--output)
+            [ $# -ge 2 ] || { echo "Ошибка: для $1 требуется путь." >&2; exit 64; }
+            OUTPUT_PATH=$2; shift 2 ;;
+        --config)
+            [ $# -ge 2 ] || { echo "Ошибка: для $1 требуется путь." >&2; exit 64; }
+            CONFIG_FILE=$2; shift 2 ;;
+        --) shift; break ;;
+        *) echo "Ошибка: неизвестный параметр: $1" >&2; usage >&2; exit 64 ;;
+    esac
+done
+((SHOW_HELP==1)) && { usage; exit 0; }
+
+# Безопасно читаем только разрешённые ключи KEY=VALUE. Конфиг не source-ится.
+load_config() {
+    local file=$1 key val
+    [ -r "$file" ] || return 0
+    while IFS='=' read -r key val; do
+        key=$(printf '%s' "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        val=${val%%#*}; val=$(printf '%s' "$val" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        case "$key" in
+            FS_WARN|FS_HIGH|FS_CRIT|INODE_WARN|CPU_TEMP_WARN|CPU_TEMP_HIGH|CPU_TEMP_VHIGH|CPU_TEMP_CRIT|HDD_TEMP_WARN|HDD_TEMP_HIGH|HDD_TEMP_CRIT|SSD_TEMP_WARN|SSD_TEMP_HIGH|SSD_TEMP_CRIT|NVME_TEMP_WARN|NVME_TEMP_HIGH|NVME_TEMP_CRIT|SSD_LIFE_PLAN|SSD_LIFE_WARN|SSD_LIFE_CRIT|NET_ERROR_NOTICE_PPM|NET_ERROR_WARN_PPM|NET_ERROR_CRIT_PPM|NET_DROP_WARN_PPM|NET_DROP_HIGH_PPM|NET_DROP_CRIT_PPM|PRIVACY_DEFAULT)
+                [[ "$val" =~ ^[0-9]+$ ]] && printf -v "$key" '%s' "$val" ;;
+            REPORT_DIR_DEFAULT) REPORT_DIR_DEFAULT=$val ;;
+        esac
+    done < "$file"
+}
+load_config "$CONFIG_FILE"
+
+# --privacy имеет приоритет над значением по умолчанию; если флаг не указан, применяем конфиг.
+if ((PRIVACY_MODE==0 && PRIVACY_DEFAULT==1)); then PRIVACY_MODE=1; fi
 
 WIDTH=92
 line() { printf '%*s\n' "$WIDTH" '' | tr ' ' '-'; }
@@ -75,11 +181,27 @@ read_cpu_temp_once() {
 HOST=$(hostname 2>/dev/null); [ -z "$HOST" ] && HOST="unknown-host"
 SAFE_HOST=$(printf '%s' "$HOST" | tr -c '[:alnum:]_.-' '_')
 STAMP=$(date '+%Y-%m-%d_%H-%M-%S')
-REPORT_DIR="${REPORT_DIR:-$(pwd -P 2>/dev/null)}"; [ -z "$REPORT_DIR" ] && REPORT_DIR=/tmp
+EXT=txt; ((JSON_MODE==1)) && EXT=json
+REPORT_DIR="${REPORT_DIR_DEFAULT:-${REPORT_DIR:-$(pwd -P 2>/dev/null)}}"; [ -z "$REPORT_DIR" ] && REPORT_DIR=/tmp
 if [ ! -d "$REPORT_DIR" ] || [ ! -w "$REPORT_DIR" ]; then REPORT_DIR=/tmp; fi
-REPORT_FILE="$REPORT_DIR/ARM_INFO_${SAFE_HOST}_${STAMP}.txt"
-[ -t 1 ] && command -v clear >/dev/null 2>&1 && clear
-exec > >(tee "$REPORT_FILE") 2>&1
+if ((PRIVACY_MODE==1)); then DEFAULT_NAME="ARM_INFO_PRIVATE_${STAMP}.${EXT}"; else DEFAULT_NAME="ARM_INFO_${SAFE_HOST}_${STAMP}.${EXT}"; fi
+if [ -n "$OUTPUT_PATH" ]; then
+    if [ -d "$OUTPUT_PATH" ]; then REPORT_FILE="$OUTPUT_PATH/$DEFAULT_NAME"; else REPORT_FILE="$OUTPUT_PATH"; fi
+else
+    REPORT_FILE="$REPORT_DIR/$DEFAULT_NAME"
+fi
+if ((SAVE_REPORT==1)); then
+    _outdir=$(dirname -- "$REPORT_FILE")
+    if [ ! -d "$_outdir" ] || [ ! -w "$_outdir" ]; then REPORT_FILE="/tmp/$DEFAULT_NAME"; fi
+fi
+[ -t 1 ] && ((QUIET_MODE==0)) && command -v clear >/dev/null 2>&1 && clear
+if ((SAVE_REPORT==1 && QUIET_MODE==0)); then
+    exec > >(tee "$REPORT_FILE") 2>&1
+elif ((SAVE_REPORT==1 && QUIET_MODE==1)); then
+    exec > "$REPORT_FILE" 2>&1
+elif ((SAVE_REPORT==0 && QUIET_MODE==1)); then
+    exec >/dev/null 2>&1
+fi
 
 # -------------------- СИСТЕМА --------------------
 if [ -r /etc/os-release ]; then . /etc/os-release; OS="${PRETTY_NAME:-$NAME}"; else OS="Не определено"; fi
@@ -193,9 +315,9 @@ if ((RXTX_PACKETS>0)); then
 fi
 if ((ACTIVE_NET==0)); then
     NET_STATUS="Нет подключения"
-elif ((NET_ERROR_PPM>=1000 || NET_DROP_PPM>=10000)); then
+elif ((NET_ERROR_PPM>=NET_ERROR_CRIT_PPM || NET_DROP_PPM>=NET_DROP_CRIT_PPM)); then
     NET_STATUS="Проблема"
-elif ((NET_ERROR_PPM>=100 || NET_DROP_PPM>=1000)); then
+elif ((NET_ERROR_PPM>=NET_ERROR_WARN_PPM || NET_DROP_PPM>=NET_DROP_WARN_PPM)); then
     NET_STATUS="Требует внимания"
 else
     NET_STATUS="Норма"
@@ -235,8 +357,82 @@ if command -v journalctl >/dev/null 2>&1 && journalctl -b -n 1 -q --no-pager >/d
 fi
 [[ "$HW_ERR_COUNT" =~ ^[0-9]+$ ]]||HW_ERR_COUNT=0; [[ "$JOURNAL_ERR_COUNT" =~ ^[0-9]+$ ]]||JOURNAL_ERR_COUNT=0
 
+# -------------------- ДОПОЛНИТЕЛЬНЫЕ ПРОВЕРКИ --------------------
+# Синхронизация времени особенно важна для Kerberos/AD.
+TIME_SYNC="Н/Д"
+if command -v timedatectl >/dev/null 2>&1; then
+    _nts=$(timedatectl show -p NTPSynchronized --value 2>/dev/null | tr '[:upper:]' '[:lower:]')
+    [ "$_nts" = yes ] && TIME_SYNC="Да"
+    [ "$_nts" = no ] && TIME_SYNC="Нет"
+fi
+if [ "$TIME_SYNC" = "Н/Д" ] && command -v chronyc >/dev/null 2>&1; then
+    chronyc tracking 2>/dev/null | grep -qi 'Leap status.*Normal' && TIME_SYNC="Да"
+fi
+
+# Признаки аварийного завершения предыдущей загрузки: только индикатор, не абсолютный диагноз.
+UNCLEAN_BOOT_SIGNS=0
+if ((JOURNAL_AVAILABLE==1)); then
+    _prev_kernel=$(journalctl -k -b -1 -o cat -q --no-pager 2>/dev/null || true)
+    if [ -n "$_prev_kernel" ]; then
+        UNCLEAN_BOOT_SIGNS=$(printf '%s\n' "$_prev_kernel" | grep -Ei 'kernel panic|watchdog.*(lockup|reset)|unclean shutdown|power failure|I/O error.*shutdown' | sort -u | wc -l)
+    fi
+fi
+[[ "$UNCLEAN_BOOT_SIGNS" =~ ^[0-9]+$ ]] || UNCLEAN_BOOT_SIGNS=0
+
+# Linux software RAID (md).
+RAID_STATUS="Не обнаружен"; RAID_DEGRADED=0
+if [ -r /proc/mdstat ] && grep -Eq '^md[0-9]+' /proc/mdstat; then
+    if grep -Eq '\[[U_]*_[U_]*\]' /proc/mdstat; then RAID_STATUS="DEGRADED"; RAID_DEGRADED=1; else RAID_STATUS="OK"; fi
+fi
+
+# ECC/EDAC: исправленные и неисправимые ошибки, если драйвер публикует счётчики.
+ECC_STATUS="Н/Д"; ECC_CE=0; ECC_UE=0
+if compgen -G '/sys/devices/system/edac/mc/mc*/ce_count' >/dev/null; then
+    ECC_STATUS="OK"
+    for _f in /sys/devices/system/edac/mc/mc*/ce_count; do _v=$(cat "$_f" 2>/dev/null); [[ "$_v" =~ ^[0-9]+$ ]] && ECC_CE=$((ECC_CE+_v)); done
+    for _f in /sys/devices/system/edac/mc/mc*/ue_count; do [ -r "$_f" ] || continue; _v=$(cat "$_f" 2>/dev/null); [[ "$_v" =~ ^[0-9]+$ ]] && ECC_UE=$((ECC_UE+_v)); done
+    ((ECC_UE>0)) && ECC_STATUS="ОШИБКИ"
+    ((ECC_UE==0 && ECC_CE>0)) && ECC_STATUS="Исправленные ошибки"
+fi
+
+# Батарея (актуально для ноутбуков).
+BATTERY_STATUS="Не обнаружена"; BATTERY_CAPACITY="-"; BATTERY_HEALTH="-"
+for _bat in /sys/class/power_supply/BAT*; do
+    [ -d "$_bat" ] || continue
+    BATTERY_STATUS=$(cat "$_bat/status" 2>/dev/null); [ -z "$BATTERY_STATUS" ] && BATTERY_STATUS="Н/Д"
+    _cap=$(cat "$_bat/capacity" 2>/dev/null); [[ "$_cap" =~ ^[0-9]+$ ]] && BATTERY_CAPACITY="${_cap}%"
+    _full=$(cat "$_bat/energy_full" 2>/dev/null); _design=$(cat "$_bat/energy_full_design" 2>/dev/null)
+    [ -z "$_full" ] && _full=$(cat "$_bat/charge_full" 2>/dev/null)
+    [ -z "$_design" ] && _design=$(cat "$_bat/charge_full_design" 2>/dev/null)
+    if [[ "$_full" =~ ^[0-9]+$ && "$_design" =~ ^[0-9]+$ ]] && ((_design>0)); then BATTERY_HEALTH="$((_full*100/_design))%"; fi
+    break
+done
+
+# Опциональные сервисы: не влияют на базовую аппаратную оценку, но дают контекст АРМ.
+SSSD_STATUS="Не установлен"; SSSD_DOMAINS="-"
+if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files sssd.service --no-legend 2>/dev/null | grep -q '^sssd.service'; then
+    SSSD_STATUS=$(systemctl is-active sssd 2>/dev/null || true); [ -z "$SSSD_STATUS" ] && SSSD_STATUS="неактивен"
+    if command -v sssctl >/dev/null 2>&1; then SSSD_DOMAINS=$(sssctl domain-list 2>/dev/null | paste -sd ',' -); [ -z "$SSSD_DOMAINS" ] && SSSD_DOMAINS="-"; fi
+fi
+KRB_STATUS="Не установлен"
+if command -v klist >/dev/null 2>&1; then if klist -s 2>/dev/null; then KRB_STATUS="Есть билет (текущий контекст)"; else KRB_STATUS="Билета нет (текущий контекст)"; fi; fi
+CUPS_STATUS="Не установлен"; CUPS_QUEUES=0
+if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files cups.service --no-legend 2>/dev/null | grep -q '^cups.service'; then
+    CUPS_STATUS=$(systemctl is-active cups 2>/dev/null || true); [ -z "$CUPS_STATUS" ] && CUPS_STATUS="неактивен"
+    if command -v lpstat >/dev/null 2>&1; then CUPS_QUEUES=$(lpstat -p 2>/dev/null | grep -c '^printer '); fi
+fi
+
+# Совместимость дистрибутива.
+DISTRO_ID=${ID:-unknown}; DISTRO_LIKE=${ID_LIKE:-}
+case "$DISTRO_ID" in
+    redos) SUPPORT_TIER="Основная поддержка" ;;
+    rhel|centos|rocky|almalinux|fedora) SUPPORT_TIER="Совместимая RHEL/Fedora-система" ;;
+    debian|ubuntu) SUPPORT_TIER="Экспериментальная совместимость" ;;
+    *) case " $DISTRO_LIKE " in *' rhel '*|*' fedora '*) SUPPORT_TIER="Совместимая RHEL/Fedora-система" ;; *) SUPPORT_TIER="Не проверено" ;; esac ;;
+esac
+
 # -------------------- ДИСКИ / SMART --------------------
-DISK_ROWS=(); DISK_WORST_SCORE=100; FIXED_DISKS=0; MAX_DISK_HOURS=0; SMART_UNKNOWN_COUNT=0
+DISK_ROWS=(); DISK_SELFTEST_ROWS=(); DISK_WORST_SCORE=100; FIXED_DISKS=0; MAX_DISK_HOURS=0; SMART_UNKNOWN_COUNT=0
 while read -r NAME TYPE SIZE ROTA MODEL; do
     case "$TYPE" in disk|rom) ;; *) continue ;; esac
     DEV="/dev/$NAME"; MODEL=$(echo "$MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'); [ -z "$MODEL" ]&&MODEL="-"; [ "${#MODEL}" -gt 28 ]&&MODEL="${MODEL:0:27}…"
@@ -245,6 +441,10 @@ while read -r NAME TYPE SIZE ROTA MODEL; do
     if [[ "$NAME" = nvme* ]]; then DISK_TYPE="NVMe SSD"; elif [ "$ROTA" = 0 ]; then DISK_TYPE=SSD; else DISK_TYPE=HDD; fi
     if command -v smartctl >/dev/null 2>&1; then
         SMART_ALL=$(run_smart -a "$DEV" 2>/dev/null); SMART_H=$(run_smart -H "$DEV" 2>/dev/null)
+        SELFTEST="Н/Д"
+        _st=$(run_smart -l selftest "$DEV" 2>/dev/null | awk '/^# *1[[:space:]]/{for(i=5;i<=NF;i++){printf "%s%s",$i,(i<NF?" ":"")} exit}')
+        [ -n "$_st" ] && SELFTEST="$_st"
+        DISK_SELFTEST_ROWS+=("$NAME|$SELFTEST")
         if echo "$SMART_H"|grep -Eqi 'PASSED|SMART.*OK'; then SMART=OK; elif echo "$SMART_H"|grep -Eqi 'FAILED|SMART.*BAD'; then SMART=FAIL; DISK_SCORE=0; else SMART="Н/Д"; SMART_UNKNOWN_COUNT=$((SMART_UNKNOWN_COUNT+1)); fi
         if [[ "$NAME" = nvme* ]]; then
             USED=$(printf '%s\n' "$SMART_ALL" | awk -F: '/Percentage Used/{x=$2;gsub(/[% \t]/,"",x);print x;exit}'); if [[ "$USED" =~ ^[0-9]+$ ]]; then REMAIN=$((100-USED)); ((REMAIN<0))&&REMAIN=0; ((REMAIN>100))&&REMAIN=100; RESOURCE="${REMAIN}%"; ((REMAIN<DISK_SCORE))&&DISK_SCORE=$REMAIN; fi
@@ -262,9 +462,9 @@ while read -r NAME TYPE SIZE ROTA MODEL; do
             ((REALLOC>0))&&DISK_SCORE=$(min_score "$DISK_SCORE" 70); ((REALLOC>10))&&DISK_SCORE=$(min_score "$DISK_SCORE" 50); ((PENDING>0 || UNCORR>0))&&DISK_SCORE=$(min_score "$DISK_SCORE" 30)
         fi
         if [[ "$TEMP" =~ ^[0-9]+$ ]]; then
-            if [ "$DISK_TYPE" = HDD ]; then ((TEMP>=50))&&DISK_SCORE=$(min_score "$DISK_SCORE" 85); ((TEMP>=60))&&DISK_SCORE=$(min_score "$DISK_SCORE" 55); ((TEMP>=65))&&DISK_SCORE=$(min_score "$DISK_SCORE" 30)
-            elif [ "$DISK_TYPE" = "NVMe SSD" ]; then ((TEMP>=70))&&DISK_SCORE=$(min_score "$DISK_SCORE" 85); ((TEMP>=80))&&DISK_SCORE=$(min_score "$DISK_SCORE" 60); ((TEMP>=90))&&DISK_SCORE=$(min_score "$DISK_SCORE" 30)
-            else ((TEMP>=60))&&DISK_SCORE=$(min_score "$DISK_SCORE" 85); ((TEMP>=70))&&DISK_SCORE=$(min_score "$DISK_SCORE" 60); ((TEMP>=80))&&DISK_SCORE=$(min_score "$DISK_SCORE" 30); fi
+            if [ "$DISK_TYPE" = HDD ]; then ((TEMP>=HDD_TEMP_WARN))&&DISK_SCORE=$(min_score "$DISK_SCORE" 85); ((TEMP>=HDD_TEMP_HIGH))&&DISK_SCORE=$(min_score "$DISK_SCORE" 55); ((TEMP>=HDD_TEMP_CRIT))&&DISK_SCORE=$(min_score "$DISK_SCORE" 30)
+            elif [ "$DISK_TYPE" = "NVMe SSD" ]; then ((TEMP>=NVME_TEMP_WARN))&&DISK_SCORE=$(min_score "$DISK_SCORE" 85); ((TEMP>=NVME_TEMP_HIGH))&&DISK_SCORE=$(min_score "$DISK_SCORE" 60); ((TEMP>=NVME_TEMP_CRIT))&&DISK_SCORE=$(min_score "$DISK_SCORE" 30)
+            else ((TEMP>=SSD_TEMP_WARN))&&DISK_SCORE=$(min_score "$DISK_SCORE" 85); ((TEMP>=SSD_TEMP_HIGH))&&DISK_SCORE=$(min_score "$DISK_SCORE" 60); ((TEMP>=SSD_TEMP_CRIT))&&DISK_SCORE=$(min_score "$DISK_SCORE" 30); fi
         else TEMP="-"; fi
     fi
     DISK_SCORE=$(clamp_score "$DISK_SCORE"); ((DISK_SCORE<DISK_WORST_SCORE))&&DISK_WORST_SCORE=$DISK_SCORE; [[ "$HOURS" =~ ^[0-9]+$ ]]&&((HOURS>MAX_DISK_HOURS))&&MAX_DISK_HOURS=$HOURS
@@ -276,17 +476,18 @@ while read -r NAME TYPE SIZE ROTA MODEL; do
     ((UNCORR>0))&&add_rec "КРИТИЧНО" "Накопитель $NAME: неисправимые сектора — $UNCORR" "Часть данных может быть невосстановима; надёжность носителя снижена." "Обеспечить резервную копию и заменить накопитель." "smartctl -A $DEV | grep -i Uncorrect"
     ((CRITWARN>0))&&add_rec "КРИТИЧНО" "NVMe $NAME: Critical Warning=$CRITWARN" "Контроллер NVMe сообщает критическое состояние." "Сохранить данные и готовить замену накопителя." "smartctl -a $DEV"
     ((MEDIAERR>0))&&add_rec "ВНИМАНИЕ" "NVMe $NAME: ошибок целостности данных — $MEDIAERR" "Счётчик означает зафиксированные ошибки носителя/данных." "Проверить резервное копирование и динамику счётчика. При росте — заменить накопитель." "smartctl -a $DEV"
-    if [[ "$RESOURCE" =~ ^([0-9]+)%$ ]]; then R=${BASH_REMATCH[1]}; if ((R<10)); then add_rec "КРИТИЧНО" "Накопитель $NAME: остаточный ресурс ${R}%" "Ресурс записи практически исчерпан." "Срочно сохранить данные и заменить накопитель." "smartctl -a $DEV"; elif ((R<20)); then add_rec "ВНИМАНИЕ" "Накопитель $NAME: остаточный ресурс ${R}%" "Запас ресурса мал, накопитель заметно изношен." "Проверить резервное копирование и запланировать замену." "smartctl -a $DEV"; elif ((R<30)); then add_rec "ПЛАНОВО" "Накопитель $NAME: остаточный ресурс ${R}%" "Износ заметен, хотя накопитель ещё может работать штатно." "Усилить контроль SMART и включить замену в плановое обслуживание." "smartctl -a $DEV"; fi; fi
+    if [[ "$RESOURCE" =~ ^([0-9]+)%$ ]]; then R=${BASH_REMATCH[1]}; if ((R<SSD_LIFE_CRIT)); then add_rec "КРИТИЧНО" "Накопитель $NAME: остаточный ресурс ${R}%" "Ресурс записи практически исчерпан." "Срочно сохранить данные и заменить накопитель." "smartctl -a $DEV"; elif ((R<SSD_LIFE_WARN)); then add_rec "ВНИМАНИЕ" "Накопитель $NAME: остаточный ресурс ${R}%" "Запас ресурса мал, накопитель заметно изношен." "Проверить резервное копирование и запланировать замену." "smartctl -a $DEV"; elif ((R<SSD_LIFE_PLAN)); then add_rec "ПЛАНОВО" "Накопитель $NAME: остаточный ресурс ${R}%" "Износ заметен, хотя накопитель ещё может работать штатно." "Усилить контроль SMART и включить замену в плановое обслуживание." "smartctl -a $DEV"; fi; fi
     if [[ "$HOURS" =~ ^[0-9]+$ ]]&&((HOURS>=40000)); then add_rec "ПЛАНОВО" "Накопитель $NAME: большая наработка — ${HOURS} ч" "Большая наработка сама по себе не означает отказ, но повышает возрастной риск." "Поддерживать актуальный бэкап и включить диск в плановый контроль." "smartctl -a $DEV"; fi
-    if [[ "$TEMP" =~ ^[0-9]+$ ]]; then TW=0; [ "$DISK_TYPE" = HDD ]&&((TEMP>=50))&&TW=1; [ "$DISK_TYPE" = SSD ]&&((TEMP>=60))&&TW=1; [ "$DISK_TYPE" = "NVMe SSD" ]&&((TEMP>=70))&&TW=1; ((TW==1))&&add_rec "ВНИМАНИЕ" "Накопитель $NAME: повышенная температура ${TEMP}°C" "Уменьшается тепловой запас, возможны троттлинг и ускорение износа." "Проверить пыль, вентиляцию корпуса и охлаждение накопителя." "smartctl -a $DEV | grep -i Temperature"; fi
+    if [[ "$TEMP" =~ ^[0-9]+$ ]]; then TW=0; [ "$DISK_TYPE" = HDD ]&&((TEMP>=HDD_TEMP_WARN))&&TW=1; [ "$DISK_TYPE" = SSD ]&&((TEMP>=SSD_TEMP_WARN))&&TW=1; [ "$DISK_TYPE" = "NVMe SSD" ]&&((TEMP>=NVME_TEMP_WARN))&&TW=1; ((TW==1))&&add_rec "ВНИМАНИЕ" "Накопитель $NAME: повышенная температура ${TEMP}°C" "Уменьшается тепловой запас, возможны троттлинг и ускорение износа." "Проверить пыль, вентиляцию корпуса и охлаждение накопителя." "smartctl -a $DEV | grep -i Temperature"; fi
 
 done < <(lsblk -dn -o NAME,TYPE,SIZE,ROTA,MODEL 2>/dev/null)
 ((FIXED_DISKS==0))&&DISK_WORST_SCORE=70
+((RAID_DEGRADED==1)) && DISK_WORST_SCORE=$(min_score "$DISK_WORST_SCORE" 30)
 
 # -------------------- БАЛЛЫ --------------------
 STORAGE_SCORE=$DISK_WORST_SCORE
 FS_SCORE=100; FS_WORST=$FS_WORST_USE; ((FS_WORST_INODE>FS_WORST))&&FS_WORST=$FS_WORST_INODE
-if ((FS_WORST>=95)); then FS_SCORE=10; elif ((FS_WORST>=90)); then FS_SCORE=40; elif ((FS_WORST>=80)); then FS_SCORE=70; elif ((FS_WORST>=70)); then FS_SCORE=90; fi
+if ((FS_WORST>=FS_CRIT)); then FS_SCORE=10; elif ((FS_WORST>=FS_HIGH)); then FS_SCORE=40; elif ((FS_WORST>=FS_WARN)); then FS_SCORE=70; elif ((FS_WORST>=70)); then FS_SCORE=90; fi
 ((LOCAL_RO_COUNT>0))&&FS_SCORE=$(min_score "$FS_SCORE" 50); ((ROOT_RO==1))&&FS_SCORE=0
 
 MEM_SCORE=100; MEM_REASONS=()
@@ -330,17 +531,22 @@ STAB_SCORE=100
 if ((FAILED_COUNT==1)); then STAB_SCORE=$((STAB_SCORE-5)); elif ((FAILED_COUNT<=3 && FAILED_COUNT>=2)); then STAB_SCORE=$((STAB_SCORE-10)); elif ((FAILED_COUNT>3)); then STAB_SCORE=$((STAB_SCORE-20)); fi
 if ((HW_ERR_COUNT<=2 && HW_ERR_COUNT>=1)); then STAB_SCORE=$((STAB_SCORE-10)); elif ((HW_ERR_COUNT<=5 && HW_ERR_COUNT>=3)); then STAB_SCORE=$((STAB_SCORE-20)); elif ((HW_ERR_COUNT>5)); then STAB_SCORE=$((STAB_SCORE-35)); fi
 if ((JOURNAL_ERR_COUNT>=6 && JOURNAL_ERR_COUNT<=15)); then STAB_SCORE=$((STAB_SCORE-5)); elif ((JOURNAL_ERR_COUNT>=16 && JOURNAL_ERR_COUNT<=30)); then STAB_SCORE=$((STAB_SCORE-10)); elif ((JOURNAL_ERR_COUNT>30)); then STAB_SCORE=$((STAB_SCORE-15)); fi
-((OOM_DETECTED==1))&&STAB_SCORE=$((STAB_SCORE-10)); STAB_SCORE=$(clamp_score "$STAB_SCORE")
+((OOM_DETECTED==1))&&STAB_SCORE=$((STAB_SCORE-10))
+[ "$TIME_SYNC" = "Нет" ] && STAB_SCORE=$((STAB_SCORE-5))
+((UNCLEAN_BOOT_SIGNS>0)) && STAB_SCORE=$((STAB_SCORE-5))
+((ECC_CE>0)) && STAB_SCORE=$((STAB_SCORE-5))
+((ECC_UE>0)) && STAB_SCORE=$(min_score "$STAB_SCORE" 30)
+STAB_SCORE=$(clamp_score "$STAB_SCORE")
 
 CPU_SCORE=100; CPU_REASONS=()
 if [[ "$CPU_TEMP" =~ ^[0-9]+$ ]]; then
-    if ((CPU_TEMP>=95)); then
+    if ((CPU_TEMP>=CPU_TEMP_CRIT)); then
         CPU_SCORE=30; CPU_REASONS+=("критическая температура CPU: ${CPU_TEMP}°C")
-    elif ((CPU_TEMP>=90)); then
+    elif ((CPU_TEMP>=CPU_TEMP_VHIGH)); then
         CPU_SCORE=55; CPU_REASONS+=("высокая температура CPU: ${CPU_TEMP}°C")
-    elif ((CPU_TEMP>=85)); then
+    elif ((CPU_TEMP>=CPU_TEMP_HIGH)); then
         CPU_SCORE=75; CPU_REASONS+=("повышенная температура CPU: ${CPU_TEMP}°C")
-    elif ((CPU_TEMP>=80)); then
+    elif ((CPU_TEMP>=CPU_TEMP_WARN)); then
         CPU_SCORE=90; CPU_REASONS+=("температура CPU выше нормального рабочего диапазона: ${CPU_TEMP}°C")
     fi
 fi
@@ -380,11 +586,11 @@ AGE_SCORE=90
 if ((SYSTEM_AGE_MONTHS>=0)); then if ((SYSTEM_AGE_MONTHS<=36)); then AGE_SCORE=100; elif ((SYSTEM_AGE_MONTHS<=48)); then AGE_SCORE=97; elif ((SYSTEM_AGE_MONTHS<=60)); then AGE_SCORE=93; elif ((SYSTEM_AGE_MONTHS<=72)); then AGE_SCORE=88; elif ((SYSTEM_AGE_MONTHS<=84)); then AGE_SCORE=82; elif ((SYSTEM_AGE_MONTHS<=96)); then AGE_SCORE=75; elif ((SYSTEM_AGE_MONTHS<=108)); then AGE_SCORE=68; elif ((SYSTEM_AGE_MONTHS<=120)); then AGE_SCORE=60; else AGE_SCORE=52; fi; fi
 
 NET_SCORE=100; ((ACTIVE_NET==0))&&NET_SCORE=20; [ "$GW" = - ]&&NET_SCORE=$(min_score "$NET_SCORE" 60); [ "$DNS" = - ]&&NET_SCORE=$(min_score "$NET_SCORE" 70)
-if ((NET_ERROR_PPM>=1000 || NET_DROP_PPM>=10000)); then
+if ((NET_ERROR_PPM>=NET_ERROR_CRIT_PPM || NET_DROP_PPM>=NET_DROP_CRIT_PPM)); then
     NET_SCORE=$(min_score "$NET_SCORE" 50)
-elif ((NET_ERROR_PPM>=100 || NET_DROP_PPM>=5000)); then
+elif ((NET_ERROR_PPM>=NET_ERROR_WARN_PPM || NET_DROP_PPM>=NET_DROP_HIGH_PPM)); then
     NET_SCORE=$(min_score "$NET_SCORE" 70)
-elif ((NET_ERROR_PPM>=10 || NET_DROP_PPM>=1000)); then
+elif ((NET_ERROR_PPM>=NET_ERROR_NOTICE_PPM || NET_DROP_PPM>=NET_DROP_WARN_PPM)); then
     NET_SCORE=$(min_score "$NET_SCORE" 90)
 fi
 
@@ -415,29 +621,38 @@ if ! command -v smartctl >/dev/null 2>&1 && ((FIXED_DISKS>0)); then CONFIDENCE=$
 CONFIDENCE_NOTE="-"; ((${#CONFIDENCE_NOTES[@]}>0))&&CONFIDENCE_NOTE=$(printf '%s, ' "${CONFIDENCE_NOTES[@]}"); CONFIDENCE_NOTE=${CONFIDENCE_NOTE%, }
 
 if ((TOTAL_SCORE>=90)); then STATE="ОТЛИЧНОЕ"; elif ((TOTAL_SCORE>=80)); then STATE="ХОРОШЕЕ"; elif ((TOTAL_SCORE>=65)); then STATE="ТРЕБУЕТ ВНИМАНИЯ"; elif ((TOTAL_SCORE>=50)); then STATE="ПЛОХОЕ"; else STATE="КРИТИЧЕСКОЕ"; fi
-if ((ROOT_RO==1 || STORAGE_SCORE<30 || ROOT_USE>=98)); then STATE="КРИТИЧЕСКОЕ"; elif ((OOM_DETECTED==1 || HW_ERR_COUNT>0 || ROOT_USE>=95 || ACTIVE_NET==0)); then [ "$STATE" = "ОТЛИЧНОЕ" ]||[ "$STATE" = "ХОРОШЕЕ" ]&&STATE="ТРЕБУЕТ ВНИМАНИЯ"; fi
+if ((ROOT_RO==1 || STORAGE_SCORE<30 || ROOT_USE>=98 || RAID_DEGRADED==1 || ECC_UE>0)); then STATE="КРИТИЧЕСКОЕ"; elif ((OOM_DETECTED==1 || HW_ERR_COUNT>0 || ROOT_USE>=95 || ACTIVE_NET==0)); then [ "$STATE" = "ОТЛИЧНОЕ" ]||[ "$STATE" = "ХОРОШЕЕ" ]&&STATE="ТРЕБУЕТ ВНИМАНИЯ"; fi
 STATE_DISPLAY="$STATE"; ((CONFIDENCE<80))&&STATE_DISPLAY="ПРЕДВАРИТЕЛЬНО: $STATE"
 
 # -------------------- РЕКОМЕНДАЦИИ --------------------
 if ! command -v smartctl >/dev/null 2>&1 && ((FIXED_DISKS>0)); then add_rec "ПРОВЕРКА" "SMART накопителей не проверен" "Без SMART нельзя достоверно оценить износ SSD/NVMe и признаки деградации HDD." "Установить smartmontools и повторить диагностику." "dnf install smartmontools"; elif ((SMART_UNKNOWN_COUNT>0)); then add_rec "ПРОВЕРКА" "SMART частично недоступен" "Состояние части накопителей оценено не полностью." "Проверить контроллер/поддержку SMART." "smartctl --scan-open"; fi
-if ((FS_WORST_USE>=95)); then add_rec "КРИТИЧНО" "ФС $FS_WORST_USE_MOUNT заполнена на ${FS_WORST_USE}%" "Может прекратиться запись журналов, временных файлов и работа служб." "Срочно освободить минимум 10–15% объёма." "du -xhd1 '$FS_WORST_USE_MOUNT' 2>/dev/null | sort -h"; elif ((FS_WORST_USE>=90)); then add_rec "ВНИМАНИЕ" "ФС $FS_WORST_USE_MOUNT заполнена на ${FS_WORST_USE}%" "Мало места для обновлений, журналов и рабочих файлов." "Освободить место до уровня ниже 80%." "du -xhd1 '$FS_WORST_USE_MOUNT' 2>/dev/null | sort -h"; elif ((FS_WORST_USE>=80)); then add_rec "ПЛАНОВО" "ФС $FS_WORST_USE_MOUNT заполнена на ${FS_WORST_USE}%" "Снижается резерв свободного места." "Выполнить плановую очистку и держать заполнение ниже 80%." "df -h '$FS_WORST_USE_MOUNT'"; fi
-((FS_WORST_INODE>=80))&&add_rec "ВНИМАНИЕ" "Inode на $FS_WORST_INODE_MOUNT использованы на ${FS_WORST_INODE}%" "При исчерпании inode новые файлы создать нельзя даже при наличии свободного места." "Найти каталоги с большим количеством мелких файлов и очистить ненужные кэши/временные данные." "df -i '$FS_WORST_INODE_MOUNT'"
+if ((FS_WORST_USE>=FS_CRIT)); then add_rec "КРИТИЧНО" "ФС $FS_WORST_USE_MOUNT заполнена на ${FS_WORST_USE}%" "Может прекратиться запись журналов, временных файлов и работа служб." "Срочно освободить минимум 10–15% объёма." "du -xhd1 '$FS_WORST_USE_MOUNT' 2>/dev/null | sort -h"; elif ((FS_WORST_USE>=FS_HIGH)); then add_rec "ВНИМАНИЕ" "ФС $FS_WORST_USE_MOUNT заполнена на ${FS_WORST_USE}%" "Мало места для обновлений, журналов и рабочих файлов." "Освободить место до уровня ниже 80%." "du -xhd1 '$FS_WORST_USE_MOUNT' 2>/dev/null | sort -h"; elif ((FS_WORST_USE>=FS_WARN)); then add_rec "ПЛАНОВО" "ФС $FS_WORST_USE_MOUNT заполнена на ${FS_WORST_USE}%" "Снижается резерв свободного места." "Выполнить плановую очистку и держать заполнение ниже 80%." "df -h '$FS_WORST_USE_MOUNT'"; fi
+((FS_WORST_INODE>=INODE_WARN))&&add_rec "ВНИМАНИЕ" "Inode на $FS_WORST_INODE_MOUNT использованы на ${FS_WORST_INODE}%" "При исчерпании inode новые файлы создать нельзя даже при наличии свободного места." "Найти каталоги с большим количеством мелких файлов и очистить ненужные кэши/временные данные." "df -i '$FS_WORST_INODE_MOUNT'"
 ((ROOT_RO==1))&&add_rec "КРИТИЧНО" "Корневая ФС смонтирована read-only" "Запись данных, обновления и часть служб могут не работать." "Проверить журнал ядра; fsck выполнять только на размонтированной ФС из rescue/live." "journalctl -k -b -p warning..alert"
 if ((MEM_AVAIL_PCT<15)); then add_rec "ВНИМАНИЕ" "Мало доступной ОЗУ — ${MEM_AVAIL_PCT}%" "Возможны торможения, swap и OOM." "Определить крупнейшие процессы; при постоянном дефиците увеличить RAM." "ps aux --sort=-%mem | head -15"; elif ((MEM_AVAIL_PCT<25)); then add_rec "ПЛАНОВО" "Небольшой запас ОЗУ — ${MEM_AVAIL_PCT}%" "При росте нагрузки система может активнее использовать swap." "Проверить крупнейшие процессы и наблюдать динамику." "free -h"; fi
 ((OOM_DETECTED==1))&&add_rec "КРИТИЧНО" "За текущую загрузку срабатывал OOM-killer" "Ядро принудительно завершало процесс из-за нехватки памяти." "Определить процесс-виновник и устранить дефицит/утечку; при необходимости увеличить RAM или swap." "journalctl -k -b | grep -Ei 'oom-kill|out of memory'"
 ((FAILED_COUNT>0))&&add_rec "ВНИМАНИЕ" "Есть failed-службы: $FAILED_NAMES" "Функции этих служб могут быть недоступны или работать частично." "Проверить каждую службу, устранить первичную ошибку и перезапустить." "systemctl --failed"
 ((HW_ERR_COUNT>0))&&add_rec "КРИТИЧНО" "В ядре обнаружены аппаратные/дисковые ошибки — $HW_ERR_COUNT" "Возможны I/O-сбои, зависания и повреждение данных." "Сопоставить сообщение с устройством, проверить SMART, кабели и питание." "journalctl -k -b -p warning..alert --no-pager"
 if ((JOURNAL_AVAILABLE==1 && JOURNAL_ERR_COUNT>30)); then add_rec "ВНИМАНИЕ" "Много уникальных ошибок journal — $JOURNAL_ERR_COUNT" "Возможна нестабильная служба, драйвер или повторяющаяся системная проблема." "Сгруппировать ошибки по источнику и устранить первичную причину." "journalctl -b -p err..alert -o short-iso --no-pager"; elif ((JOURNAL_AVAILABLE==1 && JOURNAL_ERR_COUNT>=6)); then add_rec "ПРОВЕРКА" "В journal есть уникальные ошибки — $JOURNAL_ERR_COUNT" "Не все error-сообщения критичны, но их нужно сопоставить с используемыми службами." "Просмотреть ошибки и проверить повторяемость." "journalctl -b -p err..alert -o short-iso --no-pager"; fi
-if [[ "$CPU_TEMP" =~ ^[0-9]+$ ]]&&((CPU_TEMP>=90)); then add_rec "КРИТИЧНО" "Высокая температура CPU — ${CPU_TEMP}°C" "Возможен троттлинг и аварийное выключение." "Очистить охлаждение, проверить вентилятор/радиатор и термоинтерфейс." "sensors"; elif [[ "$CPU_TEMP" =~ ^[0-9]+$ ]]&&((CPU_TEMP>=80)); then add_rec "ВНИМАНИЕ" "Повышенная температура CPU — ${CPU_TEMP}°C" "Тепловой запас снижен; под нагрузкой возможен троттлинг." "Проверить пыль, вентилятор и температуру при типовой нагрузке." "sensors"; fi
+if [[ "$CPU_TEMP" =~ ^[0-9]+$ ]]&&((CPU_TEMP>=CPU_TEMP_VHIGH)); then add_rec "КРИТИЧНО" "Высокая температура CPU — ${CPU_TEMP}°C" "Возможен троттлинг и аварийное выключение." "Очистить охлаждение, проверить вентилятор/радиатор и термоинтерфейс." "sensors"; elif [[ "$CPU_TEMP" =~ ^[0-9]+$ ]]&&((CPU_TEMP>=CPU_TEMP_WARN)); then add_rec "ВНИМАНИЕ" "Повышенная температура CPU — ${CPU_TEMP}°C" "Тепловой запас снижен; под нагрузкой возможен троттлинг." "Проверить пыль, вентилятор и температуру при типовой нагрузке." "sensors"; fi
 if ((LOAD_STATE==2)); then add_rec "ВНИМАНИЕ" "Высокая системная нагрузка: Load1=$LOAD1" "Очередь задач/ожидания I/O велика, возможны задержки." "Найти процесс или I/O-источник постоянной нагрузки." "top"; elif ((LOAD_STATE==1)); then add_rec "ПРОВЕРКА" "Повышенная системная нагрузка: Load1=$LOAD1" "Система близка к полной загрузке CPU или имеет очередь I/O." "Если нагрузка не кратковременная — найти источник." "top"; fi
 if ((SYSTEM_AGE_MONTHS>=96)); then add_rec "ПЛАНОВО" "Эксплуатационный ориентир — около ${SYSTEM_AGE_TEXT} лет" "Возраст сам по себе не означает неисправность, но повышает риск отказа вентиляторов, БП и контактов." "Обеспечить резервное копирование, профилактику и план обновления по фактическому состоянию." "Повторять диагностику планово"; elif ((SYSTEM_AGE_MONTHS>=72)); then add_rec "ПЛАНОВО" "Эксплуатационный ориентир — около ${SYSTEM_AGE_TEXT} лет" "Возрастной риск постепенно растёт." "Усилить контроль SMART, охлаждения и резервного копирования." "Повторять диагностику планово"; fi
 ((ACTIVE_NET==0))&&add_rec "КРИТИЧНО" "Не найден активный IPv4-интерфейс" "Сетевые ресурсы, домен и обновления могут быть недоступны." "Проверить линк, кабель и сетевой профиль." "ip -br a"
 [ "$GW" = - ]&&add_rec "ВНИМАНИЕ" "Не найден маршрут по умолчанию" "Доступ за пределы локальной подсети может отсутствовать." "Проверить маршрут и шлюз активного профиля." "ip route"
 [ "$DNS" = - ]&&add_rec "ВНИМАНИЕ" "DNS-серверы не определены" "Имена узлов и доменные сервисы могут не разрешаться." "Проверить /etc/resolv.conf и DNS в NetworkManager/systemd-resolved." "nmcli dev show 2>/dev/null | grep -i DNS"
-if ((NET_ERROR_PPM>=100 || NET_DROP_PPM>=1000)); then
+if ((NET_ERROR_PPM>=NET_ERROR_WARN_PPM || NET_DROP_PPM>=NET_DROP_WARN_PPM)); then
     BAD_IF_TEXT=$(IFS=,;echo "${NET_BAD_IFACES[*]}")
     add_rec "ВНИМАНИЕ" "Повышенная доля сетевых ошибок/дропов" "Ошибки: ${NET_ERROR_PPM} ppm; дропы: ${NET_DROP_PPM} ppm. Возможны потери пакетов, медленная сеть и разрывы соединений." "Проверить кабель, порт коммутатора, согласование скорости/duplex и драйвер. ${BAD_IF_TEXT}" "ip -s link"
 fi
+
+[ "$TIME_SYNC" = "Нет" ] && add_rec "ВНИМАНИЕ" "Системное время не синхронизировано" "Ошибки времени нарушают TLS и особенно Kerberos/AD-аутентификацию." "Проверить chronyd/systemd-timesyncd, NTP-серверы и сетевую доступность." "timedatectl; chronyc tracking 2>/dev/null"
+((UNCLEAN_BOOT_SIGNS>0)) && add_rec "ПРОВЕРКА" "Есть признаки аварийного завершения предыдущей загрузки" "Нештатное выключение может указывать на питание, зависание ядра или аппаратный сбой." "Изучить журнал предыдущей загрузки и сопоставить со временем инцидента." "journalctl -b -1 -p warning..alert"
+((RAID_DEGRADED==1)) && add_rec "КРИТИЧНО" "Software RAID находится в DEGRADED" "Отказ ещё одного диска может привести к потере массива и данных." "Срочно проверить /proc/mdstat, определить неисправный член массива и восстановить резервирование." "cat /proc/mdstat; mdadm --detail /dev/md0 2>/dev/null"
+((ECC_UE>0)) && add_rec "КРИТИЧНО" "ECC: обнаружены неисправимые ошибки памяти ($ECC_UE)" "Неисправимые ошибки памяти могут приводить к повреждению данных и аварийному завершению процессов." "Провести аппаратный тест ОЗУ и заменить неисправный модуль/слот." "grep -R . /sys/devices/system/edac/mc/mc*/ue_count 2>/dev/null"
+((ECC_UE==0 && ECC_CE>0)) && add_rec "ПРОВЕРКА" "ECC: исправленных ошибок памяти — $ECC_CE" "ECC исправил ошибки, но рост счётчика может указывать на деградацию памяти." "Зафиксировать значения и проверить их рост при повторной диагностике." "grep -R . /sys/devices/system/edac/mc/mc*/ce_count 2>/dev/null"
+if [[ "$BATTERY_HEALTH" =~ ^([0-9]+)%$ ]] && ((BASH_REMATCH[1]<60)); then add_rec "ПЛАНОВО" "Износ батареи: остаточная ёмкость около ${BATTERY_HEALTH}" "Снижается автономность; при дальнейшем износе возможны внезапные отключения без питания." "Проверить батарею и запланировать замену при неудовлетворительной автономности." "upower -i $(upower -e 2>/dev/null | grep BAT | head -1) 2>/dev/null"; fi
+if [ "$SSSD_STATUS" != "Не установлен" ] && [ "$SSSD_STATUS" != "active" ]; then add_rec "ВНИМАНИЕ" "SSSD установлен, но состояние: $SSSD_STATUS" "Может не работать доменная аутентификация, разрешение пользователей и групп." "Проверить службу SSSD, конфигурацию и журнал." "systemctl status sssd --no-pager; journalctl -u sssd -b"; fi
+if [ "$CUPS_STATUS" != "Не установлен" ] && [ "$CUPS_STATUS" != "active" ] && ((CUPS_QUEUES>0)); then add_rec "ВНИМАНИЕ" "CUPS не активен при наличии очередей печати" "Локальная печать через CUPS недоступна." "Запустить CUPS и проверить причину остановки." "systemctl status cups --no-pager; journalctl -u cups -b"; fi
 
 # -------------------- ЗАКЛЮЧЕНИЕ --------------------
 if ((TOTAL_SCORE>=80))&&[[ "$STATE" != КРИТИЧЕСКОЕ ]]; then if ((CONFIDENCE>=80)); then CONCLUSION="По результатам диагностики техническое состояние АРМ соответствует требованиям, предъявляемым к выполнению текущих задач."; else CONCLUSION="По доступным данным техническое состояние АРМ соответствует требованиям текущих задач, однако полнота проверки составляет ${CONFIDENCE}%; требуется устранить ограничения диагностики."; fi
@@ -445,14 +660,41 @@ elif ((TOTAL_SCORE>=65))&&[[ "$STATE" != КРИТИЧЕСКОЕ ]]; then CONCLUS
 elif ((TOTAL_SCORE>=50))&&[[ "$STATE" != КРИТИЧЕСКОЕ ]]; then CONCLUSION="Работоспособность АРМ сохранена, но техническое состояние неудовлетворительно; рекомендуется устранить выявленные замечания."
 else CONCLUSION="Техническое состояние АРМ не позволяет считать его надёжно работоспособным; требуется диагностика и устранение критических замечаний."; fi
 
+# -------------------- ПРИВАТНОСТЬ / ФОРМАТЫ --------------------
+mask_ipv4() {
+    local ip=$1
+    if [[ "$ip" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+        printf '%s.%s.x.x' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    else
+        printf 'скрыто'
+    fi
+}
+json_escape() {
+    local v=${1-}
+    v=${v//\\/\\\\}
+    v=${v//\"/\\\"}
+    v=${v//$'\n'/\\n}
+    v=${v//$'\r'/\\r}
+    v=${v//$'\t'/\\t}
+    printf '%s' "$v"
+}
+if ((PRIVACY_MODE==1)); then
+    HOST_DISPLAY="ARM-REDACTED"
+    GW_DISPLAY=$([ "$GW" = - ] && echo - || mask_ipv4 "$GW")
+    DNS_DISPLAY=$([ "$DNS" = - ] && echo - || echo "скрыто")
+else
+    HOST_DISPLAY="$HOST"; GW_DISPLAY="$GW"; DNS_DISPLAY="$DNS"
+fi
+
 # -------------------- ВЫВОД --------------------
+if ((JSON_MODE==0)); then
 echo "ДИАГНОСТИЧЕСКИЙ ОТЧЁТ АРМ"
 echo "Дата: $(date '+%d.%m.%Y %H:%M:%S')"
-echo "TXT: $REPORT_FILE"
+if ((SAVE_REPORT==1)); then echo "Отчёт: $REPORT_FILE"; else echo "Сохранение: отключено (--no-save)"; fi
 
 section "СИСТЕМА"
 {
- echo "Хост|$HOST"; echo "ОС|$OS"; echo "Модель системы|$SYSTEM_VENDOR $SYSTEM_PRODUCT"; echo "Ядро|$KERNEL"; echo "Архитектура|$ARCH"; echo "Установка ОС|$INSTALL_DATE"; ((AGE_YEARS>=0))&&echo "Возраст установки|≈ ${AGE_YEARS} лет"; echo "BIOS|$BIOS_VERSION; дата $BIOS_DATE (справочно)"; ((MAX_DISK_HOURS>0))&&echo "Макс. наработка диска|${MAX_DISK_HOURS} ч"; ((SYSTEM_AGE_MONTHS>=0))&&echo "Эксплуатационный ориентир|≈ ${SYSTEM_AGE_TEXT} лет ($AGE_SOURCE)"; echo "Время работы|$UPTIME"
+ echo "Хост|$HOST_DISPLAY"; echo "ОС|$OS"; echo "Модель системы|$SYSTEM_VENDOR $SYSTEM_PRODUCT"; echo "Ядро|$KERNEL"; echo "Архитектура|$ARCH"; echo "Установка ОС|$INSTALL_DATE"; ((AGE_YEARS>=0))&&echo "Возраст установки|≈ ${AGE_YEARS} лет"; echo "BIOS|$BIOS_VERSION; дата $BIOS_DATE (справочно)"; ((MAX_DISK_HOURS>0))&&echo "Макс. наработка диска|${MAX_DISK_HOURS} ч"; ((SYSTEM_AGE_MONTHS>=0))&&echo "Эксплуатационный ориентир|≈ ${SYSTEM_AGE_TEXT} лет ($AGE_SOURCE)"; echo "Время работы|$UPTIME"
 } | table
 
 section "ПРОЦЕССОР"
@@ -494,6 +736,11 @@ if ((${#NET_ROWS[@]})); then
     for NET_ROW in "${NET_ROWS[@]}"; do
         NET_NUM=$((NET_NUM+1))
         IFS='|' read -r N_IFACE N_IP N_MAC N_LINK <<< "$NET_ROW"
+        if ((PRIVACY_MODE==1)); then
+            N_IFACE="net${NET_NUM}"
+            N_IP=$(mask_ipv4 "$N_IP")
+            N_MAC="xx:xx:xx:xx:xx:xx"
+        fi
 
         # Вертикальный вывод не съезжает на узких терминалах
         # и сохраняет полное имя сетевого интерфейса.
@@ -522,12 +769,14 @@ else
 fi
 
 {
- echo "Шлюз|$GW"
- if [ "$DNS" = "-" ]; then
+ echo "Шлюз|$GW_DISPLAY"
+ if [ "$DNS_DISPLAY" = "-" ]; then
      echo "DNS|-"
+ elif ((PRIVACY_MODE==1)); then
+     echo "DNS|скрыто"
  else
      DNS_FIRST=1
-     IFS=',' read -ra DNS_ITEMS <<< "$DNS"
+     IFS=',' read -ra DNS_ITEMS <<< "$DNS_DISPLAY"
      for DNS_ITEM in "${DNS_ITEMS[@]}"; do
          [ -n "$DNS_ITEM" ] || continue
          if ((DNS_FIRST)); then
@@ -553,8 +802,27 @@ echo
  echo "Состояние|$NET_STATUS"
 } | table
 
+section "ДОПОЛНИТЕЛЬНЫЕ ПРОВЕРКИ"
+{
+ echo "Синхронизация времени|$TIME_SYNC"
+ echo "Признаки аварийной прошлой загрузки|$UNCLEAN_BOOT_SIGNS"
+ echo "Software RAID|$RAID_STATUS"
+ echo "ECC / EDAC|$ECC_STATUS (CE=$ECC_CE; UE=$ECC_UE)"
+ echo "Батарея|$BATTERY_STATUS; заряд $BATTERY_CAPACITY; здоровье $BATTERY_HEALTH"
+ echo "Поддержка дистрибутива|$SUPPORT_TIER"
+} | table
+
+section "ОПЦИОНАЛЬНЫЕ СЕРВИСЫ"
+{
+ echo "SSSD|$SSSD_STATUS"
+ if ((PRIVACY_MODE==1)) && [ "$SSSD_DOMAINS" != "-" ]; then echo "Домены SSSD|скрыто"; else echo "Домены SSSD|$SSSD_DOMAINS"; fi
+ echo "Kerberos|$KRB_STATUS"
+ echo "CUPS|$CUPS_STATUS; очередей $CUPS_QUEUES"
+} | table
+
 section "НАКОПИТЕЛИ"
 { echo "Диск|Тип|Размер|Модель|Ресурс|SMART|°C|Часы"; if ((${#DISK_ROWS[@]})); then printf '%s\n' "${DISK_ROWS[@]}"; else echo "-|-|-|Не найдены|-|-|-|-"; fi; } | table
+if ((${#DISK_SELFTEST_ROWS[@]}>0)); then echo; { echo "Диск|Последний SMART self-test"; printf '%s\n' "${DISK_SELFTEST_ROWS[@]}"; } | table; fi
 
 section "ФАЙЛОВЫЕ СИСТЕМЫ"
 { echo "Корневой раздел|$ROOT_DEV"; echo "Размер / занято / свободно|$ROOT_SIZE / $ROOT_USED / $ROOT_FREE"; echo "Корень: место / inode|${ROOT_USE}% / ${ROOT_INODE_USE}%"; echo "Локальных ФС проверено|$LOCAL_FS_COUNT"; echo "Макс. заполнение|${FS_WORST_USE}% на $FS_WORST_USE_MOUNT"; echo "Использование inode|${FS_WORST_INODE}% на $FS_WORST_INODE_MOUNT"; } | table
@@ -570,7 +838,7 @@ AGE_SCORE_TEXT="$AGE_SCORE / 100"; ((AGE_KNOWN==0))&&AGE_SCORE_TEXT="Н/Д"
 section "КЛЮЧЕВЫЕ ПОКАЗАТЕЛИ"
 SMART_SUMMARY=OK; if ((FIXED_DISKS==0)); then SMART_SUMMARY="Н/Д"; elif ! command -v smartctl >/dev/null 2>&1; then SMART_SUMMARY="Н/Д (smartctl отсутствует)"; elif ((STORAGE_SCORE==0)); then SMART_SUMMARY=FAIL; elif ((SMART_UNKNOWN_COUNT>0)); then SMART_SUMMARY="Частично / Н/Д"; fi
 ((OOM_DETECTED==1))&&OOM_TEXT="ОБНАРУЖЕНО"||OOM_TEXT="Не обнаружено"
-{ echo "SMART накопителей|$SMART_SUMMARY"; echo "Файловые системы|макс. ${FS_WORST_USE}% на $FS_WORST_USE_MOUNT; inode ${FS_WORST_INODE}% на $FS_WORST_INODE_MOUNT"; echo "ОЗУ доступно|${MEM_AVAIL_PCT}%"; echo "Swap использовано|${SWAP_USED_PCT}%"; echo "Failed-служб|$FAILED_COUNT"; echo "Аппаратных/дисковых ошибок|$HW_ERR_COUNT"; if ((JOURNAL_AVAILABLE==1)); then echo "Уникальных journal error+|$JOURNAL_ERR_COUNT"; else echo "Journal текущей загрузки|Н/Д"; fi; echo "OOM за текущую загрузку|$OOM_TEXT"; [[ "$CPU_TEMP" =~ ^[0-9]+$ ]]&&echo "CPU температура|${CPU_TEMP}°C"; } | table
+{ echo "SMART накопителей|$SMART_SUMMARY"; echo "Файловые системы|макс. ${FS_WORST_USE}% на $FS_WORST_USE_MOUNT; inode ${FS_WORST_INODE}% на $FS_WORST_INODE_MOUNT"; echo "ОЗУ доступно|${MEM_AVAIL_PCT}%"; echo "Swap использовано|${SWAP_USED_PCT}%"; echo "Failed-служб|$FAILED_COUNT"; echo "Аппаратных/дисковых ошибок|$HW_ERR_COUNT"; if ((JOURNAL_AVAILABLE==1)); then echo "Уникальных journal error+|$JOURNAL_ERR_COUNT"; else echo "Journal текущей загрузки|Н/Д"; fi; echo "OOM за текущую загрузку|$OOM_TEXT"; echo "Синхронизация времени|$TIME_SYNC"; echo "Software RAID|$RAID_STATUS"; echo "ECC / EDAC|$ECC_STATUS"; [[ "$CPU_TEMP" =~ ^[0-9]+$ ]]&&echo "CPU температура|${CPU_TEMP}°C"; } | table
 
 section "ЗАКЛЮЧЕНИЕ"
 echo "$CONCLUSION"
@@ -595,7 +863,57 @@ echo; line
 echo "Индекс отражает текущее техническое состояние, износ накопителей, заполненность,"
 echo "стабильность, ресурсную нагрузку и эксплуатационный ориентир. Вес — вклад показателя"
 echo "в общий балл, а не процент износа. Индекс не прогнозирует срок службы."
-echo "Отчёт сохранён: $REPORT_FILE"
-chmod 0644 "$REPORT_FILE" 2>/dev/null || true
-if [[ "${SUDO_UID:-}" =~ ^[0-9]+$ ]]&&[[ "${SUDO_GID:-}" =~ ^[0-9]+$ ]]; then chown "$SUDO_UID:$SUDO_GID" "$REPORT_FILE" 2>/dev/null || true; fi
+if ((SAVE_REPORT==1)); then echo "Отчёт сохранён: $REPORT_FILE"; else echo "Отчёт не сохранялся (--no-save)."; fi
+else
+    # JSON предназначен для автоматизации. В privacy-режиме сетевые идентификаторы обезличены.
+    printf '{\n'
+    printf '  "schema_version": 1,\n'
+    printf '  "arm_info_version": "%s",\n' "$(json_escape "$ARM_INFO_VERSION")"
+    printf '  "generated_at": "%s",\n' "$(date --iso-8601=seconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z')"
+    printf '  "privacy": %s,\n' "$([ "$PRIVACY_MODE" -eq 1 ] && echo true || echo false)"
+    printf '  "system": {"hostname":"%s","os":"%s","kernel":"%s","arch":"%s","install_date":"%s"},\n' \
+        "$(json_escape "$HOST_DISPLAY")" "$(json_escape "$OS")" "$(json_escape "$KERNEL")" "$(json_escape "$ARCH")" "$(json_escape "$INSTALL_DATE")"
+    printf '  "cpu": {"model":"%s","cores":"%s","threads":"%s","load1":%s,"temperature_c":%s,"score":%s},\n' \
+        "$(json_escape "$CPU_MODEL")" "$(json_escape "$CORES")" "$(json_escape "$THREADS")" "${LOAD1:-0}" \
+        "$([[ "$CPU_TEMP" =~ ^[0-9]+$ ]] && echo "$CPU_TEMP" || echo null)" "$CPU_SCORE"
+    printf '  "memory": {"available_percent":%s,"swap_used_percent":%s,"oom_detected":%s,"score":%s},\n' \
+        "$MEM_AVAIL_PCT" "$SWAP_USED_PCT" "$([ "$OOM_DETECTED" -eq 1 ] && echo true || echo false)" "$MEM_SCORE"
+    printf '  "storage": {"score":%s,"known":%s,"fixed_disks":%s,"smart_unknown":%s},\n' \
+        "$STORAGE_SCORE" "$([ "$STORAGE_KNOWN" -eq 1 ] && echo true || echo false)" "$FIXED_DISKS" "$SMART_UNKNOWN_COUNT"
+    printf '  "filesystem": {"root_use_percent":%s,"max_use_percent":%s,"max_use_mount":"%s","max_inode_percent":%s,"score":%s},\n' \
+        "$ROOT_USE" "$FS_WORST_USE" "$(json_escape "$FS_WORST_USE_MOUNT")" "$FS_WORST_INODE" "$FS_SCORE"
+    printf '  "network": {"active_interfaces":%s,"gateway":"%s","dns":"%s","error_ppm":%s,"drop_ppm":%s,"score":%s},\n' \
+        "$ACTIVE_NET" "$(json_escape "$GW_DISPLAY")" "$(json_escape "$DNS_DISPLAY")" "$NET_ERROR_PPM" "$NET_DROP_PPM" "$NET_SCORE"
+    printf '  "stability": {"failed_units":%s,"hardware_errors":%s,"journal_errors":%s,"score":%s},\n' \
+        "$FAILED_COUNT" "$HW_ERR_COUNT" "$JOURNAL_ERR_COUNT" "$STAB_SCORE"
+    printf '  "diagnostics": {"time_sync":"%s","unclean_boot_signs":%s,"raid":"%s","ecc":"%s","battery_health":"%s","sssd":"%s","kerberos":"%s","cups":"%s","support_tier":"%s"},\n' \
+        "$(json_escape "$TIME_SYNC")" "$UNCLEAN_BOOT_SIGNS" "$(json_escape "$RAID_STATUS")" "$(json_escape "$ECC_STATUS")" "$(json_escape "$BATTERY_HEALTH")" \
+        "$(json_escape "$SSSD_STATUS")" "$(json_escape "$KRB_STATUS")" "$(json_escape "$CUPS_STATUS")" "$(json_escape "$SUPPORT_TIER")"
+    printf '  "summary": {"state":"%s","score":%s,"confidence":%s,"conclusion":"%s"},\n' \
+        "$(json_escape "$STATE_DISPLAY")" "$TOTAL_SCORE" "$CONFIDENCE" "$(json_escape "$CONCLUSION")"
+    printf '  "recommendations": ['
+    _first=1
+    for ((i=0;i<${#REC_TITLES[@]};i++)); do
+        ((_first==0)) && printf ','
+        printf '\n    {"level":"%s","title":"%s","impact":"%s","action":"%s","command":"%s"}' \
+            "$(json_escape "${REC_LEVELS[$i]}")" "$(json_escape "${REC_TITLES[$i]}")" "$(json_escape "${REC_IMPACTS[$i]}")" \
+            "$(json_escape "${REC_ACTIONS[$i]}")" "$(json_escape "${REC_CHECKS[$i]}")"
+        _first=0
+    done
+    ((_first==0)) && printf '\n  '
+    printf ']\n}\n'
+fi
+
+if ((SAVE_REPORT==1)); then
+    chmod 0644 "$REPORT_FILE" 2>/dev/null || true
+    if [[ "${SUDO_UID:-}" =~ ^[0-9]+$ ]]&&[[ "${SUDO_GID:-}" =~ ^[0-9]+$ ]]; then chown "$SUDO_UID:$SUDO_GID" "$REPORT_FILE" 2>/dev/null || true; fi
+fi
+
+# Коды завершения: критика > предупреждения > неполнота > норма.
+if [[ "$STATE" = "КРИТИЧЕСКОЕ" ]]; then EXIT_CODE=2
+elif ((TOTAL_SCORE<80)) || [[ "$STATE" = "ТРЕБУЕТ ВНИМАНИЯ" || "$STATE" = "ПЛОХОЕ" ]]; then EXIT_CODE=1
+elif ((CONFIDENCE<80)); then EXIT_CODE=3
+else EXIT_CODE=0
+fi
+exit "$EXIT_CODE"
 )

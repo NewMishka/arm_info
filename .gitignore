@@ -1,9 +1,6 @@
-# Generated diagnostic reports
 ARM_INFO_*.txt
-ARM_*.txt
-
-# Temporary/editor files
-*~
-*.swp
-*.tmp
+ARM_INFO_*.json
+*.rpm
+*.src.rpm
+.rpmbuild/
 .DS_Store
