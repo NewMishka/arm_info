@@ -16,7 +16,7 @@
 - файловые системы: заполнение, inode, read-only;
 - systemd/journal: failed units, аппаратные/дисковые ошибки и уникальные error-сообщения;
 - дополнительные read-only проверки: NTP/time sync, software RAID, ECC/EDAC, батарея, SMART self-test, SSSD/Kerberos/CUPS;
-- enterprise-профили: AD/SSSD/Kerberos/DNS, 802.1X, CIFS/GVFS, CUPS и корпоративное ПО;
+- enterprise-профили: AD/SSSD/Kerberos/DNS, 802.1X, CIFS/GVFS и CUPS;
 - сравнение JSON-отчётов двух АРМ;
 - TXT или JSON;
 - privacy-режим для публикации отчётов;
@@ -71,11 +71,11 @@ arm_info --compare arm-a.json arm-b.json
 
 `arm_info 1.2.0` добавляет отдельные профили для типовых проблем корпоративных АРМ РЕД ОС. Они **не смешиваются с аппаратным health score** и выводят самостоятельные статусы `OK/WARN/CRIT/N/A`.
 
-- `domain` — SSSD, AD join, Kerberos ticket/cache, Kerberos 6/7/15 в текущем журнале, time sync, DNS SRV и доступность KDC/LDAP;
+- `domain` — SSSD, AD join, Kerberos ticket/cache, ошибки Kerberos в текущем журнале, time sync, DNS SRV и доступность KDC/LDAP;
 - `network` — DNS/upstream, FQDN, интерфейсы, 802.1X и сроки сертификатов, CIFS/GVFS/Caja;
 - `print` — CUPS service/scheduler, default printer, paused queues, jobs, backend URI и журнал;
-- `software` — инвентаризация R7, Citrix/ICAClient, Remmina/FreeRDP, Firefox/Chromium, Basis Workplace, Crypto/Token middleware, SNX и zombie-процессы;
-- `enterprise` — объединяет все перечисленные проверки.
+- `software` — глобальная инвентаризация всех установленных RPM-пакетов, общее число процессов и zombie-процессы;
+- `enterprise` — объединяет `domain + network + print`; глобальная инвентаризация ПО запускается отдельно через `--profile software`.
 
 Подробно: [docs/ENTERPRISE_PROFILES.md](docs/ENTERPRISE_PROFILES.md).
 

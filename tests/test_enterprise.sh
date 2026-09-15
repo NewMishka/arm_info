@@ -8,6 +8,14 @@ bash -n "$SCRIPT" || die "bash -n enterprise"
 [[ $(bash "$SCRIPT" --version) == "arm_info enterprise 1.2.0" ]] || die "--version"
 bash "$SCRIPT" --help | grep -q -- '--profile enterprise' || die "--help profiles"
 
+# No hard-coded application/vendor inventory and no hard-coded Kerberos error-code list.
+if grep -Eiq '(r7|remmina|freerdp|icaclient|citrix|basis|workplace|bsscrypto|cryptopro|cprocsp|jacarta|snx)' "$SCRIPT"; then
+  die "hard-coded software names found"
+fi
+if grep -Eq 'Kerberos 6/7/15|c6=|c7=|c15=' "$SCRIPT"; then
+  die "hard-coded Kerberos error codes found"
+fi
+
 TMP1=$(mktemp); TMP2=$(mktemp); DIFF=$(mktemp)
 trap 'rm -f "$TMP1" "$TMP2" "$DIFF"' EXIT
 

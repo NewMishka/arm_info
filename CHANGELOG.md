@@ -4,7 +4,7 @@
 
 ### Added
 - Enterprise-профили `domain`, `network`, `print`, `software`, `enterprise`.
-- Проверка AD/SSSD/Kerberos, `adcli testjoin`, Kerberos ticket/cache, time sync и счётчиков Kerberos 6/7/15 в SSSD journal.
+- Проверка AD/SSSD/Kerberos, `adcli testjoin`, Kerberos ticket/cache, time sync и счётчиков ошибки Kerberos в SSSD journal.
 - Расширенная DNS-диагностика: источник `/etc/resolv.conf`, upstream DNS, DNS suffix/search, FQDN, LDAP/Kerberos SRV, TCP 88/389.
 - Проверка NetworkManager 802.1X и срока доступных CA/client certificates.
 - Проверка CIFS/GVFS/Caja с коротким timeout для потенциально зависших mounts.

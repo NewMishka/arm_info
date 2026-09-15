@@ -28,8 +28,8 @@ arm_info enterprise profiles 1.2.0
   domain       AD/SSSD/Kerberos, DNS SRV, KDC/LDAP, синхронизация времени
   network      DNS, интерфейсы, 802.1X, CIFS/SMB, GVFS/Caja
   print        CUPS, очереди, задания, backend URI, ошибки журнала
-  software     версии корпоративного ПО и проблемные процессы
-  enterprise   domain + network + print + software
+  software     глобальная инвентаризация всех RPM-пакетов и общие процессы
+  enterprise   domain + network + print
 
 Коды завершения:
   0  проблем не обнаружено
@@ -214,7 +214,7 @@ check_dns_common() {
 }
 
 check_domain() {
-    local d sssd_state join_state kstate cache_count sync_state chrony sssd_logs c6 c7 c15 sev
+    local d sssd_state join_state kstate cache_count sync_state chrony sssd_logs krb_errors sev
     d=$(_detect_domain)
     if [[ -n $d ]]; then add_check "ДОМЕН / KERBEROS" "domain.name" "Домен" "$(mask_domain "$d")" ok
     else add_check "ДОМЕН / KERBEROS" "domain.name" "Домен" "не определён" warn; fi
@@ -249,12 +249,10 @@ check_domain() {
 
     if have journalctl; then
         sssd_logs=$(journalctl -u sssd -b --no-pager 2>/dev/null || true)
-        c6=$(grep -Eci '(krb5|kerberos).*(code|error)[^0-9-]*6([^0-9]|$)' <<<"$sssd_logs" || true)
-        c7=$(grep -Eci '(krb5|kerberos).*(code|error)[^0-9-]*7([^0-9]|$)' <<<"$sssd_logs" || true)
-        c15=$(grep -Eci '(krb5|kerberos).*(code|error)[^0-9-]*15([^0-9]|$)' <<<"$sssd_logs" || true)
-        if ((c6+c7+c15>0)); then sev=warn; else sev=ok; fi
-        add_check "ДОМЕН / KERBEROS" "kerberos.errors" "Kerberos 6/7/15 в SSSD" "6:$c6  7:$c7  15:$c15" "$sev" "Счётчики относятся только к текущей загрузке"
-    else add_check "ДОМЕН / KERBEROS" "kerberos.errors" "Kerberos 6/7/15 в SSSD" "journalctl отсутствует" unknown; fi
+        krb_errors=$(awk 'BEGIN{IGNORECASE=1} /(krb5|kerberos)/ && /(error|fail|failure|failed|denied|reject|unable|cannot|expired|clock skew|preauth|not found|unreachable|timeout)/ {n++} END{print n+0}' <<<"$sssd_logs")
+        if ((krb_errors>0)); then sev=warn; else sev=ok; fi
+        add_check "ДОМЕН / KERBEROS" "kerberos.errors" "Ошибки Kerberos" "$krb_errors" "$sev" "Количество записей с признаками ошибок Kerberos за текущую загрузку"
+    else add_check "ДОМЕН / KERBEROS" "kerberos.errors" "Ошибки Kerberos" "journalctl отсутствует" unknown; fi
 
     check_dns_common "DNS / DOMAIN" "$d"
 }
@@ -362,32 +360,32 @@ check_print() {
     else add_check "ПЕЧАТЬ / CUPS" "print.journal" "CUPS journal" "journalctl отсутствует" unknown; fi
 }
 
-_rpm_matches() {
-    local regex=$1
-    rpm -qa --qf '%{NAME}|%{VERSION}-%{RELEASE}\n' 2>/dev/null | grep -Ei "$regex" | sort -u
-}
-
 check_software() {
-    local rows count zombies proc
+    local rows count zombies processes pkg version key
     if have rpm; then
-        rows=$(_rpm_matches '(^|[-_])(r7|remmina|freerdp|icaclient|citrix|firefox|chromium|basis|workplace|bsscrypto|cryptopro|cprocsp|jacarta|pcsc|snx)([-_]|$)|^(firefox|chromium|remmina|freerdp|icaclient|pcsc-lite)')
+        rows=$(rpm -qa --qf '%{NAME}.%{ARCH}|%{VERSION}-%{RELEASE}
+' 2>/dev/null | LC_ALL=C sort -f)
         count=$(grep -c . <<<"$rows" 2>/dev/null || true)
-        add_check "КОРПОРАТИВНОЕ ПО" "software.matches" "Найдено пакетов" "$count" info
-        for pattern in 'firefox' 'chromium' 'remmina' 'freerdp' 'icaclient|citrix' 'r7' 'basis|workplace' 'bsscrypto|cryptopro|cprocsp|jacarta|pcsc' 'snx'; do
-            local hit label
-            hit=$(grep -Ei "$pattern" <<<"$rows" | head -n3 | tr '\n' ';' | sed 's/;$//')
-            [[ -n $hit ]] || continue
-            case "$pattern" in
-                firefox) label="Firefox";; chromium) label="Chromium";; remmina) label="Remmina";; freerdp) label="FreeRDP";; 'icaclient|citrix') label="Citrix";; r7) label="R7";; 'basis|workplace') label="Basis Workplace";; 'snx') label="SNX";; *) label="Crypto/Token";; esac
-            add_check "КОРПОРАТИВНОЕ ПО" "software.$label" "$label" "$hit" info
-        done
-    else add_check "КОРПОРАТИВНОЕ ПО" "software.rpm" "RPM inventory" "rpm отсутствует" unknown; fi
+        add_check "ИНВЕНТАРИЗАЦИЯ ПО" "software.total" "Установлено RPM-пакетов" "$count" info
+        while IFS='|' read -r pkg version; do
+            [[ -n $pkg ]] || continue
+            key=$(printf '%s' "$pkg" | tr -c '[:alnum:]_.+-' '_')
+            add_check "ИНВЕНТАРИЗАЦИЯ ПО" "software.package.$key" "$pkg" "$version" info
+        done <<<"$rows"
+    else
+        add_check "ИНВЕНТАРИЗАЦИЯ ПО" "software.rpm" "RPM inventory" "rpm отсутствует" unknown
+    fi
 
-    zombies=$(ps -eo stat=,comm= 2>/dev/null | awk '$1 ~ /^Z/ && tolower($2) ~ /(wfica|citrix|remmina|r7|firefox|chromium|basis)/{n++} END{print n+0}')
-    if ((zombies>0)); then add_check "КОРПОРАТИВНОЕ ПО" "software.zombies" "Zombie-процессы" "$zombies" warn
-    else add_check "КОРПОРАТИВНОЕ ПО" "software.zombies" "Zombie-процессы" "0" ok; fi
-    proc=$(pgrep -fc 'wfica|selfservice|remmina|r7|firefox|chromium|basis' 2>/dev/null || true)
-    add_check "КОРПОРАТИВНОЕ ПО" "software.processes" "Активные процессы" "$proc" info
+    processes=$(ps -e --no-headers 2>/dev/null | wc -l | tr -d ' ')
+    [[ $processes =~ ^[0-9]+$ ]] || processes=0
+    add_check "ПРОЦЕССЫ" "software.processes.total" "Активные процессы" "$processes" info
+
+    zombies=$(ps -eo stat= 2>/dev/null | awk '$1 ~ /^Z/{n++} END{print n+0}')
+    if ((zombies>0)); then
+        add_check "ПРОЦЕССЫ" "software.zombies" "Zombie-процессы" "$zombies" warn
+    else
+        add_check "ПРОЦЕССЫ" "software.zombies" "Zombie-процессы" "0" ok
+    fi
 }
 
 emit_text() {
@@ -490,7 +488,7 @@ case "$PROFILE" in
     network) check_network ;;
     print) check_print ;;
     software) check_software ;;
-    enterprise) check_domain; check_network; check_print; check_software ;;
+    enterprise) check_domain; check_network; check_print ;;
 esac
 
 if ((JSON_MODE)); then emit_json; else emit_text; fi
