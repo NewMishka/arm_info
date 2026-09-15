@@ -16,6 +16,8 @@
 - файловые системы: заполнение, inode, read-only;
 - systemd/journal: failed units, аппаратные/дисковые ошибки и уникальные error-сообщения;
 - дополнительные read-only проверки: NTP/time sync, software RAID, ECC/EDAC, батарея, SMART self-test, SSSD/Kerberos/CUPS;
+- enterprise-профили: AD/SSSD/Kerberos/DNS, 802.1X, CIFS/GVFS, CUPS и корпоративное ПО;
+- сравнение JSON-отчётов двух АРМ;
 - TXT или JSON;
 - privacy-режим для публикации отчётов;
 - настраиваемые пороги через `/etc/arm_info.conf`;
@@ -36,7 +38,7 @@ sudo bash install.sh
 sudo arm_info
 ```
 
-Скрипт сохраняет совместимость с прежним сценарием: его содержимое можно целиком вставить в Bash после `su -`.
+Скрипт сохраняет совместимость с прежним сценарием: его содержимое можно целиком вставить в Bash после `su -`. Enterprise-профили требуют установленного рядом helper `arm_info-enterprise.sh`, поэтому для них рекомендуется запуск из клонированного репозитория или после `install.sh`.
 
 ## CLI
 
@@ -49,6 +51,8 @@ sudo arm_info
 -q, --quiet
 --json
 --config PATH
+--profile domain|network|print|software|enterprise
+--compare REPORT_A.json REPORT_B.json
 ```
 
 Примеры:
@@ -58,7 +62,34 @@ sudo arm_info --privacy
 sudo arm_info --json --privacy --no-save | jq '.summary'
 sudo arm_info --output /var/tmp/arm-reports/
 sudo arm_info --config /etc/arm_info.conf
+sudo arm_info --profile domain --privacy
+sudo arm_info --profile enterprise --privacy --json -o /tmp/arm-enterprise.json
+arm_info --compare arm-a.json arm-b.json
 ```
+
+## Enterprise-профили
+
+`arm_info 1.2.0` добавляет отдельные профили для типовых проблем корпоративных АРМ РЕД ОС. Они **не смешиваются с аппаратным health score** и выводят самостоятельные статусы `OK/WARN/CRIT/N/A`.
+
+- `domain` — SSSD, AD join, Kerberos ticket/cache, Kerberos 6/7/15 в текущем журнале, time sync, DNS SRV и доступность KDC/LDAP;
+- `network` — DNS/upstream, FQDN, интерфейсы, 802.1X и сроки сертификатов, CIFS/GVFS/Caja;
+- `print` — CUPS service/scheduler, default printer, paused queues, jobs, backend URI и журнал;
+- `software` — инвентаризация R7, Citrix/ICAClient, Remmina/FreeRDP, Firefox/Chromium, Basis Workplace, Crypto/Token middleware, SNX и zombie-процессы;
+- `enterprise` — объединяет все перечисленные проверки.
+
+Подробно: [docs/ENTERPRISE_PROFILES.md](docs/ENTERPRISE_PROFILES.md).
+
+## Сравнение двух АРМ
+
+Для ситуации «на рабочем АРМ всё работает, на проблемном нет» можно получить два обезличенных JSON и сравнить их:
+
+```bash
+sudo arm_info --profile enterprise --privacy --json -o arm-a.json
+sudo arm_info --profile enterprise --privacy --json -o arm-b.json
+arm_info --compare arm-a.json arm-b.json
+```
+
+`--compare` возвращает `0`, если сравниваемые поля одинаковы, и `1`, если найдены отличия. Для сравнения требуется `python3`.
 
 ## Приватность
 
@@ -68,7 +99,7 @@ sudo arm_info --config /etc/arm_info.conf
 sudo arm_info --privacy
 ```
 
-Privacy-режим скрывает hostname, MAC, DNS, SSSD-домены, маскирует IP и заменяет имена интерфейсов. Подробно: [docs/PRIVACY.md](docs/PRIVACY.md).
+Privacy-режим скрывает hostname, MAC, DNS, SSSD-домены, маскирует IP и заменяет имена интерфейсов. В enterprise-профилях дополнительно скрываются доменные значения; printer URI всегда очищается от встроенных учётных данных. Подробно: [docs/PRIVACY.md](docs/PRIVACY.md).
 
 ## Технический индекс
 
@@ -98,9 +129,11 @@ sudo dnf install smartmontools dmidecode lm_sensors
 
 Дополнительные проверки используют установленные в системе `chronyc`, `sssctl`, `klist`, `lpstat`, `mdadm` и EDAC-интерфейсы, но не требуют их установки для базового запуска.
 
+Для максимальной полноты enterprise-профилей полезны `sssd-tools`, `adcli`, `krb5-workstation`, `bind-utils`, `NetworkManager`, `openssl`, `cups-client`, `nc`/`nmap-ncat`. `python3` нужен только для `--compare`.
+
 ## Автоматизация
 
-`--json` выдаёт машинно-читаемый JSON schema v1. Exit codes:
+Базовый `--json` выдаёт machine-readable JSON schema v1. Enterprise-профили используют schema v2 (`checks[]` со стабильными ключами). Exit codes:
 
 - `0` — норма, проверка достаточно полная;
 - `1` — предупреждения/неудовлетворительное состояние;
@@ -130,11 +163,12 @@ make check
 make test
 ```
 
-CI выполняет `bash -n`, ShellCheck уровня error и CLI/JSON/privacy tests.
+CI выполняет `bash -n`, ShellCheck уровня error, базовые CLI/JSON/privacy tests и тесты enterprise-профилей/compare.
 
 ## Документация
 
 - [Использование](docs/USAGE.md)
+- [Enterprise profiles](docs/ENTERPRISE_PROFILES.md)
 - [Scoring](docs/SCORING.md)
 - [Техническая архитектура](docs/TECHNICAL.md)
 - [Privacy](docs/PRIVACY.md)
@@ -148,7 +182,7 @@ CI выполняет `bash -n`, ShellCheck уровня error и CLI/JSON/priva
 
 ## Версия
 
-Текущая версия: **1.1.0**.
+Текущая версия: **1.2.0**.
 
 ## Лицензия
 
