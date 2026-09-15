@@ -7,6 +7,8 @@
 - Для запуска enterprise-профилей больше не требуется `arm_info-enterprise.sh` или каталог `libexec`.
 - Installer, RPM, CI, tests и GitHub Release переведены на однофайловую поставку.
 - Сценарий работы по SSH упрощён: на проверяемый АРМ достаточно передать один `arm_info.sh`.
+- Добавлен короткий ключ `--corp`, эквивалентный `--profile enterprise`.
+- Инвентаризация ПО не входит в `--corp`/`enterprise` и запускается только явно через `--profile software`.
 
 ## 1.2.0 — 2026-09-15
 

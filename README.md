@@ -38,7 +38,7 @@ sudo bash install.sh
 sudo arm_info
 ```
 
-Начиная с версии **1.2.1** вся базовая и корпоративная диагностика находится в одном `arm_info.sh`. Для переноса на проверяемый АРМ достаточно одного файла: `sudo bash arm_info.sh --profile enterprise`. Установка через `install.sh` остаётся доступной, но отдельный enterprise-helper больше не требуется.
+Начиная с версии **1.2.1** вся базовая и корпоративная диагностика находится в одном `arm_info.sh`. Для переноса на проверяемый АРМ достаточно одного файла: `sudo bash arm_info.sh --corp`. Полная форма `--profile enterprise` сохранена для совместимости. Установка через `install.sh` остаётся доступной, но отдельный enterprise-helper больше не требуется.
 
 ## CLI
 
@@ -51,6 +51,7 @@ sudo arm_info
 -q, --quiet
 --json
 --config PATH
+--corp
 --profile domain|network|print|software|enterprise
 --compare REPORT_A.json REPORT_B.json
 ```
@@ -63,7 +64,7 @@ sudo arm_info --json --privacy --no-save | jq '.summary'
 sudo arm_info --output /var/tmp/arm-reports/
 sudo arm_info --config /etc/arm_info.conf
 sudo arm_info --profile domain --privacy
-sudo arm_info --profile enterprise --privacy --json -o /tmp/arm-enterprise.json
+sudo arm_info --corp --privacy --json -o /tmp/arm-enterprise.json
 arm_info --compare arm-a.json arm-b.json
 ```
 
@@ -77,7 +78,7 @@ arm_info --compare arm-a.json arm-b.json
 - `network` — DNS/upstream, FQDN, интерфейсы, 802.1X и сроки сертификатов, CIFS/GVFS/Caja;
 - `print` — CUPS service/scheduler, default printer, paused queues, jobs, backend URI и журнал;
 - `software` — глобальная инвентаризация всех установленных RPM-пакетов, общее число процессов и zombie-процессы;
-- `enterprise` — объединяет `domain + network + print`; глобальная инвентаризация ПО запускается отдельно через `--profile software`.
+- `enterprise` / `--corp` — объединяет `domain + network + print`; глобальная инвентаризация ПО **не запускается автоматически** и доступна только отдельно через `--profile software`.
 
 Подробно: [docs/ENTERPRISE_PROFILES.md](docs/ENTERPRISE_PROFILES.md).
 
@@ -86,8 +87,8 @@ arm_info --compare arm-a.json arm-b.json
 Для ситуации «на рабочем АРМ всё работает, на проблемном нет» можно получить два обезличенных JSON и сравнить их:
 
 ```bash
-sudo arm_info --profile enterprise --privacy --json -o arm-a.json
-sudo arm_info --profile enterprise --privacy --json -o arm-b.json
+sudo arm_info --corp --privacy --json -o arm-a.json
+sudo arm_info --corp --privacy --json -o arm-b.json
 arm_info --compare arm-a.json arm-b.json
 ```
 

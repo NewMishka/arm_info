@@ -7,7 +7,10 @@ die() { echo "TEST FAIL: $*" >&2; exit 1; }
 
 bash -n "$SCRIPT" || die "bash -n enterprise"
 [[ $(bash "$SCRIPT" --profile domain --version) == "arm_info enterprise $EXPECTED_VERSION" ]] || die "--version"
+[[ $(bash "$SCRIPT" --corp --version) == "arm_info enterprise $EXPECTED_VERSION" ]] || die "--corp version"
 bash "$SCRIPT" --profile domain --help | grep -q -- '--profile enterprise' || die "--help profiles"
+bash "$SCRIPT" --corp --help | grep -q -- '--corp' || die "--corp help"
+grep -q 'enterprise) check_domain; check_network; check_print ;;' "$SCRIPT" || die "enterprise profile must exclude software inventory"
 
 # No hard-coded application/vendor inventory and no hard-coded Kerberos error-code list.
 if grep -Eiq '(r7|remmina|freerdp|icaclient|citrix|basis|workplace|bsscrypto|cryptopro|cprocsp|jacarta|snx)' "$SCRIPT"; then
