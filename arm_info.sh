@@ -40,6 +40,7 @@ arm_info enterprise profiles 1.2.1
   arm_info --profile network [--privacy] [--json] [-o FILE]
   arm_info --profile print [--privacy] [--json] [-o FILE]
   arm_info --profile software [--privacy] [--json] [-o FILE]
+  arm_info --corp [--privacy] [--json] [-o FILE]
   arm_info --profile enterprise [--privacy] [--json] [-o FILE]
   arm_info --compare REPORT_A.json REPORT_B.json [--json] [-o FILE]
 
@@ -48,7 +49,7 @@ arm_info enterprise profiles 1.2.1
   network      DNS, интерфейсы, 802.1X, CIFS/SMB, GVFS/Caja
   print        CUPS, очереди, задания, backend URI, ошибки журнала
   software     глобальная инвентаризация всех RPM-пакетов и общие процессы
-  enterprise   domain + network + print
+  enterprise   domain + network + print (без инвентаризации ПО)
 
 Коды завершения:
   0  проблем не обнаружено
@@ -61,6 +62,7 @@ USAGE
 
 while (($#)); do
     case "$1" in
+        --corp) PROFILE=enterprise; shift ;;
         --profile)
             [[ $# -ge 2 ]] || { echo "Ошибка: --profile требует значение" >&2; exit 64; }
             PROFILE=$2; shift 2 ;;
@@ -785,7 +787,7 @@ fi
 _arm_enterprise_requested=0
 for _arm_arg in "$@"; do
     case "$_arm_arg" in
-        --profile|--profile=*|--compare) _arm_enterprise_requested=1; break ;;
+        --corp|--profile|--profile=*|--compare) _arm_enterprise_requested=1; break ;;
     esac
 done
 if ((_arm_enterprise_requested)); then
@@ -848,6 +850,7 @@ arm_info — диагностика технического состояния 
   -q, --quiet             не выводить отчёт в терминал (имеет смысл с сохранением)
   --json                  вывести отчёт в JSON вместо текстового формата
   --config PATH           использовать другой конфигурационный файл
+  --corp                  сокращённый запуск corporate-профиля: domain+network+print
   --profile NAME          domain|network|print|software|enterprise
   --compare A.json B.json сравнить два JSON-отчёта АРМ
 
