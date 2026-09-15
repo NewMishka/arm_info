@@ -17,8 +17,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Apply patch
-        run: python3 tools/patch-v12-base-recommendations.py
+      - name: Fix generated case patterns and apply patch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('tools/patch-v12-base-recommendations.py')
+          s=p.read_text(encoding='utf-8')
+          replacements={
+              '*ОЗУ*|*запас ОЗУ*)':'*ОЗУ*|*запас\\ ОЗУ*)',
+              '*аппаратные/дисковые ошибки*)':'*аппаратные/дисковые\\ ошибки*)',
+              '*температура CPU*)':'*температура\\ CPU*)',
+              '*системная нагрузка*)':'*системная\\ нагрузка*)',
+              '*активный IPv4-интерфейс*)':'*активный\\ IPv4-интерфейс*)',
+              '*маршрут по умолчанию*)':'*маршрут\\ по\\ умолчанию*)',
+              '*DNS-серверы не определены*)':'*DNS-серверы\\ не\\ определены*)',
+              '*сетевых ошибок/дропов*)':'*сетевых\\ ошибок/дропов*)',
+              '*время не синхронизировано*)':'*время\\ не\\ синхронизировано*)',
+              '*аварийного завершения*)':'*аварийного\\ завершения*)',
+          }
+          for a,b in replacements.items():
+              s=s.replace(a,b)
+          p.write_text(s,encoding='utf-8')
+          PY
+          python3 tools/patch-v12-base-recommendations.py
       - name: Install ShellCheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Validate
