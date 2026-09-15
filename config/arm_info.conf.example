@@ -1,0 +1,44 @@
+# arm_info 1.1.0 — пример конфигурации
+# Установите как /etc/arm_info.conf. Читаются только перечисленные в arm_info ключи.
+
+# Файловые системы, % использования.
+FS_WARN=80
+FS_HIGH=90
+FS_CRIT=95
+INODE_WARN=80
+
+# Температура CPU, °C.
+CPU_TEMP_WARN=80
+CPU_TEMP_HIGH=85
+CPU_TEMP_VHIGH=90
+CPU_TEMP_CRIT=95
+
+# Температура накопителей, °C.
+HDD_TEMP_WARN=50
+HDD_TEMP_HIGH=60
+HDD_TEMP_CRIT=65
+SSD_TEMP_WARN=60
+SSD_TEMP_HIGH=70
+SSD_TEMP_CRIT=80
+NVME_TEMP_WARN=70
+NVME_TEMP_HIGH=80
+NVME_TEMP_CRIT=90
+
+# Остаточный ресурс SSD/NVMe, %.
+SSD_LIFE_PLAN=30
+SSD_LIFE_WARN=20
+SSD_LIFE_CRIT=10
+
+# Сетевые ошибки/дропы на миллион пакетов.
+NET_ERROR_NOTICE_PPM=10
+NET_ERROR_WARN_PPM=100
+NET_ERROR_CRIT_PPM=1000
+NET_DROP_WARN_PPM=1000
+NET_DROP_HIGH_PPM=5000
+NET_DROP_CRIT_PPM=10000
+
+# Каталог отчётов. Пусто = текущий каталог, затем fallback /tmp.
+REPORT_DIR_DEFAULT=
+
+# 1 = включать обезличивание по умолчанию.
+PRIVACY_DEFAULT=0
