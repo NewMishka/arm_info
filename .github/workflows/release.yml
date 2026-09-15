@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - VERSION
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create historical v1.0.0 release when missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! git rev-parse v1.0.0 >/dev/null 2>&1; then
+            git tag v1.0.0 e4dd80c3d483866fc9de62c141a319c44233c0cd
+            git push origin v1.0.0
+          fi
+          if ! gh release view v1.0.0 >/dev/null 2>&1; then
+            gh release create v1.0.0 --target e4dd80c3d483866fc9de62c141a319c44233c0cd --title "arm_info 1.0.0" --notes-file docs/releases/v1.0.0.md
+          fi
+      - name: Create current version release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          TAG="v${VERSION}"
+          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
+            git tag "$TAG" "${GITHUB_SHA}"
+            git push origin "$TAG"
+          fi
+          NOTES="docs/releases/${TAG}.md"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            if [[ -f "$NOTES" ]]; then
+              gh release create "$TAG" --target "${GITHUB_SHA}" --title "arm_info ${VERSION}" --notes-file "$NOTES" arm_info.sh
+            else
+              gh release create "$TAG" --target "${GITHUB_SHA}" --title "arm_info ${VERSION}" --generate-notes arm_info.sh
+            fi
+          fi
