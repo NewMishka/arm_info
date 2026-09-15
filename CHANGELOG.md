@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.1 — 2026-09-15
+
+### Changed
+- `arm_info.sh` стал полностью автономным: base + `domain/network/print/software/enterprise` + `--compare` находятся в одном файле.
+- Для запуска enterprise-профилей больше не требуется `arm_info-enterprise.sh` или каталог `libexec`.
+- Installer, RPM, CI, tests и GitHub Release переведены на однофайловую поставку.
+- Сценарий работы по SSH упрощён: на проверяемый АРМ достаточно передать один `arm_info.sh`.
+
 ## 1.2.0 — 2026-09-15
 
 ### Added
@@ -9,7 +17,7 @@
 - Проверка NetworkManager 802.1X и срока доступных CA/client certificates.
 - Проверка CIFS/GVFS/Caja с коротким timeout для потенциально зависших mounts.
 - Профиль CUPS: service/scheduler, default printer, paused/disabled queues, jobs, backend URI и journal warnings/errors.
-- Инвентаризация корпоративного ПО: R7, Citrix/ICAClient, Remmina/FreeRDP, браузеры, Basis Workplace, Crypto/Token middleware и SNX.
+- Глобальная инвентаризация всех установленных RPM-пакетов без списка заранее заданного ПО.
 - `--compare` для сравнения двух JSON-отчётов АРМ.
 - Enterprise JSON schema v2 со стабильными ключами `checks[]`.
 - Документация `docs/ENTERPRISE_PROFILES.md` и отдельные CI tests.
