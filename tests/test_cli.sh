@@ -2,11 +2,12 @@
 set -u
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 SCRIPT="$ROOT/arm_info.sh"
+EXPECTED_VERSION=$(tr -d '[:space:]' < "$ROOT/VERSION")
 
 die() { echo "TEST FAIL: $*" >&2; exit 1; }
 
 bash -n "$SCRIPT" || die "bash -n"
-[[ $(bash "$SCRIPT" --version) == "arm_info 1.1.0" ]] || die "--version"
+[[ $(bash "$SCRIPT" --version) == "arm_info $EXPECTED_VERSION" ]] || die "--version"
 bash "$SCRIPT" --help | grep -q -- '--privacy' || die "--help"
 
 TMP=$(mktemp)
