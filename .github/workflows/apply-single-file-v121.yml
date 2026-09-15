@@ -14,239 +14,55 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Build single-file arm_info 1.2.1
+      - name: Embed enterprise code into arm_info.sh
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
-          VERSION = "1.2.1"
-          root = Path('.')
-          main_p = root / 'arm_info.sh'
-          helper_p = root / 'arm_info-enterprise.sh'
-          main = main_p.read_text(encoding='utf-8')
-          helper = helper_p.read_text(encoding='utf-8')
-
-          # Enterprise helper becomes an embedded subshell function.  It keeps its
-          # own variables/options and exit semantics without leaking set -u/pipefail
-          # into the base diagnostic path.
-          hlines = helper.splitlines()
-          if hlines and hlines[0].startswith('#!'):
-              hlines = hlines[1:]
-          helper = '\n'.join(hlines).rstrip() + '\n'
-          helper = helper.replace('arm_info enterprise profiles — v1.2.0', 'arm_info enterprise profiles — v1.2.1')
-          helper = helper.replace('VERSION="1.2.0"', 'VERSION="1.2.1"', 1)
-          helper = helper.replace('arm_info enterprise profiles 1.2.0', 'arm_info enterprise profiles 1.2.1')
-
-          start_marker = '# enterprise-profile-dispatch-v1.2'
-          end_marker = '# -------------------- НАСТРОЙКИ ПО УМОЛЧАНИЮ --------------------'
-          start = main.index(start_marker)
-          end = main.index(end_marker, start)
-
-          embedded = '''# enterprise-profile-dispatch-v1.2.1 — single-file edition
-          # Начиная с 1.2.1 корпоративные профили встроены непосредственно в arm_info.sh.
-          # На проверяемый АРМ достаточно перенести один файл; временный helper не создаётся.
-          _arm_enterprise_run() (
-          ''' + helper + ''')
-
-          _arm_enterprise_requested=0
-          for _arm_arg in "$@"; do
-              case "$_arm_arg" in
-                  --profile|--profile=*|--compare) _arm_enterprise_requested=1; break ;;
-              esac
-          done
-          if ((_arm_enterprise_requested)); then
-              _arm_enterprise_run "$@"
-              exit $?
-          fi
-
-          '''
-          # Dedent only the wrapper indentation introduced above; helper itself is
-          # valid Bash with or without indentation.
-          import textwrap
-          embedded = textwrap.dedent(embedded)
-          main = main[:start] + embedded + main[end:]
-          main = main.replace('# arm_info 1.2.0 —', '# arm_info 1.2.1 —', 1)
-          main = main.replace('ARM_INFO_VERSION="1.2.0"', 'ARM_INFO_VERSION="1.2.1"', 1)
-          main = main.replace('# Запуск: через bash-файл или целиком вставить в root-терминал.', '# Запуск: исполняемый Bash-файл; все enterprise-профили встроены в этот файл.', 1)
-          main_p.write_text(main, encoding='utf-8')
-          helper_p.unlink()
-
-          # VERSION
-          (root / 'VERSION').write_text(VERSION + '\n', encoding='utf-8')
-
-          # Installer: one executable + optional config, no libexec helper.
-          (root / 'install.sh').write_text(r'''#!/usr/bin/env bash
-          set -euo pipefail
-
-          PREFIX=/usr/local
-          DESTDIR=
-          ACTION=install
-
-          usage() {
-            cat <<'USAGE'
-          Использование: sudo bash install.sh [--prefix /usr/local] [--destdir PATH] [--uninstall]
-
-          Устанавливает:
-            <prefix>/sbin/arm_info
-            /etc/arm_info.conf (только если файла ещё нет)
-
-          Начиная с 1.2.1 enterprise-профили встроены в один файл arm_info.
-          USAGE
-          }
-
-          while (($#)); do
-            case "$1" in
-              --prefix) PREFIX=${2:?}; shift 2 ;;
-              --destdir) DESTDIR=${2:?}; shift 2 ;;
-              --uninstall) ACTION=uninstall; shift ;;
-              -h|--help) usage; exit 0 ;;
-              *) echo "Неизвестный параметр: $1" >&2; usage >&2; exit 64 ;;
-            esac
-          done
-
-          ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-          BIN="$DESTDIR$PREFIX/sbin/arm_info"
-          CONF="$DESTDIR/etc/arm_info.conf"
-
-          if [[ $ACTION == uninstall ]]; then
-            rm -f "$BIN"
-            echo "Удалено: $BIN"
-            echo "Конфигурация $CONF сохранена. Удалите её вручную при необходимости."
-            exit 0
-          fi
-
-          install -Dm0755 "$ROOT/arm_info.sh" "$BIN"
-          if [[ ! -e $CONF ]]; then
-            install -Dm0644 "$ROOT/config/arm_info.conf.example" "$CONF"
-            echo "Создана конфигурация: $CONF"
-          else
-            echo "Конфигурация уже существует, не изменена: $CONF"
-          fi
-
-          echo "Установлено: $BIN"
-          echo "Enterprise-профили встроены в основной файл."
-          echo "Запуск: sudo $PREFIX/sbin/arm_info"
-          ''').replace('          ','').lstrip(), encoding='utf-8')
-
-          # Makefile no longer references a helper.
-          mf = (root / 'Makefile').read_text(encoding='utf-8')
-          mf = mf.replace('arm_info.sh arm_info-enterprise.sh install.sh', 'arm_info.sh install.sh')
-          (root / 'Makefile').write_text(mf, encoding='utf-8')
-
-          # RPM builder/spec: package only one executable.
-          br = (root / 'packaging/build-rpm.sh').read_text(encoding='utf-8')
-          br = br.replace('install -m0644 "$ROOT/arm_info-enterprise.sh" "$TOP/SOURCES/arm_info-enterprise.sh"\n', '')
-          (root / 'packaging/build-rpm.sh').write_text(br, encoding='utf-8')
-
-          spec = (root / 'packaging/arm_info.spec').read_text(encoding='utf-8')
-          spec = spec.replace('Version:        1.2.0', 'Version:        1.2.1', 1)
-          spec = spec.replace('Source4:        arm_info-enterprise.sh\n', '')
-          spec = spec.replace('install -Dm0755 %{SOURCE4} %{buildroot}%{_libexecdir}/arm_info/arm_info-enterprise.sh\n', '')
-          spec = spec.replace('%{_libexecdir}/arm_info/arm_info-enterprise.sh\n', '')
-          spec = spec.replace('Version 1.2 adds enterprise profiles', 'Version 1.2 adds embedded enterprise profiles')
-          changelog = '* Tue Sep 15 2026 NewMishka - 1.2.1-1\n- Single-file distribution: enterprise profiles are embedded in arm_info\n\n'
-          spec = spec.replace('%changelog\n', '%changelog\n' + changelog, 1)
-          (root / 'packaging/arm_info.spec').write_text(spec, encoding='utf-8')
-
-          # Enterprise tests now exercise the public one-file entry point.
-          tp = root / 'tests/test_enterprise.sh'
-          t = tp.read_text(encoding='utf-8')
-          t = t.replace('SCRIPT="$ROOT/arm_info-enterprise.sh"', 'SCRIPT="$ROOT/arm_info.sh"\nEXPECTED_VERSION=$(tr -d \'[:space:]\' < "$ROOT/VERSION")')
-          t = t.replace('[[ $(bash "$SCRIPT" --version) == "arm_info enterprise 1.2.0" ]] || die "--version"', '[[ $(bash "$SCRIPT" --profile domain --version) == "arm_info enterprise $EXPECTED_VERSION" ]] || die "--version"')
-          t = t.replace('bash "$SCRIPT" --help | grep -q -- \'--profile enterprise\' || die "--help profiles"', 'bash "$SCRIPT" --profile domain --help | grep -q -- \'--profile enterprise\' || die "--help profiles"')
-          t = t.replace("python3 - \"$TMP1\" <<'PY'", "python3 - \"$TMP1\" \"$EXPECTED_VERSION\" <<'PY'", 1)
-          t = t.replace("assert d['version']=='1.2.0'", "assert d['version']==sys.argv[2]")
-          tp.write_text(t, encoding='utf-8')
-
-          # CI checks the one-file invariant and all existing behavior.
-          cp = root / '.github/workflows/ci.yml'
-          c = cp.read_text(encoding='utf-8')
-          c = c.replace('bash -n arm_info.sh arm_info-enterprise.sh install.sh', 'bash -n arm_info.sh install.sh')
-          c = c.replace('shellcheck --severity=error arm_info.sh arm_info-enterprise.sh install.sh', 'shellcheck --severity=error arm_info.sh install.sh')
-          c = c.replace("bash -n /src/arm_info.sh && bash -n /src/arm_info-enterprise.sh", "bash -n /src/arm_info.sh")
-          c = c.replace('          test "$V" = "$(sed -n \'s/^VERSION="\\([^\"]*\\)"/\\1/p\' arm_info-enterprise.sh | head -1)"\n', '')
-          c = c.replace('          test -x "$D/usr/local/libexec/arm_info/arm_info-enterprise.sh"\n', '')
-          c = c.replace('          test ! -e "$D/usr/local/libexec/arm_info/arm_info-enterprise.sh"\n', '')
-          c = c.replace("          ! grep -Eiq '(r7|remmina|freerdp|icaclient|citrix|basis|workplace|bsscrypto|cryptopro|cprocsp|jacarta|snx)' arm_info-enterprise.sh\n", "          ! grep -Eiq '(r7|remmina|freerdp|icaclient|citrix|basis|workplace|bsscrypto|cryptopro|cprocsp|jacarta|snx)' arm_info.sh\n")
-          c = c.replace("          ! grep -Eq 'Kerberos 6/7/15|c6=|c7=|c15=' arm_info-enterprise.sh\n", "          ! grep -Eq 'Kerberos 6/7/15|c6=|c7=|c15=' arm_info.sh\n          test ! -e arm_info-enterprise.sh\n          grep -q 'enterprise-profile-dispatch-v1.2.1' arm_info.sh\n")
-          c = c.replace('            rpm -qpl "$RPM" | grep -q "arm_info-enterprise.sh"\n', '            ! rpm -qpl "$RPM" | grep -q "arm_info-enterprise.sh"\n')
-          cp.write_text(c, encoding='utf-8')
-
-          # README / enterprise docs.
-          rp = root / 'README.md'
-          r = rp.read_text(encoding='utf-8')
-          r = r.replace('Скрипт сохраняет совместимость с прежним сценарием: его содержимое можно целиком вставить в Bash после `su -`. Enterprise-профили требуют установленного рядом helper `arm_info-enterprise.sh`, поэтому для них рекомендуется запуск из клонированного репозитория или после `install.sh`.', 'Начиная с версии **1.2.1** вся базовая и корпоративная диагностика находится в одном `arm_info.sh`. Для переноса на проверяемый АРМ достаточно одного файла: `sudo bash arm_info.sh --profile enterprise`. Установка через `install.sh` остаётся доступной, но отдельный enterprise-helper больше не требуется.')
-          r = r.replace('`arm_info 1.2.0` добавляет отдельные профили', '`arm_info 1.2.1` содержит встроенные профили')
-          r = r.replace('Текущая версия: **1.2.0**.', 'Текущая версия: **1.2.1**.')
-          r = r.replace('- enterprise-профили: AD/SSSD/Kerberos/DNS, 802.1X, CIFS/GVFS и CUPS;', '- enterprise-профили в том же единственном файле: AD/SSSD/Kerberos/DNS, 802.1X, CIFS/GVFS и CUPS;')
-          rp.write_text(r, encoding='utf-8')
-
-          dp = root / 'docs/ENTERPRISE_PROFILES.md'
-          d = dp.read_text(encoding='utf-8')
-          d = d.replace('Начиная с версии 1.2.0 `arm_info` поддерживает', 'Начиная с версии 1.2.0 `arm_info` поддерживает')
-          intro = '\n> **С версии 1.2.1 все профили встроены в `arm_info.sh`. На проверяемый АРМ достаточно перенести один файл; `arm_info-enterprise.sh` больше не требуется.**\n'
-          anchor = 'Они не входят в аппаратный health score и предназначены для оперативной диагностики инфраструктурных проблем.\n'
-          if intro.strip() not in d:
-              d = d.replace(anchor, anchor + intro, 1)
-          dp.write_text(d, encoding='utf-8')
-
-          # Changelog: add 1.2.1 and correct the stale 1.2.0 inventory wording.
-          chp = root / 'CHANGELOG.md'
-          ch = chp.read_text(encoding='utf-8')
-          block = '''## 1.2.1 — 2026-09-15
-
-          ### Changed
-          - `arm_info.sh` стал полностью автономным: base + `domain/network/print/software/enterprise` + `--compare` находятся в одном файле.
-          - Для запуска enterprise-профилей больше не требуется `arm_info-enterprise.sh` или каталог `libexec`.
-          - Installer, RPM, CI, tests и GitHub Release переведены на однофайловую поставку.
-          - Сценарий работы по SSH упрощён: на проверяемый АРМ достаточно передать один `arm_info.sh`.
-
-          '''.replace('          ','')
-          ch = ch.replace('# Changelog\n\n', '# Changelog\n\n' + block, 1)
-          ch = ch.replace('- Инвентаризация корпоративного ПО: R7, Citrix/ICAClient, Remmina/FreeRDP, браузеры, Basis Workplace, Crypto/Token middleware и SNX.', '- Глобальная инвентаризация всех установленных RPM-пакетов без списка заранее заданного ПО.')
-          ch = ch.replace('- Установщик и RPM package устанавливают enterprise helper вместе с основной командой.', '- Установщик и RPM package версии 1.2.0 устанавливали enterprise helper вместе с основной командой.')
-          chp.write_text(ch, encoding='utf-8')
-
-          # Release notes for the future v1.2.1 release.
-          rel = root / 'docs/releases/v1.2.1.md'
-          rel.parent.mkdir(parents=True, exist_ok=True)
-          rel.write_text('''# arm_info 1.2.1
-
-          Maintenance release focused on a single-file deployment model.
-
-          - one transferable executable script: `arm_info.sh`;
-          - enterprise profiles `domain`, `network`, `print`, `software`, `enterprise` are embedded;
-          - `--compare` is embedded in the same file;
-          - no runtime helper or `libexec/arm_info/arm_info-enterprise.sh` is required;
-          - installer and RPM package install only the main executable plus configuration;
-          - CI verifies syntax, ShellCheck, base/enterprise tests, one-file packaging and RPM contents.
-
-          Typical remote-admin use:
-
-          ```bash
-          scp arm_info.sh admin@HOST:/tmp/
-          ssh admin@HOST
-          sudo bash /tmp/arm_info.sh --profile enterprise
-          ```
-          ''').replace('          ','').lstrip(), encoding='utf-8')
+          p=Path('arm_info.sh')
+          h=Path('arm_info-enterprise.sh')
+          s=p.read_text(encoding='utf-8')
+          e=h.read_text(encoding='utf-8')
+          lines=e.splitlines()
+          if lines and lines[0].startswith('#!'):
+              lines=lines[1:]
+          e='\n'.join(lines).rstrip()+'\n'
+          e=e.replace('arm_info enterprise profiles — v1.2.0','arm_info enterprise profiles — v1.2.1')
+          e=e.replace('VERSION="1.2.0"','VERSION="1.2.1"',1)
+          e=e.replace('arm_info enterprise profiles 1.2.0','arm_info enterprise profiles 1.2.1')
+          start=s.index('# enterprise-profile-dispatch-v1.2')
+          marker='# -------------------- НАСТРОЙКИ ПО УМОЛЧАНИЮ --------------------'
+          end=s.index(marker,start)
+          block=(
+              '# enterprise-profile-dispatch-v1.2.1 — single-file edition\n'
+              '# Enterprise-профили встроены в arm_info.sh; внешний helper не требуется.\n'
+              '_arm_enterprise_run() (\n'+e+')\n\n'
+              '_arm_enterprise_requested=0\n'
+              'for _arm_arg in "$@"; do\n'
+              '    case "$_arm_arg" in\n'
+              '        --profile|--profile=*|--compare) _arm_enterprise_requested=1; break ;;\n'
+              '    esac\n'
+              'done\n'
+              'if ((_arm_enterprise_requested)); then\n'
+              '    _arm_enterprise_run "$@"\n'
+              '    exit $?\n'
+              'fi\n\n'
+          )
+          s=s[:start]+block+s[end:]
+          s=s.replace('# arm_info 1.2.0 —','# arm_info 1.2.1 —',1)
+          s=s.replace('ARM_INFO_VERSION="1.2.0"','ARM_INFO_VERSION="1.2.1"',1)
+          s=s.replace('# Запуск: через bash-файл или целиком вставить в root-терминал.','# Запуск: исполняемый Bash-файл; base и enterprise находятся в одном файле.',1)
+          p.write_text(s,encoding='utf-8')
+          h.unlink()
+          Path('VERSION').write_text('1.2.1\n',encoding='utf-8')
           PY
-
-      - name: Validate generated single-file tree
-        run: |
-          sudo apt-get update >/dev/null
-          sudo apt-get install -y shellcheck >/dev/null
-          bash -n arm_info.sh install.sh tests/test_cli.sh tests/test_enterprise.sh packaging/build-rpm.sh
-          shellcheck --severity=error arm_info.sh install.sh tests/test_cli.sh tests/test_enterprise.sh packaging/build-rpm.sh
+          bash -n arm_info.sh
           test ! -e arm_info-enterprise.sh
-          test "$(tr -d '[:space:]' < VERSION)" = "1.2.1"
-          bash tests/test_cli.sh
-          bash tests/test_enterprise.sh
-
-      - name: Commit generated tree
+          bash arm_info.sh --version | grep -q '1.2.1'
+          bash arm_info.sh --profile domain --help | grep -q -- '--profile enterprise'
+      - name: Commit generated files
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "feat: make arm_info 1.2.1 a single-file tool"
+          git commit -m "feat: embed enterprise profiles into arm_info 1.2.1"
           git push
