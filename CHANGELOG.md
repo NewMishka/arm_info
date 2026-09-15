@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.2.0 — 2026-09-15
+
+### Added
+- Enterprise-профили `domain`, `network`, `print`, `software`, `enterprise`.
+- Проверка AD/SSSD/Kerberos, `adcli testjoin`, Kerberos ticket/cache, time sync и счётчиков Kerberos 6/7/15 в SSSD journal.
+- Расширенная DNS-диагностика: источник `/etc/resolv.conf`, upstream DNS, DNS suffix/search, FQDN, LDAP/Kerberos SRV, TCP 88/389.
+- Проверка NetworkManager 802.1X и срока доступных CA/client certificates.
+- Проверка CIFS/GVFS/Caja с коротким timeout для потенциально зависших mounts.
+- Профиль CUPS: service/scheduler, default printer, paused/disabled queues, jobs, backend URI и journal warnings/errors.
+- Инвентаризация корпоративного ПО: R7, Citrix/ICAClient, Remmina/FreeRDP, браузеры, Basis Workplace, Crypto/Token middleware и SNX.
+- `--compare` для сравнения двух JSON-отчётов АРМ.
+- Enterprise JSON schema v2 со стабильными ключами `checks[]`.
+- Документация `docs/ENTERPRISE_PROFILES.md` и отдельные CI tests.
+
+### Changed
+- Установщик и RPM package устанавливают enterprise helper вместе с основной командой.
+- `arm_info.sh` делегирует `--profile` и `--compare` enterprise helper, сохраняя прежний запуск базовой диагностики.
+- Privacy mode расширен на доменные/enterprise-поля; printer URI очищается от встроенных учётных данных.
+
 ## 1.1.0 — 2026-09-15
 
 ### Added
