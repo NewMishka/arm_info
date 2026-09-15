@@ -2,6 +2,10 @@
 
 Начиная с версии 1.2.0 `arm_info` поддерживает отдельные read-only профили для корпоративных рабочих станций РЕД ОС. Они не входят в аппаратный health score и предназначены для оперативной диагностики инфраструктурных проблем.
 
+> **С версии 1.2.1 все профили встроены в `arm_info.sh`. На проверяемый АРМ достаточно перенести один файл; `arm_info-enterprise.sh` больше не требуется.**
+
+Короткий запуск полного корпоративного профиля: `sudo arm_info --corp`. Он эквивалентен `--profile enterprise` и включает только `domain + network + print`. Инвентаризация ПО выполняется только по явному `--profile software`.
+
 ## Профили
 
 ### `domain`
@@ -65,10 +69,14 @@ sudo arm_info --profile print
 
 Последовательно запускает `domain + network + print`. Глобальная инвентаризация ПО выполняется отдельно через `--profile software`.
 
+Рекомендуемый запуск:
+
 ```bash
-sudo arm_info --profile enterprise
-sudo arm_info --profile enterprise --privacy --json -o arm-enterprise.json
+sudo arm_info --corp
+sudo arm_info --corp --privacy --json -o arm-corp.json
 ```
+
+Полная форма `--profile enterprise` сохранена для совместимости.
 
 ## Рекомендации
 
@@ -95,8 +103,8 @@ sudo arm_info --profile enterprise --privacy --json -o arm-enterprise.json
 Снимите JSON на двух рабочих станциях:
 
 ```bash
-sudo arm_info --profile enterprise --privacy --json -o arm-a.json
-sudo arm_info --profile enterprise --privacy --json -o arm-b.json
+sudo arm_info --corp --privacy --json -o arm-a.json
+sudo arm_info --corp --privacy --json -o arm-b.json
 ```
 
 Затем:

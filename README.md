@@ -16,7 +16,7 @@
 - файловые системы: заполнение, inode, read-only;
 - systemd/journal: failed units, аппаратные/дисковые ошибки и уникальные error-сообщения;
 - дополнительные read-only проверки: NTP/time sync, software RAID, ECC/EDAC, батарея, SMART self-test, SSSD/Kerberos/CUPS;
-- enterprise-профили: AD/SSSD/Kerberos/DNS, 802.1X, CIFS/GVFS и CUPS;
+- enterprise-профили в том же единственном файле: AD/SSSD/Kerberos/DNS, 802.1X, CIFS/GVFS и CUPS;
 - сравнение JSON-отчётов двух АРМ;
 - TXT или JSON;
 - privacy-режим для публикации отчётов;
@@ -38,7 +38,31 @@ sudo bash install.sh
 sudo arm_info
 ```
 
-Скрипт сохраняет совместимость с прежним сценарием: его содержимое можно целиком вставить в Bash после `su -`. Enterprise-профили требуют установленного рядом helper `arm_info-enterprise.sh`, поэтому для них рекомендуется запуск из клонированного репозитория или после `install.sh`.
+Начиная с версии **1.2.1** вся базовая и корпоративная диагностика находится в одном `arm_info.sh`. Полная форма `--profile enterprise` сохранена для совместимости. Установка через `install.sh` остаётся доступной, но отдельный enterprise-helper больше не требуется.
+
+## Практический сценарий
+
+Для разовой диагностики проблемного АРМ достаточно передать **один файл** и запустить короткий корпоративный профиль:
+
+```bash
+scp arm_info.sh admin@HOST:/tmp/
+ssh admin@HOST
+sudo bash /tmp/arm_info.sh --corp
+```
+
+`--corp` запускает `domain + network + print` и **не выполняет глобальную инвентаризацию ПО**, поэтому отчёт не раздувается сотнями строк.
+
+Если отчёт нужно передать вне внутреннего контура или использовать для сравнения АРМ:
+
+```bash
+sudo bash /tmp/arm_info.sh --corp --privacy --json -o /tmp/arm-corp.json
+```
+
+Полная инвентаризация всех RPM-пакетов запускается только отдельно и явно:
+
+```bash
+sudo bash /tmp/arm_info.sh --profile software
+```
 
 ## CLI
 
@@ -51,6 +75,7 @@ sudo arm_info
 -q, --quiet
 --json
 --config PATH
+--corp
 --profile domain|network|print|software|enterprise
 --compare REPORT_A.json REPORT_B.json
 ```
@@ -63,13 +88,13 @@ sudo arm_info --json --privacy --no-save | jq '.summary'
 sudo arm_info --output /var/tmp/arm-reports/
 sudo arm_info --config /etc/arm_info.conf
 sudo arm_info --profile domain --privacy
-sudo arm_info --profile enterprise --privacy --json -o /tmp/arm-enterprise.json
+sudo arm_info --corp --privacy --json -o /tmp/arm-corp.json
 arm_info --compare arm-a.json arm-b.json
 ```
 
 ## Enterprise-профили
 
-`arm_info 1.2.0` добавляет отдельные профили для типовых проблем корпоративных АРМ РЕД ОС. Они **не смешиваются с аппаратным health score** и выводят самостоятельные статусы `OK/WARN/CRIT/N/A`.
+`arm_info 1.2.1` содержит встроенные профили для типовых проблем корпоративных АРМ РЕД ОС. Они **не смешиваются с аппаратным health score** и выводят самостоятельные статусы `OK/WARN/CRIT/N/A`.
 
 Для `WARN/CRIT/N/A` формируется максимально подробный блок рекомендаций: возможные причины → влияние → что проверить → действие → команды → контроль результата. В JSON те же данные доступны в `recommendations[]`.
 
@@ -77,7 +102,7 @@ arm_info --compare arm-a.json arm-b.json
 - `network` — DNS/upstream, FQDN, интерфейсы, 802.1X и сроки сертификатов, CIFS/GVFS/Caja;
 - `print` — CUPS service/scheduler, default printer, paused queues, jobs, backend URI и журнал;
 - `software` — глобальная инвентаризация всех установленных RPM-пакетов, общее число процессов и zombie-процессы;
-- `enterprise` — объединяет `domain + network + print`; глобальная инвентаризация ПО запускается отдельно через `--profile software`.
+- `enterprise` / `--corp` — объединяет `domain + network + print`; глобальная инвентаризация ПО **не запускается автоматически** и доступна только отдельно через `--profile software`.
 
 Подробно: [docs/ENTERPRISE_PROFILES.md](docs/ENTERPRISE_PROFILES.md).
 
@@ -86,8 +111,8 @@ arm_info --compare arm-a.json arm-b.json
 Для ситуации «на рабочем АРМ всё работает, на проблемном нет» можно получить два обезличенных JSON и сравнить их:
 
 ```bash
-sudo arm_info --profile enterprise --privacy --json -o arm-a.json
-sudo arm_info --profile enterprise --privacy --json -o arm-b.json
+sudo arm_info --corp --privacy --json -o arm-a.json
+sudo arm_info --corp --privacy --json -o arm-b.json
 arm_info --compare arm-a.json arm-b.json
 ```
 
@@ -184,7 +209,7 @@ CI выполняет `bash -n`, ShellCheck уровня error, базовые C
 
 ## Версия
 
-Текущая версия: **1.2.0**.
+Текущая версия: **1.2.1**.
 
 ## Лицензия
 
