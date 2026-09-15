@@ -40,3 +40,5 @@ jobs:
           fi
           git commit -m "feat: add detailed enterprise recommendations and release checks"
           git push
+
+# Temporary workflow used only to apply the prepared patch on the feature branch.
