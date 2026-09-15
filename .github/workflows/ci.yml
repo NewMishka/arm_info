@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  bash:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Syntax
+        run: bash -n arm_info.sh install.sh tests/test_cli.sh packaging/build-rpm.sh
+      - name: ShellCheck
+        run: shellcheck --severity=error arm_info.sh install.sh tests/test_cli.sh packaging/build-rpm.sh
+      - name: CLI tests
+        run: bash tests/test_cli.sh
+
+  compatibility-syntax:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - ubuntu:24.04
+          - fedora:latest
+          - rockylinux:9
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bash syntax in ${{ matrix.image }}
+        run: docker run --rm -v "$PWD:/src:ro" "${{ matrix.image }}" bash -n /src/arm_info.sh
