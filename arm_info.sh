@@ -2,7 +2,7 @@
 
 (
 # ============================================================
-# arm_info 1.1.0 — диагностика АРМ для РЕД ОС 7 / 8
+# arm_info 1.2.0 — диагностика АРМ для РЕД ОС 7 / 8
 # Запуск: через bash-файл или целиком вставить в root-терминал.
 # Результат одновременно выводится на экран и сохраняется в TXT.
 # ============================================================
@@ -12,7 +12,33 @@ if [ -z "${BASH_VERSION:-}" ]; then
     exit 1
 fi
 
-ARM_INFO_VERSION="1.1.0"
+ARM_INFO_VERSION="1.2.0"
+
+
+# enterprise-profile-dispatch-v1.2
+# Профили вынесены в отдельный read-only helper, чтобы базовая диагностика
+# оставалась компактной и пригодной для вставки целиком в root-терминал.
+_arm_enterprise_requested=0
+for _arm_arg in "$@"; do
+    case "$_arm_arg" in
+        --profile|--profile=*|--compare) _arm_enterprise_requested=1; break ;;
+    esac
+done
+if ((_arm_enterprise_requested)); then
+    _arm_script_dir=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)
+    for _arm_helper in \
+        "$_arm_script_dir/arm_info-enterprise.sh" \
+        "$_arm_script_dir/../libexec/arm_info/arm_info-enterprise.sh" \
+        "/usr/local/libexec/arm_info/arm_info-enterprise.sh" \
+        "/usr/libexec/arm_info/arm_info-enterprise.sh"; do
+        if [ -r "$_arm_helper" ]; then
+            exec bash "$_arm_helper" "$@"
+        fi
+    done
+    echo "Ошибка: enterprise helper arm_info-enterprise.sh не найден." >&2
+    echo "Запустите из полного репозитория или выполните sudo bash install.sh." >&2
+    exit 69
+fi
 
 # -------------------- НАСТРОЙКИ ПО УМОЛЧАНИЮ --------------------
 # Значения можно переопределить в /etc/arm_info.conf или через --config.
@@ -69,6 +95,8 @@ arm_info — диагностика технического состояния 
   -q, --quiet             не выводить отчёт в терминал (имеет смысл с сохранением)
   --json                  вывести отчёт в JSON вместо текстового формата
   --config PATH           использовать другой конфигурационный файл
+  --profile NAME          domain|network|print|software|enterprise
+  --compare A.json B.json сравнить два JSON-отчёта АРМ
 
 Коды завершения:
   0  состояние нормальное, проверка достаточно полная
