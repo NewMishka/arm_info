@@ -11,8 +11,9 @@ usage() {
 
 Устанавливает:
   <prefix>/sbin/arm_info
-  <prefix>/libexec/arm_info/arm_info-enterprise.sh
   /etc/arm_info.conf (только если файла ещё нет)
+
+Начиная с 1.2.1 enterprise-профили встроены в один файл arm_info.
 USAGE
 }
 
@@ -28,21 +29,16 @@ done
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 BIN="$DESTDIR$PREFIX/sbin/arm_info"
-LIBEXEC_DIR="$DESTDIR$PREFIX/libexec/arm_info"
-ENTERPRISE="$LIBEXEC_DIR/arm_info-enterprise.sh"
 CONF="$DESTDIR/etc/arm_info.conf"
 
 if [[ $ACTION == uninstall ]]; then
-  rm -f "$BIN" "$ENTERPRISE"
-  rmdir "$LIBEXEC_DIR" 2>/dev/null || true
+  rm -f "$BIN"
   echo "Удалено: $BIN"
-  echo "Удалено: $ENTERPRISE"
   echo "Конфигурация $CONF сохранена. Удалите её вручную при необходимости."
   exit 0
 fi
 
 install -Dm0755 "$ROOT/arm_info.sh" "$BIN"
-install -Dm0755 "$ROOT/arm_info-enterprise.sh" "$ENTERPRISE"
 if [[ ! -e $CONF ]]; then
   install -Dm0644 "$ROOT/config/arm_info.conf.example" "$CONF"
   echo "Создана конфигурация: $CONF"
@@ -51,5 +47,5 @@ else
 fi
 
 echo "Установлено: $BIN"
-echo "Enterprise helper: $ENTERPRISE"
+echo "Enterprise-профили встроены в основной файл."
 echo "Запуск: sudo $PREFIX/sbin/arm_info"
