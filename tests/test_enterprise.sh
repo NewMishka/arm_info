@@ -33,6 +33,11 @@ assert d['version']=='1.2.0'
 assert d['profile']=='domain'
 assert d['privacy'] is True
 assert isinstance(d['checks'], list) and d['checks']
+assert isinstance(d.get('recommendations'), list)
+for r in d['recommendations']:
+    for k in ('key','level','title','source','possible_causes','impact','checks','action','commands','verification'):
+        assert k in r, (k,r)
+    assert isinstance(r['commands'], list)
 PY
 
 set +e
@@ -54,3 +59,14 @@ assert d['count'] > 0 and isinstance(d['differences'], list)
 PY
 
 echo "OK: enterprise profiles, privacy JSON and compare tests passed"
+
+# Recommendations must be present in text output when diagnostics are incomplete/warn/crit.
+TXT=$(mktemp)
+trap 'rm -f "$TMP1" "$TMP2" "$DIFF" "$TXT"' EXIT
+set +e
+bash "$SCRIPT" --profile domain --privacy >"$TXT"
+RC=$?
+set -e
+((RC>=0 && RC<=3)) || die "domain text exit code $RC"
+grep -q '^РЕКОМЕНДАЦИИ$' "$TXT" || die "recommendations structure"
+grep -Eq 'Возможные причины:|Дополнительных действий' "$TXT" || die "recommendations detail"

@@ -15,6 +15,7 @@
 - Документация `docs/ENTERPRISE_PROFILES.md` и отдельные CI tests.
 
 ### Changed
+- Enterprise-профили формируют расширенные рекомендации с причинами, влиянием, проверками, действиями, командами и контролем результата; JSON содержит `recommendations[]`.
 - Установщик и RPM package устанавливают enterprise helper вместе с основной командой.
 - `arm_info.sh` делегирует `--profile` и `--compare` enterprise helper, сохраняя прежний запуск базовой диагностики.
 - Privacy mode расширен на доменные/enterprise-поля; printer URI очищается от встроенных учётных данных.

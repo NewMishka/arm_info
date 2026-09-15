@@ -71,6 +71,8 @@ arm_info --compare arm-a.json arm-b.json
 
 `arm_info 1.2.0` добавляет отдельные профили для типовых проблем корпоративных АРМ РЕД ОС. Они **не смешиваются с аппаратным health score** и выводят самостоятельные статусы `OK/WARN/CRIT/N/A`.
 
+Для `WARN/CRIT/N/A` формируется максимально подробный блок рекомендаций: возможные причины → влияние → что проверить → действие → команды → контроль результата. В JSON те же данные доступны в `recommendations[]`.
+
 - `domain` — SSSD, AD join, Kerberos ticket/cache, ошибки Kerberos в текущем журнале, time sync, DNS SRV и доступность KDC/LDAP;
 - `network` — DNS/upstream, FQDN, интерфейсы, 802.1X и сроки сертификатов, CIFS/GVFS/Caja;
 - `print` — CUPS service/scheduler, default printer, paused queues, jobs, backend URI и журнал;
