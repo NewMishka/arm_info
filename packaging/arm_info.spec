@@ -20,7 +20,7 @@ Requires:       util-linux
 arm_info collects hardware and operating-system health information, calculates
 an explainable technical health index, and produces actionable recommendations.
 Version 1.2 adds enterprise profiles for domain/Kerberos/DNS, network/802.1X,
-CIFS/GVFS, CUPS, software inventory, and report comparison.
+CIFS/GVFS, CUPS, global software inventory, and report comparison.
 The primary target is RED OS 7/8.
 
 %prep
@@ -31,10 +31,12 @@ The primary target is RED OS 7/8.
 install -Dm0755 %{SOURCE0} %{buildroot}%{_sbindir}/arm_info
 install -Dm0755 %{SOURCE4} %{buildroot}%{_libexecdir}/arm_info/arm_info-enterprise.sh
 install -Dm0644 %{SOURCE1} %{buildroot}%{_sysconfdir}/arm_info.conf
+install -Dm0644 %{SOURCE2} %{buildroot}%{_licensedir}/%{name}/LICENSE
+install -Dm0644 %{SOURCE3} %{buildroot}%{_docdir}/%{name}/README.md
 
 %files
-%license %{SOURCE2}
-%doc %{SOURCE3}
+%license %{_licensedir}/%{name}/LICENSE
+%doc %{_docdir}/%{name}/README.md
 %{_sbindir}/arm_info
 %{_libexecdir}/arm_info/arm_info-enterprise.sh
 %config(noreplace) %{_sysconfdir}/arm_info.conf
