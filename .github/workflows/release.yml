@@ -40,10 +40,12 @@ jobs:
             git push origin "$TAG"
           fi
           NOTES="docs/releases/${TAG}.md"
+          ASSETS=(arm_info.sh)
+          [[ -f arm_info-enterprise.sh ]] && ASSETS+=(arm_info-enterprise.sh)
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             if [[ -f "$NOTES" ]]; then
-              gh release create "$TAG" --target "${GITHUB_SHA}" --title "arm_info ${VERSION}" --notes-file "$NOTES" arm_info.sh
+              gh release create "$TAG" --target "${GITHUB_SHA}" --title "arm_info ${VERSION}" --notes-file "$NOTES" "${ASSETS[@]}"
             else
-              gh release create "$TAG" --target "${GITHUB_SHA}" --title "arm_info ${VERSION}" --generate-notes arm_info.sh
+              gh release create "$TAG" --target "${GITHUB_SHA}" --title "arm_info ${VERSION}" --generate-notes "${ASSETS[@]}"
             fi
           fi

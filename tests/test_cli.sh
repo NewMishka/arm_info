@@ -2,12 +2,19 @@
 set -u
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 SCRIPT="$ROOT/arm_info.sh"
+EXPECTED_VERSION=$(tr -d '[:space:]' < "$ROOT/VERSION")
 
 die() { echo "TEST FAIL: $*" >&2; exit 1; }
 
 bash -n "$SCRIPT" || die "bash -n"
-[[ $(bash "$SCRIPT" --version) == "arm_info 1.1.0" ]] || die "--version"
+[[ $(bash "$SCRIPT" --version) == "arm_info $EXPECTED_VERSION" ]] || die "--version"
 bash "$SCRIPT" --help | grep -q -- '--privacy' || die "--help"
+
+grep -q 'print_wrapped "Причины:"' "$SCRIPT" || die "base recommendation causes"
+grep -q 'print_wrapped "Проверить:"' "$SCRIPT" || die "base recommendation checks"
+grep -q 'print_wrapped "Контроль:"' "$SCRIPT" || die "base recommendation verification"
+grep -q '"possible_causes"' "$SCRIPT" || die "base recommendation JSON causes"
+grep -q '"verification"' "$SCRIPT" || die "base recommendation JSON verification"
 
 TMP=$(mktemp)
 trap 'rm -f "$TMP"' EXIT
