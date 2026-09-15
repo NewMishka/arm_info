@@ -55,7 +55,7 @@ sudo bash /tmp/arm_info.sh --corp
 Если отчёт нужно передать вне внутреннего контура или использовать для сравнения АРМ:
 
 ```bash
-sudo bash /tmp/arm_info.sh --corp --privacy --json -o /tmp/arm-enterprise.json
+sudo bash /tmp/arm_info.sh --corp --privacy --json -o /tmp/arm-corp.json
 ```
 
 Полная инвентаризация всех RPM-пакетов запускается только отдельно и явно:
@@ -88,7 +88,7 @@ sudo arm_info --json --privacy --no-save | jq '.summary'
 sudo arm_info --output /var/tmp/arm-reports/
 sudo arm_info --config /etc/arm_info.conf
 sudo arm_info --profile domain --privacy
-sudo arm_info --corp --privacy --json -o /tmp/arm-enterprise.json
+sudo arm_info --corp --privacy --json -o /tmp/arm-corp.json
 arm_info --compare arm-a.json arm-b.json
 ```
 
