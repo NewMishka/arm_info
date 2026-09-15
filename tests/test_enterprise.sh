@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -u
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-SCRIPT="$ROOT/arm_info-enterprise.sh"
+SCRIPT="$ROOT/arm_info.sh"
+EXPECTED_VERSION=$(tr -d '[:space:]' < "$ROOT/VERSION")
 die() { echo "TEST FAIL: $*" >&2; exit 1; }
 
 bash -n "$SCRIPT" || die "bash -n enterprise"
-[[ $(bash "$SCRIPT" --version) == "arm_info enterprise 1.2.0" ]] || die "--version"
-bash "$SCRIPT" --help | grep -q -- '--profile enterprise' || die "--help profiles"
+[[ $(bash "$SCRIPT" --profile domain --version) == "arm_info enterprise $EXPECTED_VERSION" ]] || die "--version"
+bash "$SCRIPT" --profile domain --help | grep -q -- '--profile enterprise' || die "--help profiles"
 
 # No hard-coded application/vendor inventory and no hard-coded Kerberos error-code list.
 if grep -Eiq '(r7|remmina|freerdp|icaclient|citrix|basis|workplace|bsscrypto|cryptopro|cprocsp|jacarta|snx)' "$SCRIPT"; then
@@ -25,11 +26,11 @@ RC=$?
 set -e
 ((RC>=0 && RC<=3)) || die "domain exit code $RC"
 
-python3 - "$TMP1" <<'PY' || die "enterprise JSON schema/privacy"
+python3 - "$TMP1" "$EXPECTED_VERSION" <<'PY' || die "enterprise JSON schema/privacy"
 import json,sys
 with open(sys.argv[1], encoding='utf-8') as f: d=json.load(f)
 assert d['schema_version']==2
-assert d['version']=='1.2.0'
+assert d['version']==sys.argv[2]
 assert d['profile']=='domain'
 assert d['privacy'] is True
 assert isinstance(d['checks'], list) and d['checks']
