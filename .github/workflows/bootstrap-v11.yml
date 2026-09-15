@@ -1,0 +1,31 @@
+name: Bootstrap v1.1 script
+
+on:
+  push:
+    branches:
+      - feature/public-readiness-v1.1.0-release
+    paths:
+      - bootstrap/arm_info.sh.gz.b64
+
+permissions:
+  contents: write
+
+jobs:
+  decode-script:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode and verify arm_info.sh
+        run: |
+          base64 -d bootstrap/arm_info.sh.gz.b64 | gzip -d > arm_info.sh
+          echo 'b2c0d53d091c84179511bd9ce94cc2ef55b48baa5f34f392699ca45a5ad3b652  arm_info.sh' | sha256sum -c -
+          bash -n arm_info.sh
+          chmod 0755 arm_info.sh
+      - name: Commit decoded script and remove bootstrap files
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add arm_info.sh
+          git rm bootstrap/arm_info.sh.gz.b64 .github/workflows/bootstrap-v11.yml
+          git commit -m 'feat: add public-ready arm_info 1.1.0 CLI'
+          git push origin HEAD:${GITHUB_REF_NAME}
