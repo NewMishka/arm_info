@@ -37,3 +37,41 @@ jobs:
       - uses: actions/checkout@v4
       - name: Bash syntax in ${{ matrix.image }}
         run: docker run --rm -v "$PWD:/src:ro" "${{ matrix.image }}" bash -c 'bash -n /src/arm_info.sh && bash -n /src/arm_info-enterprise.sh'
+
+  release-readiness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version consistency
+        run: |
+          V=$(tr -d '[:space:]' < VERSION)
+          test "$V" = "$(sed -n 's/^ARM_INFO_VERSION="\([^"]*\)"/\1/p' arm_info.sh | head -1)"
+          test "$V" = "$(sed -n 's/^VERSION="\([^"]*\)"/\1/p' arm_info-enterprise.sh | head -1)"
+          test "$V" = "$(awk '/^Version:/{print $2; exit}' packaging/arm_info.spec)"
+          grep -q "Текущая версия: \*\*$V\*\*" README.md
+      - name: Installer smoke test
+        run: |
+          D=$(mktemp -d)
+          bash install.sh --destdir "$D"
+          test -x "$D/usr/local/sbin/arm_info"
+          test -x "$D/usr/local/libexec/arm_info/arm_info-enterprise.sh"
+          "$D/usr/local/sbin/arm_info" --version
+          "$D/usr/local/sbin/arm_info" --profile domain --help >/dev/null
+          bash install.sh --destdir "$D" --uninstall
+          test ! -e "$D/usr/local/sbin/arm_info"
+          test ! -e "$D/usr/local/libexec/arm_info/arm_info-enterprise.sh"
+      - name: Public repository policy checks
+        run: |
+          ! grep -Eiq '(r7|remmina|freerdp|icaclient|citrix|basis|workplace|bsscrypto|cryptopro|cprocsp|jacarta|snx)' arm_info-enterprise.sh
+          ! grep -Eq 'Kerberos 6/7/15|c6=|c7=|c15=' arm_info-enterprise.sh
+      - name: RPM build smoke test
+        run: |
+          docker run --rm -v "$PWD:/src:ro" fedora:latest bash -lc '
+            dnf -q -y install rpm-build coreutils >/dev/null &&
+            cd /src &&
+            RPM_TOPDIR=/tmp/rpmbuild bash packaging/build-rpm.sh &&
+            RPM=$(find /tmp/rpmbuild/RPMS -type f -name "arm-info-*.rpm" | head -1) &&
+            test -n "$RPM" &&
+            rpm -qpl "$RPM" | grep -q "/usr/sbin/arm_info" &&
+            rpm -qpl "$RPM" | grep -q "arm_info-enterprise.sh"
+          '
