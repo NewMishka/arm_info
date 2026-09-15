@@ -73,7 +73,7 @@ sudo arm_info --profile print
 
 ```bash
 sudo arm_info --corp
-sudo arm_info --corp --privacy --json -o arm-enterprise.json
+sudo arm_info --corp --privacy --json -o arm-corp.json
 ```
 
 Полная форма `--profile enterprise` сохранена для совместимости.
