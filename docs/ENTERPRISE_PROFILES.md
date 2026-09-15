@@ -69,10 +69,14 @@ sudo arm_info --profile print
 
 Последовательно запускает `domain + network + print`. Глобальная инвентаризация ПО выполняется отдельно через `--profile software`.
 
+Рекомендуемый запуск:
+
 ```bash
-sudo arm_info --profile enterprise
-sudo arm_info --profile enterprise --privacy --json -o arm-enterprise.json
+sudo arm_info --corp
+sudo arm_info --corp --privacy --json -o arm-enterprise.json
 ```
+
+Полная форма `--profile enterprise` сохранена для совместимости.
 
 ## Рекомендации
 
@@ -99,8 +103,8 @@ sudo arm_info --profile enterprise --privacy --json -o arm-enterprise.json
 Снимите JSON на двух рабочих станциях:
 
 ```bash
-sudo arm_info --profile enterprise --privacy --json -o arm-a.json
-sudo arm_info --profile enterprise --privacy --json -o arm-b.json
+sudo arm_info --corp --privacy --json -o arm-a.json
+sudo arm_info --corp --privacy --json -o arm-b.json
 ```
 
 Затем:
