@@ -1,0 +1,37 @@
+name: Patch v1.2.4 CIFS UTF-8 handling
+
+on:
+  push:
+    branches:
+      - feature/v1.2.4-command-audit
+    paths:
+      - '.github/workflows/patch-v1.2.4-cifs-utf8.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v1.2.4-command-audit
+          fetch-depth: 0
+      - name: Apply CIFS UTF-8 patch
+        run: python3 .github/scripts/patch_v1_2_4_cifs_utf8.py
+      - name: Validate
+        run: |
+          bash -n arm_info.sh
+          bash tests/test_recommendation_commands.sh
+      - name: Commit generated changes
+        run: |
+          if git diff --quiet -- arm_info.sh tests/test_recommendation_commands.sh docs/COMMANDS.md CHANGELOG.md docs/releases/v1.2.4.md; then
+            echo 'No changes to commit'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add arm_info.sh tests/test_recommendation_commands.sh docs/COMMANDS.md CHANGELOG.md docs/releases/v1.2.4.md
+          git commit -m 'fix: preserve non-ASCII CIFS mount targets'
+          git push origin HEAD:feature/v1.2.4-command-audit
