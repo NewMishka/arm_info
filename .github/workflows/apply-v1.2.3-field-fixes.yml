@@ -31,8 +31,10 @@ jobs:
       - name: Commit
         run: |
           git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git config user.email '41898282+NewMishka@users.noreply.github.com'
           git add arm_info.sh CHANGELOG.md docs/releases/v1.2.3.md tests/test_cli.sh tests/test_enterprise.sh
           git diff --cached --quiet && exit 0
           git commit -m 'fix: correct system disk role and broaden 802.1X discovery'
           git push
+
+# retry 2 after release-note structure update
