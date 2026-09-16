@@ -22,6 +22,7 @@ jobs:
         run: |
           python3 .github/scripts/patch_v1_2_4_cifs_probe.py
           sed -i 's#SOURCE вида //server/share в stat не использовать#SOURCE вида //server/share как локальный путь не использовать#' tests/test_recommendation_commands.sh
+          git checkout -- .github/workflows/ci.yml
       - name: Validate syntax and focused tests
         run: |
           bash -n arm_info.sh tests/test_recommendation_commands.sh tests/test_sections.sh tests/test_cifs_probe.sh
@@ -29,12 +30,12 @@ jobs:
           bash tests/test_cifs_probe.sh
       - name: Commit generated changes
         run: |
-          if git diff --quiet -- arm_info.sh tests/test_recommendation_commands.sh tests/test_sections.sh tests/test_cifs_probe.sh Makefile .github/workflows/ci.yml README.md docs/COMMANDS.md docs/ENTERPRISE_PROFILES.md docs/TESTING.md docs/PRE_RELEASE_CHECKLIST.md CHANGELOG.md docs/releases/v1.2.4.md; then
+          if git diff --quiet -- arm_info.sh tests/test_recommendation_commands.sh tests/test_sections.sh tests/test_cifs_probe.sh Makefile README.md docs/COMMANDS.md docs/ENTERPRISE_PROFILES.md docs/TESTING.md docs/PRE_RELEASE_CHECKLIST.md CHANGELOG.md docs/releases/v1.2.4.md; then
             echo 'No changes to commit'
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add arm_info.sh tests/test_recommendation_commands.sh tests/test_sections.sh tests/test_cifs_probe.sh Makefile .github/workflows/ci.yml README.md docs/COMMANDS.md docs/ENTERPRISE_PROFILES.md docs/TESTING.md docs/PRE_RELEASE_CHECKLIST.md CHANGELOG.md docs/releases/v1.2.4.md
+          git add arm_info.sh tests/test_recommendation_commands.sh tests/test_sections.sh tests/test_cifs_probe.sh Makefile README.md docs/COMMANDS.md docs/ENTERPRISE_PROFILES.md docs/TESTING.md docs/PRE_RELEASE_CHECKLIST.md CHANGELOG.md docs/releases/v1.2.4.md
           git commit -m 'fix: probe actual CIFS directory readability'
           git push origin HEAD:feature/v1.2.4-command-audit
