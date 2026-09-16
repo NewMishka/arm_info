@@ -5,9 +5,6 @@ on:
     branches: [main]
     paths:
       - VERSION
-      - arm_info.sh
-      - docs/releases/**
-      - .github/workflows/release.yml
   workflow_dispatch:
 
 permissions:
