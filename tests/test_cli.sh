@@ -28,16 +28,17 @@ RC=$?
 set -e
 ((RC>=0 && RC<=3)) || die "unexpected diagnostic exit code: $RC"
 
-if command -v jq >/dev/null 2>&1; then
-  jq -e '.schema_version == 1 and .privacy == true and (.summary.score|type == "number")' "$TMP" >/dev/null || die "JSON schema"
-  jq -e '.system.hostname == "ARM-REDACTED"' "$TMP" >/dev/null || die "privacy hostname"
-else
-  python3 - "$TMP" <<'PY' || die "JSON parse"
+python3 - "$TMP" <<'PY' || die "JSON schema/privacy/recommendations"
 import json,sys
-with open(sys.argv[1], encoding='utf-8') as f: d=json.load(f)
+with open(sys.argv[1], encoding='utf-8') as f:
+    d=json.load(f)
 assert d['schema_version']==1 and d['privacy'] is True
 assert d['system']['hostname']=='ARM-REDACTED'
+assert isinstance(d['summary']['score'], int)
+assert isinstance(d.get('recommendations'), list)
+for r in d['recommendations']:
+    for k in ('level','title','possible_causes','impact','checks','action','command','verification'):
+        assert k in r, (k,r)
 PY
-fi
 
-echo "OK: CLI, JSON and privacy tests passed"
+echo "OK: CLI, JSON, privacy and standard report contract tests passed"
