@@ -3,18 +3,21 @@
 Перед отправкой PR:
 
 ```bash
+make version
 make check
 make test
 ```
 
+`make version` читает значение из `VERSION`; отдельной захардкоженной версии в `Makefile` нет.
+
 ## Что проверяют локальные тесты
 
-`make check` выполняет Bash syntax check для основного single-file скрипта, installer, CLI/enterprise tests и RPM helper. При наличии ShellCheck запускается `shellcheck --severity=error`.
+`make check` сначала сверяет `VERSION` с `ARM_INFO_VERSION` в `arm_info.sh` и `Version:` в RPM spec, затем выполняет Bash syntax check для основного single-file скрипта, installer, CLI/корпоративных tests и RPM helper. При наличии ShellCheck запускается `shellcheck --severity=error`.
 
 `make test` дополнительно запускает:
 
 - `tests/test_cli.sh` — версия, CLI, standard JSON schema v1, privacy и контракт стандартных рекомендаций;
-- `tests/test_enterprise.sh` — enterprise CLI, schema v2, privacy, `--compare`, single-file policy и контракт корпоративного отчёта.
+- `tests/test_enterprise.sh` — корпоративный CLI, schema v2, privacy, `--compare`, single-file policy и контракт корпоративного отчёта.
 
 ## CI
 
@@ -23,11 +26,12 @@ CI проверяет:
 - `bash -n` для shell-файлов;
 - ShellCheck уровня `error`;
 - базовые CLI/JSON/privacy tests;
-- enterprise profiles/compare/recommendations tests;
+- корпоративные profiles/compare/recommendations tests;
 - Bash syntax в Ubuntu 24.04, Fedora и Rocky Linux 9;
-- согласованность версии `VERSION` / `arm_info.sh` / RPM spec / README;
+- согласованность версии `VERSION` / `arm_info.sh` / RPM spec / `make version` / README;
 - smoke-test установки/удаления через `install.sh --destdir`;
 - single-file policy: отсутствие отдельного enterprise-helper, отсутствие hard-coded списка корпоративного ПО и списка кодов Kerberos;
+- контракт текстовых отчётов: медиана CPU, `Стабильность системы`, корпоративное сохранение, copy-safe команды, документация;
 - RPM build smoke test и состав пакета.
 
 Автоматический CI на Ubuntu/Fedora/Rocky проверяет синтаксис, тестовые контракты, установку и упаковку, но не является runtime-проверкой РЕД ОС.
@@ -47,10 +51,14 @@ sudo bash arm_info.sh --profile software
 
 Проверяются не только exit code, но и отсутствие зависания, корректное сохранение отчёта, читаемость таблиц/рекомендаций, privacy и валидность JSON. Наличие `smartmontools`, `dmidecode` и `lm_sensors` повышает полноту базовой диагностики.
 
-## Storage priority 1.2.3
+## Полевые проверки 1.2.3
 
-Перед релизом дополнительно проверить: (1) обычный АРМ только с системным SSD/NVMe; (2) тот же АРМ с подключённой USB-флешкой; (3) LVM/device-mapper root. Подключение флешки не должно менять storage score/SMART completeness и `Макс. заполнение`; в таблице она должна иметь роль `Съёмный (вне индекса)`, а системный диск — `Системный`.
+Перед release 1.2.3 отдельно проверяются:
 
-## Дополнительный smoke-test 1.2.3: 802.1X
+- LVM/device-mapper root: физический root-диск должен отображаться как `Системный` без tree-префикса `lsblk`;
+- тот же АРМ с USB-флешкой: USB должен быть `Съёмный (вне индекса)`, оптический привод — `Оптический (вне индекса)`; removable media не должны менять storage score/SMART completeness и `Макс. заполнение` внутренних ФС;
+- `--profile network` и `--corp` на АРМ с 802.1X: должны отображаться настроенные профили, сертификат и даты начала/окончания, когда X.509 доступен как PEM/DER; fallback-кандидат не должен выдаваться за подтверждённый профиль;
+- стандартный блок `Стабильность системы`: итоговый score и каждый штраф должны быть видны отдельно;
+- длинная команда из рекомендаций должна копироваться как одна shell-строка, даже если терминал визуально переносит её.
 
-На АРМ с активным 802.1X-профилем проверить `sudo bash arm_info.sh --profile network` и `sudo bash arm_info.sh --corp`. Для file-based PEM/DER сертификата отчёт должен показать путь/источник, Subject/Issuer, даты начала и окончания действия и остаток дней. Отдельно проверить phase2 certificate, если он используется. В privacy-режиме путь и Subject/Issuer не должны раскрываться.
+Эти сценарии были подтверждены пользователем на целевом РЕД ОС перед выпуском 1.2.3: накопители и 802.1X отображаются корректно, обновлённый блок стабильности проверен, copy-safe вывод команд проверен.
