@@ -2004,16 +2004,51 @@ if ((SWAP_USED_PCT>=70 && MEM_AVAIL_PCT>=40 && OOM_DETECTED==0)); then
     SWAP_NOTE="Высокое заполнение Swap не снижает оценку: доступной ОЗУ ${MEM_AVAIL_PCT}%"
 fi
 
+# Стабильность системы: прозрачная модель штрафов от 100 баллов.
+# Это не оценка качества/целостности самой ОС: сюда входят runtime-сигналы
+# systemd, kernel journal, OOM, время и ECC, то есть устойчивость АРМ в целом.
 STAB_SCORE=100
-if ((FAILED_COUNT==1)); then STAB_SCORE=$((STAB_SCORE-5)); elif ((FAILED_COUNT<=3 && FAILED_COUNT>=2)); then STAB_SCORE=$((STAB_SCORE-10)); elif ((FAILED_COUNT>3)); then STAB_SCORE=$((STAB_SCORE-20)); fi
-if ((HW_ERR_COUNT<=2 && HW_ERR_COUNT>=1)); then STAB_SCORE=$((STAB_SCORE-10)); elif ((HW_ERR_COUNT<=5 && HW_ERR_COUNT>=3)); then STAB_SCORE=$((STAB_SCORE-20)); elif ((HW_ERR_COUNT>5)); then STAB_SCORE=$((STAB_SCORE-35)); fi
-if ((JOURNAL_ERR_COUNT>=6 && JOURNAL_ERR_COUNT<=15)); then STAB_SCORE=$((STAB_SCORE-5)); elif ((JOURNAL_ERR_COUNT>=16 && JOURNAL_ERR_COUNT<=30)); then STAB_SCORE=$((STAB_SCORE-10)); elif ((JOURNAL_ERR_COUNT>30)); then STAB_SCORE=$((STAB_SCORE-15)); fi
-((OOM_DETECTED==1))&&STAB_SCORE=$((STAB_SCORE-10))
-[ "$TIME_SYNC" = "Нет" ] && STAB_SCORE=$((STAB_SCORE-5))
-((UNCLEAN_BOOT_SIGNS>0)) && STAB_SCORE=$((STAB_SCORE-5))
-((ECC_CE>0)) && STAB_SCORE=$((STAB_SCORE-5))
-((ECC_UE>0)) && STAB_SCORE=$(min_score "$STAB_SCORE" 30)
+STAB_PENALTY_FAILED=0
+STAB_PENALTY_HW=0
+STAB_PENALTY_JOURNAL=0
+STAB_PENALTY_OOM=0
+STAB_PENALTY_TIME=0
+STAB_PENALTY_UNCLEAN=0
+STAB_PENALTY_ECC_CE=0
+STAB_ECC_UE_CAP=0
+
+if ((FAILED_COUNT==1)); then STAB_PENALTY_FAILED=5
+elif ((FAILED_COUNT>=2 && FAILED_COUNT<=3)); then STAB_PENALTY_FAILED=10
+elif ((FAILED_COUNT>3)); then STAB_PENALTY_FAILED=20
+fi
+
+if ((HW_ERR_COUNT>=1 && HW_ERR_COUNT<=2)); then STAB_PENALTY_HW=10
+elif ((HW_ERR_COUNT>=3 && HW_ERR_COUNT<=5)); then STAB_PENALTY_HW=20
+elif ((HW_ERR_COUNT>5)); then STAB_PENALTY_HW=35
+fi
+
+if ((JOURNAL_ERR_COUNT>=6 && JOURNAL_ERR_COUNT<=15)); then STAB_PENALTY_JOURNAL=5
+elif ((JOURNAL_ERR_COUNT>=16 && JOURNAL_ERR_COUNT<=30)); then STAB_PENALTY_JOURNAL=10
+elif ((JOURNAL_ERR_COUNT>30)); then STAB_PENALTY_JOURNAL=15
+fi
+
+((OOM_DETECTED==1)) && STAB_PENALTY_OOM=10
+[ "$TIME_SYNC" = "Нет" ] && STAB_PENALTY_TIME=5
+((UNCLEAN_BOOT_SIGNS>0)) && STAB_PENALTY_UNCLEAN=5
+((ECC_CE>0)) && STAB_PENALTY_ECC_CE=5
+
+STAB_SCORE=$((STAB_SCORE - STAB_PENALTY_FAILED - STAB_PENALTY_HW - STAB_PENALTY_JOURNAL - STAB_PENALTY_OOM - STAB_PENALTY_TIME - STAB_PENALTY_UNCLEAN - STAB_PENALTY_ECC_CE))
+if ((ECC_UE>0)); then
+    STAB_ECC_UE_CAP=30
+    STAB_SCORE=$(min_score "$STAB_SCORE" "$STAB_ECC_UE_CAP")
+fi
 STAB_SCORE=$(clamp_score "$STAB_SCORE")
+
+if ((STAB_SCORE>=90)); then STAB_STATUS="Норма"
+elif ((STAB_SCORE>=75)); then STAB_STATUS="Незначительные отклонения"
+elif ((STAB_SCORE>=50)); then STAB_STATUS="Требует внимания"
+else STAB_STATUS="Сниженная стабильность"
+fi
 
 CPU_SCORE=100; CPU_REASONS=()
 if [[ "$CPU_TEMP" =~ ^[0-9]+$ ]]; then
@@ -2221,6 +2256,23 @@ section "ОПЕРАТИВНАЯ ПАМЯТЬ"
  [ -n "$SWAP_NOTE" ] && echo "Примечание|$SWAP_NOTE"
 } | table
 
+section "СТАБИЛЬНОСТЬ СИСТЕМЫ"
+{
+ echo "Оценка|$STAB_SCORE / 100|вес в общем индексе 15%"
+ echo "Состояние|$STAB_STATUS|-"
+ echo "Failed-службы|$FAILED_COUNT|$STAB_PENALTY_FAILED"
+ echo "Ошибки ядра HW/storage|$HW_ERR_COUNT|$STAB_PENALTY_HW"
+ echo "Уникальные journal err..alert|$JOURNAL_ERR_COUNT|$STAB_PENALTY_JOURNAL"
+ echo "OOM-killer|$([ "$OOM_DETECTED" -eq 1 ] && echo Да || echo Нет)|$STAB_PENALTY_OOM"
+ echo "Синхронизация времени|$TIME_SYNC|$STAB_PENALTY_TIME"
+ echo "Признаки аварийной загрузки|$UNCLEAN_BOOT_SIGNS|$STAB_PENALTY_UNCLEAN"
+ echo "ECC corrected / uncorrectable|$ECC_CE / $ECC_UE|$STAB_PENALTY_ECC_CE"
+ if ((STAB_ECC_UE_CAP>0)); then echo "Ограничение из-за ECC UE|оценка не выше $STAB_ECC_UE_CAP|критический фактор"; fi
+} | { printf 'Показатель|Значение|Штраф, баллов\n'; cat; } | table
+
+echo "Примечание: показатель отражает устойчивость работы АРМ по системным событиям;"
+echo "он не означает, что сама установленная ОС повреждена или неисправна."
+
 section "СЕТЬ"
 if ((${#NET_ROWS[@]})); then
     NET_NUM=0
@@ -2384,8 +2436,9 @@ else
         "$ROOT_USE" "$FS_WORST_USE" "$(json_escape "$FS_WORST_USE_MOUNT")" "$FS_WORST_INODE" "$FS_SCORE"
     printf '  "network": {"active_interfaces":%s,"gateway":"%s","dns":"%s","error_ppm":%s,"drop_ppm":%s,"score":%s},\n' \
         "$ACTIVE_NET" "$(json_escape "$GW_DISPLAY")" "$(json_escape "$DNS_DISPLAY")" "$NET_ERROR_PPM" "$NET_DROP_PPM" "$NET_SCORE"
-    printf '  "stability": {"failed_units":%s,"hardware_errors":%s,"journal_errors":%s,"score":%s},\n' \
-        "$FAILED_COUNT" "$HW_ERR_COUNT" "$JOURNAL_ERR_COUNT" "$STAB_SCORE"
+    printf '  "stability": {"failed_units":%s,"hardware_errors":%s,"journal_errors":%s,"oom_detected":%s,"time_sync":"%s","unclean_boot_signs":%s,"ecc_ce":%s,"ecc_ue":%s,"penalty_failed_units":%s,"penalty_hardware":%s,"penalty_journal":%s,"penalty_oom":%s,"penalty_time":%s,"penalty_unclean_boot":%s,"penalty_ecc_ce":%s,"ecc_ue_score_cap":%s,"score":%s},\n' \
+        "$FAILED_COUNT" "$HW_ERR_COUNT" "$JOURNAL_ERR_COUNT" "$([ "$OOM_DETECTED" -eq 1 ] && echo true || echo false)" "$(json_escape "$TIME_SYNC")" "$UNCLEAN_BOOT_SIGNS" "$ECC_CE" "$ECC_UE" \
+        "$STAB_PENALTY_FAILED" "$STAB_PENALTY_HW" "$STAB_PENALTY_JOURNAL" "$STAB_PENALTY_OOM" "$STAB_PENALTY_TIME" "$STAB_PENALTY_UNCLEAN" "$STAB_PENALTY_ECC_CE" "$STAB_ECC_UE_CAP" "$STAB_SCORE"
     printf '  "diagnostics": {"time_sync":"%s","unclean_boot_signs":%s,"raid":"%s","ecc":"%s","battery_health":"%s","sssd":"%s","kerberos":"%s","cups":"%s","support_tier":"%s"},\n' \
         "$(json_escape "$TIME_SYNC")" "$UNCLEAN_BOOT_SIGNS" "$(json_escape "$RAID_STATUS")" "$(json_escape "$ECC_STATUS")" "$(json_escape "$BATTERY_HEALTH")" \
         "$(json_escape "$SSSD_STATUS")" "$(json_escape "$KRB_STATUS")" "$(json_escape "$CUPS_STATUS")" "$(json_escape "$SUPPORT_TIER")"
