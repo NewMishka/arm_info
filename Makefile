@@ -1,9 +1,16 @@
 PREFIX ?= /usr/local
 DESTDIR ?=
+VERSION := $(shell tr -d '[:space:]' < VERSION)
 
-.PHONY: check test install uninstall
+.PHONY: check test version install uninstall
+
+version:
+	@printf '%s\n' "$(VERSION)"
 
 check:
+	@test -n "$(VERSION)"
+	@test "$(VERSION)" = "$$(sed -n 's/^ARM_INFO_VERSION="\([^"]*\)"/\1/p' arm_info.sh | head -1)"
+	@test "$(VERSION)" = "$$(awk '/^Version:/{print $$2; exit}' packaging/arm_info.spec)"
 	bash -n arm_info.sh install.sh tests/test_cli.sh tests/test_enterprise.sh packaging/build-rpm.sh
 	@if command -v shellcheck >/dev/null 2>&1; then shellcheck --severity=error arm_info.sh install.sh tests/test_cli.sh tests/test_enterprise.sh packaging/build-rpm.sh; fi
 
