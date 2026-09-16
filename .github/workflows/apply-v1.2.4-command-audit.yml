@@ -43,4 +43,4 @@ jobs:
           git commit -m 'arm_info 1.2.4: audit recommendation commands'
           git push origin HEAD:feature/v1.2.4-command-audit
 
-# rerun after enterprise test contract update
+# rerun after Kerberos recommendation test fix
