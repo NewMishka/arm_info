@@ -1617,6 +1617,10 @@ base_print_rec_commands() {
     done < <(base_split_commands "$text")
 }
 
+run_smart() {
+    if command -v timeout >/dev/null 2>&1; then timeout 8 smartctl "$@"; else smartctl "$@"; fi
+}
+
 read_cpu_temp_once() {
     local h name f raw t z type vals=()
     for h in /sys/class/hwmon/hwmon*; do
