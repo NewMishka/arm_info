@@ -106,7 +106,10 @@ PY
 
 # -------------------- Corporate profiles: every section and route --------------------
 check_profile_json() {
-    local profile=$1 expected_csv=$2 out="$TMPDIR/${profile}.json"
+    local profile expected_csv out
+    profile=$1
+    expected_csv=$2
+    out="$TMPDIR/${profile}.json"
     run_diag "$out" --profile "$profile" --json --privacy --no-save
     python3 - "$out" "$profile" "$expected_csv" <<'PY' || exit 1
 import json,sys
