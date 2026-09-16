@@ -1,0 +1,40 @@
+name: Fix v1.2.4 audit helper
+
+on:
+  push:
+    branches: [feature/v1.2.4-command-audit]
+    paths:
+      - .github/workflows/fix-v1.2.4-command-audit-helper.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v1.2.4-command-audit
+      - name: Fix helper
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.github/scripts/apply_v1_2_4_command_audit.py')
+          s = p.read_text(encoding='utf-8')
+          old = """anchor = 'В **1.2.3** анализ накопителей ориентирован прежде всего на диск, с которого работает корневая файловая система. Он помечается как `Системный` и выводится первым. Подключённые USB/съёмные носители показываются отдельно, но не снижают storage score и полноту SMART. Их файловые системы также не подменяют показатель `Макс. заполнение` системных/внутренних ФС.\\n'\naddition = anchor + '\\nВ **1.2.4** проведена ревизия всех команд из рекомендаций: исправлены некорректные варианты `nmcli`, исключены заведомо бесполезные проверки отсутствующих утилит, добавлены пользовательский контекст Kerberos, таймауты сетевых проверок, безопасные маркеры (`DOMAIN_FQDN`, `PROFILE_NAME`, `MOUNT_PATH` и т. п.) и явное предупреждение `ИЗМЕНЯЕТ СОСТОЯНИЕ` для команд, меняющих конфигурацию/очередь. Каждая выводимая команда получает отдельное описание результата.\\n'\nreadme = replace_once(readme, anchor, addition, 'README 1.2.4 paragraph')\n"""
+          new = """insert_before = '\\nЕсли отчёт нужно передать вне внутреннего контура или использовать для сравнения АРМ:\\n'\naudit_note = '\\nВ **1.2.4** проведена ревизия всех команд из рекомендаций: исправлены некорректные варианты `nmcli`, исключены заведомо бесполезные проверки отсутствующих утилит, добавлены пользовательский контекст Kerberos, таймауты сетевых проверок, безопасные маркеры (`DOMAIN_FQDN`, `PROFILE_NAME`, `MOUNT_PATH` и т. п.) и явное предупреждение `ИЗМЕНЯЕТ СОСТОЯНИЕ` для команд, меняющих конфигурацию/очередь. Каждая выводимая команда получает отдельное описание результата.\\n'\nreadme = replace_once(readme, insert_before, audit_note + insert_before, 'README 1.2.4 paragraph')\n"""
+          if old not in s:
+              raise SystemExit('README anchor block not found in helper')
+          s = s.replace(old, new, 1)
+          # Make the generated test quoting robust.
+          s = s.replace("! grep -Fq 'find /tmp -maxdepth 1 -type f -name '\\''krb5cc_*' \"$SCRIPT\" || fail 'FILE-cache-only Kerberos recommendation remains'", "! grep -Fq \"find /tmp -maxdepth 1 -type f -name 'krb5cc_*'\" \"$SCRIPT\" || fail 'FILE-cache-only Kerberos recommendation remains'")
+          p.write_text(s, encoding='utf-8')
+          PY
+      - name: Commit
+        run: |
+          git config user.name NewMishka
+          git config user.email '157384758+NewMishka@users.noreply.github.com'
+          git add .github/scripts/apply_v1_2_4_command_audit.py
+          git commit -m 'fix: make v1.2.4 audit helper robust'
+          git push origin HEAD:feature/v1.2.4-command-audit
