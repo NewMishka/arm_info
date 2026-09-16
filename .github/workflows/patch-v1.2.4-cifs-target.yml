@@ -1,0 +1,35 @@
+name: Patch v1.2.4 CIFS target recommendation
+
+on:
+  push:
+    branches:
+      - feature/v1.2.4-command-audit
+    paths:
+      - '.github/workflows/patch-v1.2.4-cifs-target.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v1.2.4-command-audit
+          fetch-depth: 0
+      - name: Apply CIFS recommendation patch
+        run: python3 .github/scripts/patch_v1_2_4_cifs_target.py
+      - name: Validate syntax
+        run: bash -n arm_info.sh
+      - name: Commit generated change
+        run: |
+          if git diff --quiet -- arm_info.sh; then
+            echo 'No changes to commit'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add arm_info.sh
+          git commit -m 'fix: automate CIFS TARGET validation in recommendations'
+          git push origin HEAD:feature/v1.2.4-command-audit
