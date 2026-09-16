@@ -24,6 +24,7 @@ jobs:
           test -n "$VERSION"
           test "$VERSION" = "$(sed -n 's/^ARM_INFO_VERSION="\([^"]*\)"/\1/p' arm_info.sh | head -1)"
           test "$VERSION" = "$(awk '/^Version:/{print $2; exit}' packaging/arm_info.spec)"
+          test "$VERSION" = "$(make -s version)"
           test -f "docs/releases/v${VERSION}.md"
 
       - name: Build release assets

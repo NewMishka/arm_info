@@ -47,6 +47,7 @@ jobs:
           V=$(tr -d '[:space:]' < VERSION)
           test "$V" = "$(sed -n 's/^ARM_INFO_VERSION="\([^"]*\)"/\1/p' arm_info.sh | head -1)"
           test "$V" = "$(awk '/^Version:/{print $2; exit}' packaging/arm_info.spec)"
+          test "$V" = "$(make -s version)"
           grep -q "Текущая версия: \*\*$V\*\*" README.md
           grep -q "^## $V" CHANGELOG.md
           test -f "docs/releases/v${V}.md"
@@ -73,7 +74,9 @@ jobs:
           ! grep -Fq '(медиана; максимум ${CPU_TEMP_MAX}°C)' arm_info.sh
           grep -q 'ARM_INFO_CORP_PRIVATE_' arm_info.sh
           grep -q 'split_rec_commands' arm_info.sh
+          grep -q 'СТАБИЛЬНОСТЬ СИСТЕМЫ' arm_info.sh
           grep -q 'для оценки и пользовательского отчёта используется медиана' docs/SCORING.md
+          grep -q 'Стабильность системы' docs/SCORING.md
           grep -q -- '--corp --no-save' docs/USAGE.md
           grep -q 'schema v2' docs/AUTOMATION.md
           grep -q 'SHA256SUMS' .github/workflows/release.yml

@@ -2,7 +2,7 @@
 
 (
 # ============================================================
-# arm_info 1.2.2 — диагностика АРМ для РЕД ОС 7 / 8
+# arm_info 1.2.3 — диагностика АРМ для РЕД ОС 7 / 8
 # Запуск: исполняемый Bash-файл; base и enterprise находятся в одном файле.
 # Результат одновременно выводится на экран и сохраняется в TXT.
 # ============================================================
@@ -12,18 +12,18 @@ if [ -z "${BASH_VERSION:-}" ]; then
     exit 1
 fi
 
-ARM_INFO_VERSION="1.2.2"
+ARM_INFO_VERSION="1.2.3"
 
 
-# enterprise-profile-dispatch-v1.2.2 — single-file edition
+# enterprise-profile-dispatch-v1.2.3 — single-file edition
 # Enterprise-профили встроены в arm_info.sh; внешний helper не требуется.
 _arm_enterprise_run() (
-# arm_info enterprise profiles — v1.2.2
+# arm_info enterprise profiles — v1.2.3
 # Read-only diagnostics for RED OS enterprise workstations.
 set -u
 set -o pipefail
 
-VERSION="1.2.2"
+VERSION="1.2.3"
 PROFILE=""
 PRIVACY=0
 JSON_MODE=0
@@ -34,7 +34,7 @@ COMPARE_B=""
 
 usage() {
     cat <<'USAGE'
-arm_info enterprise profiles 1.2.2
+arm_info enterprise profiles 1.2.3
 
 Использование:
   arm_info --profile domain [--privacy] [--json] [-o FILE]
@@ -531,13 +531,22 @@ split_rec_commands() {
     [[ -n $current ]] && printf '%s\n' "$current"
 }
 
+print_rec_command_line() {
+    # Команда печатается одной физической строкой. Терминал может визуально
+    # перенести её по ширине окна, но в вывод не вставляется перевод строки,
+    # поэтому копирование длинной команды не разрывает shell pipeline/аргументы.
+    local label=$1 cmd=$2 desc=$3 indent=3 label_w=23
+    printf '%*s%s %s\n' "$indent" '' "$(pad_right "$label" "$label_w")" "$cmd"
+    print_rec_field '' "($desc)"
+}
+
 print_rec_commands() {
     local text=$1 cmd desc idx=0
     while IFS= read -r cmd; do
         [[ -n $cmd ]] || continue
         idx=$((idx+1))
         desc=$(command_description "$cmd")
-        print_rec_field "Команда $idx:" "$cmd ($desc)"
+        print_rec_command_line "Команда $idx:" "$cmd" "$desc"
     done < <(split_rec_commands "$text")
 }
 
@@ -690,8 +699,12 @@ check_domain() {
 
 check_network() {
     local gw ifaces idx=0 row iface ip mac speed duplex link dns_domain cifs_count=0 cifs_bad=0 mnt src gvfs_count=0 gvfs_bad=0 g dir
-    local eap_count=0 cert_global_min=-1 cert_unknown=0 cert_seen=0 cert_index=0 uuid type eap conn_name ca_cert client_cert cert_kind certpath cert_display cert_label cert_validity_label
-    local cert_start cert_end start_fmt end_fmt end_epoch now days cert_cmd_path sev proc_caja proc_gvfs
+    local eap_count=0 active_eap_count=0 cert_global_min=-1 cert_unknown=0 cert_seen=0 cert_index=0 system_ca_profiles=0 uuid type eap conn_name
+    local cert_spec cert_kind cert_field cert_label certref certpath cert_display cert_start cert_end start_fmt end_fmt end_epoch now days cert_cmd_path sev
+    local cert_meta cert_subject cert_issuer cert_inform phase2_auth phase2_autheap system_ca ca_path private_key phase2_private_key
+    local client_ref phase2_client_ref probe_client probe_ca probe_p2_client probe_p2_ca probe_key probe_p2_key active_uuid_list profile_state
+    local fallback_cert_count=0 fallback_idx=0 fallback_fqdn fallback_short fallback_path fallback_meta fallback_start fallback_end fallback_start_fmt fallback_end_fmt fallback_end_epoch fallback_days
+    local proc_caja proc_gvfs
 
     gw=$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $3}')
     [[ -n $gw ]] && add_check "СЕТЬ" "network.gateway" "Шлюз" "$(mask_ipv4 "$gw")" ok || add_check "СЕТЬ" "network.gateway" "Шлюз" "не найден" warn
@@ -712,63 +725,170 @@ check_network() {
     dns_domain=$(_detect_domain); check_dns_common "DNS" "$dns_domain"
 
     if have nmcli; then
+        # -g включает terse output; на ряде версий NetworkManager двоеточия в file://
+        # экранируются. Сначала запрашиваем --escape no, затем используем fallback.
+        nm_802_value() {
+            local field=$1 id=$2 v
+            v=$(nmcli -e no -g "$field" connection show uuid "$id" 2>/dev/null | head -n1)
+            if [[ -z $v ]]; then
+                v=$(nmcli -g "$field" connection show uuid "$id" 2>/dev/null | head -n1)
+                v=${v//\\:/:}
+                v=${v//\\\\/\\}
+            fi
+            printf '%s' "$v"
+        }
+
+        active_uuid_list=$(nmcli -t -f UUID connection show --active 2>/dev/null || true)
         while IFS=: read -r uuid type; do
             [[ -n $uuid ]] || continue
             case "$type" in ethernet|802-11-wireless|wifi) ;; *) continue;; esac
-            eap=$(nmcli -g 802-1x.eap connection show uuid "$uuid" 2>/dev/null | head -n1)
-            [[ -n $eap ]] || continue
+            eap=$(nm_802_value 802-1x.eap "$uuid")
+            probe_client=$(nm_802_value 802-1x.client-cert "$uuid")
+            probe_ca=$(nm_802_value 802-1x.ca-cert "$uuid")
+            probe_p2_client=$(nm_802_value 802-1x.phase2-client-cert "$uuid")
+            probe_p2_ca=$(nm_802_value 802-1x.phase2-ca-cert "$uuid")
+            probe_key=$(nm_802_value 802-1x.private-key "$uuid")
+            probe_p2_key=$(nm_802_value 802-1x.phase2-private-key "$uuid")
+            [[ -n $eap || -n $probe_client || -n $probe_ca || -n $probe_p2_client || -n $probe_p2_ca || -n $probe_key || -n $probe_p2_key ]] || continue
 
             eap_count=$((eap_count+1))
-            conn_name=$(nmcli -g connection.id connection show uuid "$uuid" 2>/dev/null | head -n1)
+            profile_state="настроен, не активен"
+            if grep -Fxq "$uuid" <<<"$active_uuid_list"; then
+                profile_state="активен"
+                active_eap_count=$((active_eap_count+1))
+            fi
+            conn_name=$(nm_802_value connection.id "$uuid")
             if ((PRIVACY)); then conn_name="профиль $eap_count (скрыто)"; fi
-            add_check "802.1X" "network.8021x.profile.$eap_count" "Профиль 802.1X #$eap_count" "${conn_name:-$uuid}" info
-            add_check "802.1X" "network.8021x.eap.$eap_count" "EAP-метод" "$eap" info
+            add_check "802.1X" "network.8021x.profile.$eap_count" "Профиль 802.1X #$eap_count" "${conn_name:-$uuid}; $profile_state" info
+            add_check "802.1X" "network.8021x.eap.$eap_count" "EAP-метод" "${eap:-не указан}" info
 
-            ca_cert=$(nmcli -g 802-1x.ca-cert connection show uuid "$uuid" 2>/dev/null | head -n1)
-            client_cert=$(nmcli -g 802-1x.client-cert connection show uuid "$uuid" 2>/dev/null | head -n1)
+            phase2_auth=$(nm_802_value 802-1x.phase2-auth "$uuid")
+            phase2_autheap=$(nm_802_value 802-1x.phase2-autheap "$uuid")
+            [[ -n $phase2_auth ]] && add_check "802.1X" "network.8021x.phase2-auth.$eap_count" "Phase2 auth" "$phase2_auth" info
+            [[ -n $phase2_autheap ]] && add_check "802.1X" "network.8021x.phase2-autheap.$eap_count" "Phase2 EAP" "$phase2_autheap" info
 
-            for cert_kind in client ca; do
-                if [[ $cert_kind == client ]]; then
-                    certpath=$client_cert; cert_label="Клиентский сертификат"; cert_validity_label="Срок клиентского сертификата"
-                else
-                    certpath=$ca_cert; cert_label="CA-сертификат"; cert_validity_label="Срок CA-сертификата"
-                fi
-                [[ -n $certpath ]] || continue
+            system_ca=$(nm_802_value 802-1x.system-ca-certs "$uuid")
+            ca_path=$(nm_802_value 802-1x.ca-path "$uuid")
+            if [[ $system_ca == yes || $system_ca == true || $system_ca == 1 ]]; then
+                system_ca_profiles=$((system_ca_profiles+1))
+                add_check "802.1X" "network.8021x.system-ca.$eap_count" "Системное хранилище CA" "используется" info
+            fi
+            if [[ -n $ca_path ]]; then
+                if ((PRIVACY)); then ca_path='<CA_PATH>'; fi
+                add_check "802.1X" "network.8021x.ca-path.$eap_count" "Каталог CA" "$ca_path" info
+            fi
+
+            client_ref=$(nm_802_value 802-1x.client-cert "$uuid")
+            phase2_client_ref=$(nm_802_value 802-1x.phase2-client-cert "$uuid")
+            private_key=$(nm_802_value 802-1x.private-key "$uuid")
+            phase2_private_key=$(nm_802_value 802-1x.phase2-private-key "$uuid")
+
+            # Проверяем внешний и phase2 наборы сертификатов. Поддерживаются file://,
+            # обычные пути, PEM и DER. PKCS#11/blob отображаются, но без интерактивного
+            # запроса PIN их срок не считается достоверно доступным.
+            for cert_spec in \
+                "client|802-1x.client-cert|Клиентский сертификат" \
+                "ca|802-1x.ca-cert|CA-сертификат" \
+                "phase2-client|802-1x.phase2-client-cert|Phase2 клиентский сертификат" \
+                "phase2-ca|802-1x.phase2-ca-cert|Phase2 CA-сертификат"
+            do
+                IFS='|' read -r cert_kind cert_field cert_label <<<"$cert_spec"
+                certref=$(nm_802_value "$cert_field" "$uuid")
+                [[ -n $certref ]] || continue
+
                 cert_seen=$((cert_seen+1)); cert_index=$((cert_index+1))
+                certpath=$certref
                 certpath=${certpath#file://}
-                cert_display=$certpath
+                certpath=${certpath#file:}
+                cert_display=$certref
                 if ((PRIVACY)); then
-                    [[ $cert_kind == client ]] && cert_display='<CLIENT_CERT>' || cert_display='<CA_CERT>'
+                    case "$cert_kind" in
+                        client) cert_display='<CLIENT_CERT>' ;;
+                        ca) cert_display='<CA_CERT>' ;;
+                        phase2-client) cert_display='<PHASE2_CLIENT_CERT>' ;;
+                        *) cert_display='<PHASE2_CA_CERT>' ;;
+                    esac
                 fi
                 add_check "802.1X" "network.8021x.cert.$cert_index.path" "$cert_label" "$cert_display" info
 
+                case "$certref" in
+                    pkcs11:*)
+                        cert_unknown=$((cert_unknown+1))
+                        add_check "802.1X" "network.8021x.cert.$cert_index.validity" "Даты — $cert_label" "не проверены автоматически: сертификат задан PKCS#11 URI" unknown
+                        continue
+                        ;;
+                    blob:*|blob://*)
+                        cert_unknown=$((cert_unknown+1))
+                        add_check "802.1X" "network.8021x.cert.$cert_index.validity" "Даты — $cert_label" "не проверены автоматически: сертификат хранится как blob" unknown
+                        continue
+                        ;;
+                esac
+
                 if [[ -r $certpath ]] && have openssl; then
-                    cert_start=$(openssl x509 -in "$certpath" -noout -startdate 2>/dev/null | sed 's/^notBefore=//')
-                    cert_end=$(openssl x509 -in "$certpath" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')
-                    start_fmt=$(date -d "$cert_start" '+%d.%m.%Y %H:%M:%S %Z' 2>/dev/null || printf '%s' "$cert_start")
-                    end_fmt=$(date -d "$cert_end" '+%d.%m.%Y %H:%M:%S %Z' 2>/dev/null || printf '%s' "$cert_end")
-                    end_epoch=$(date -d "$cert_end" +%s 2>/dev/null || true); now=$(date +%s)
-                    if [[ $end_epoch =~ ^[0-9]+$ ]]; then
-                        days=$(((end_epoch-now)/86400))
-                        ((cert_global_min<0 || days<cert_global_min)) && cert_global_min=$days
-                        if ((days<14)); then sev=crit; elif ((days<30)); then sev=warn; else sev=ok; fi
-                        add_check "802.1X" "network.8021x.cert.$cert_index.validity" "$cert_validity_label" "$start_fmt — $end_fmt; осталось ${days} дн." info
+                    cert_inform=''
+                    cert_meta=$(openssl x509 -in "$certpath" -noout -startdate -enddate -subject -issuer 2>/dev/null || true)
+                    if [[ $cert_meta != *notAfter=* ]]; then
+                        cert_meta=$(openssl x509 -inform DER -in "$certpath" -noout -startdate -enddate -subject -issuer 2>/dev/null || true)
+                        [[ $cert_meta == *notAfter=* ]] && cert_inform='-inform DER '
+                    fi
+
+                    if [[ $cert_meta == *notAfter=* ]]; then
+                        cert_start=$(printf '%s\n' "$cert_meta" | sed -n 's/^notBefore=//p' | head -n1)
+                        cert_end=$(printf '%s\n' "$cert_meta" | sed -n 's/^notAfter=//p' | head -n1)
+                        cert_subject=$(printf '%s\n' "$cert_meta" | sed -n 's/^subject=//p' | head -n1)
+                        cert_issuer=$(printf '%s\n' "$cert_meta" | sed -n 's/^issuer=//p' | head -n1)
+                        start_fmt=$(date -d "$cert_start" '+%d.%m.%Y %H:%M:%S %Z' 2>/dev/null || printf '%s' "$cert_start")
+                        end_fmt=$(date -d "$cert_end" '+%d.%m.%Y %H:%M:%S %Z' 2>/dev/null || printf '%s' "$cert_end")
+                        end_epoch=$(date -d "$cert_end" +%s 2>/dev/null || true); now=$(date +%s)
+
+                        if ((PRIVACY)); then cert_subject='скрыто'; cert_issuer='скрыто'; fi
+                        [[ -n $cert_subject ]] && add_check "802.1X" "network.8021x.cert.$cert_index.subject" "Subject — $cert_label" "$cert_subject" info
+                        [[ -n $cert_issuer ]] && add_check "802.1X" "network.8021x.cert.$cert_index.issuer" "Issuer — $cert_label" "$cert_issuer" info
+                        add_check "802.1X" "network.8021x.cert.$cert_index.not_before" "Начало действия — $cert_label" "$start_fmt" info
+
+                        if [[ $end_epoch =~ ^[0-9]+$ ]]; then
+                            days=$(((end_epoch-now)/86400))
+                            ((cert_global_min<0 || days<cert_global_min)) && cert_global_min=$days
+                            if ((days<14)); then sev=crit; elif ((days<30)); then sev=warn; else sev=ok; fi
+                            add_check "802.1X" "network.8021x.cert.$cert_index.not_after" "Окончание действия — $cert_label" "$end_fmt" "$sev"
+                            add_check "802.1X" "network.8021x.cert.$cert_index.remaining" "Осталось — $cert_label" "${days} дн." "$sev"
+                        else
+                            cert_unknown=$((cert_unknown+1))
+                            add_check "802.1X" "network.8021x.cert.$cert_index.not_after" "Окончание действия — $cert_label" "$end_fmt (дату не удалось преобразовать)" unknown
+                        fi
+
+                        cert_cmd_path=$certpath; ((PRIVACY)) && cert_cmd_path='<CERT>'
+                        add_check "802.1X" "network.8021x.cert.$cert_index.command" "Проверка срока" "openssl x509 ${cert_inform}-in \"$cert_cmd_path\" -noout -dates -subject -issuer" info
                     else
                         cert_unknown=$((cert_unknown+1))
-                        add_check "802.1X" "network.8021x.cert.$cert_index.validity" "$cert_validity_label" "не удалось вычислить; notBefore=$cert_start; notAfter=$cert_end" info
+                        add_check "802.1X" "network.8021x.cert.$cert_index.validity" "Даты — $cert_label" "не прочитаны как PEM или DER" unknown
+                        cert_cmd_path=$certpath; ((PRIVACY)) && cert_cmd_path='<CERT>'
+                        add_check "802.1X" "network.8021x.cert.$cert_index.command" "Проверка PEM/DER" "openssl x509 -in \"$cert_cmd_path\" -noout -dates || openssl x509 -inform DER -in \"$cert_cmd_path\" -noout -dates" info
                     fi
-                    cert_cmd_path=$certpath; ((PRIVACY)) && cert_cmd_path='<CERT>'
-                    add_check "802.1X" "network.8021x.cert.$cert_index.command" "Проверка срока" "openssl x509 -in \"$cert_cmd_path\" -noout -dates" info
                 else
                     cert_unknown=$((cert_unknown+1))
                     if ! have openssl; then
-                        add_check "802.1X" "network.8021x.cert.$cert_index.validity" "$cert_validity_label" "не проверен: openssl отсутствует" info
+                        add_check "802.1X" "network.8021x.cert.$cert_index.validity" "Даты — $cert_label" "не проверены: openssl отсутствует" unknown
                     else
-                        add_check "802.1X" "network.8021x.cert.$cert_index.validity" "$cert_validity_label" "не проверен: файл сертификата недоступен" info
+                        add_check "802.1X" "network.8021x.cert.$cert_index.validity" "Даты — $cert_label" "не проверены: файл сертификата недоступен: $cert_display" unknown
                     fi
                 fi
             done
-        done < <(nmcli -t -f UUID,TYPE connection show --active 2>/dev/null)
+
+            # Если EAP-TLS/phase2 TLS использует private-key/PKCS#12, но client-cert
+            # отдельно не задан, показываем источник, чтобы профиль не выглядел пустым.
+            if [[ -z $client_ref && -n $private_key ]]; then
+                cert_display=$private_key; ((PRIVACY)) && cert_display='<PRIVATE_KEY_OR_PKCS12>'
+                add_check "802.1X" "network.8021x.private-key.$eap_count" "Источник ключа/PKCS#12" "$cert_display" info
+            fi
+            if [[ -z $phase2_client_ref && -n $phase2_private_key ]]; then
+                cert_display=$phase2_private_key; ((PRIVACY)) && cert_display='<PHASE2_PRIVATE_KEY_OR_PKCS12>'
+                add_check "802.1X" "network.8021x.phase2-private-key.$eap_count" "Phase2 ключ/PKCS#12" "$cert_display" info
+            fi
+            if [[ ($eap == *tls* || $phase2_auth == tls || $phase2_autheap == tls) && -z $client_ref && -z $phase2_client_ref && -z $private_key && -z $phase2_private_key ]]; then
+                add_check "802.1X" "network.8021x.client-cert.missing.$eap_count" "Клиентский сертификат" "для TLS не найден в профиле" warn
+            fi
+        done < <(nmcli -t -f UUID,TYPE connection show 2>/dev/null)
 
         if ((eap_count>0)); then
             if ((cert_global_min>=0)); then
@@ -777,17 +897,60 @@ check_network() {
                 elif ((cert_unknown>0)); then sev=warn
                 else sev=ok
                 fi
-                add_check "802.1X" "network.8021x" "Активные 802.1X" "$eap_count; минимальный остаток сертификата ${cert_global_min} дн.; непроверенных: $cert_unknown" "$sev"
+                add_check "802.1X" "network.8021x" "Профили 802.1X" "настроено: $eap_count; активных: $active_eap_count; минимальный остаток сертификата ${cert_global_min} дн.; непроверенных: $cert_unknown" "$sev"
             elif ((cert_seen>0)); then
-                add_check "802.1X" "network.8021x" "Активные 802.1X" "$eap_count; срок сертификатов не определён" unknown
+                add_check "802.1X" "network.8021x" "Профили 802.1X" "настроено: $eap_count; активных: $active_eap_count; сертификаты найдены, но даты не определены; непроверенных: $cert_unknown" unknown
+            elif ((system_ca_profiles>0)); then
+                add_check "802.1X" "network.8021x" "Профили 802.1X" "настроено: $eap_count; активных: $active_eap_count; используется системное хранилище CA; отдельные сертификаты не заданы" info
             else
-                add_check "802.1X" "network.8021x" "Активные 802.1X" "$eap_count; пути сертификатов в активном профиле не обнаружены" unknown
+                add_check "802.1X" "network.8021x" "Профили 802.1X" "настроено: $eap_count; активных: $active_eap_count; ссылки на сертификаты не обнаружены" unknown
             fi
         else
-            add_check "802.1X" "network.8021x" "Активные 802.1X" "не обнаружены" info
+            add_check "802.1X" "network.8021x" "Профили 802.1X NetworkManager" "не обнаружены" info
         fi
     else
         add_check "802.1X" "network.8021x" "802.1X" "nmcli отсутствует" unknown
+    fi
+
+    # Дополнительный поиск сертификата АРМ. Нужен для РЕД ОС, где 802.1X может
+    # быть задан legacy ifcfg/wpa_supplicant/внешним механизмом, а nmcli не показывает
+    # 802-1x секцию активного профиля. Сертификат помечается как кандидат, пока связь
+    # с конкретным профилем не подтверждена.
+    if ((cert_seen==0)) && have openssl; then
+        fallback_fqdn=$(hostname -f 2>/dev/null || true)
+        fallback_short=$(hostname -s 2>/dev/null || hostname 2>/dev/null || true)
+        while IFS= read -r fallback_path; do
+            [[ -n $fallback_path && -r $fallback_path ]] || continue
+            fallback_meta=$(openssl x509 -in "$fallback_path" -noout -startdate -enddate -subject -issuer 2>/dev/null || true)
+            [[ $fallback_meta == *notAfter=* ]] || continue
+            fallback_cert_count=$((fallback_cert_count+1)); fallback_idx=$((fallback_idx+1))
+            cert_display=$fallback_path; ((PRIVACY)) && cert_display='<HOST_CERT_CANDIDATE>'
+            add_check "802.1X" "network.8021x.fallback.$fallback_idx.path" "Сертификат АРМ (кандидат 802.1X)" "$cert_display" info
+            fallback_start=$(printf '%s\n' "$fallback_meta" | sed -n 's/^notBefore=//p' | head -n1)
+            fallback_end=$(printf '%s\n' "$fallback_meta" | sed -n 's/^notAfter=//p' | head -n1)
+            fallback_start_fmt=$(date -d "$fallback_start" '+%d.%m.%Y %H:%M:%S %Z' 2>/dev/null || printf '%s' "$fallback_start")
+            fallback_end_fmt=$(date -d "$fallback_end" '+%d.%m.%Y %H:%M:%S %Z' 2>/dev/null || printf '%s' "$fallback_end")
+            fallback_end_epoch=$(date -d "$fallback_end" +%s 2>/dev/null || true); now=$(date +%s)
+            add_check "802.1X" "network.8021x.fallback.$fallback_idx.not_before" "Начало действия — сертификат АРМ" "$fallback_start_fmt" info
+            if [[ $fallback_end_epoch =~ ^[0-9]+$ ]]; then
+                fallback_days=$(((fallback_end_epoch-now)/86400))
+                if ((fallback_days<14)); then sev=crit; elif ((fallback_days<30)); then sev=warn; else sev=ok; fi
+                add_check "802.1X" "network.8021x.fallback.$fallback_idx.not_after" "Окончание действия — сертификат АРМ" "$fallback_end_fmt" "$sev"
+                add_check "802.1X" "network.8021x.fallback.$fallback_idx.remaining" "Осталось — сертификат АРМ" "${fallback_days} дн." "$sev"
+            else
+                add_check "802.1X" "network.8021x.fallback.$fallback_idx.not_after" "Окончание действия — сертификат АРМ" "$fallback_end_fmt" unknown
+            fi
+            cert_cmd_path=$fallback_path; ((PRIVACY)) && cert_cmd_path='<CERT>'
+            add_check "802.1X" "network.8021x.fallback.$fallback_idx.command" "Проверка срока" "openssl x509 -in \"$cert_cmd_path\" -noout -dates -subject -issuer" info
+        done < <({
+            [[ -n $fallback_fqdn ]] && printf '%s\n' "/etc/pki/tls/${fallback_fqdn}.pem" "/etc/pki/tls/certs/${fallback_fqdn}.pem"
+            if [[ -n $fallback_short && -d /etc/pki/tls ]]; then
+                find /etc/pki/tls /etc/pki/tls/certs -maxdepth 1 -type f -iname "${fallback_short}*.pem" 2>/dev/null
+            fi
+        } | awk '!seen[$0]++' | head -n5)
+        if ((fallback_cert_count>0)); then
+            add_check "802.1X" "network.8021x.fallback.source" "Источник сертификата 802.1X" "профиль NetworkManager не подтвердил сертификат; найден host-named сертификат АРМ" unknown
+        fi
     fi
 
     if have findmnt; then
@@ -881,8 +1044,12 @@ check_software() {
 emit_text() {
     local current="" i sevmark n=0 width
     width=$(report_width)
-    printf 'ARM_INFO ENTERPRISE %s\n' "$VERSION"
-    printf 'Профиль: %s\n' "$PROFILE"
+    printf 'ARM_INFO КОРПОРАТИВНЫЙ %s\n' "$VERSION"
+    if [[ $PROFILE == enterprise ]]; then
+        printf 'Профиль: корпоративный\n'
+    else
+        printf 'Профиль: %s\n' "$PROFILE"
+    fi
     printf 'Дата: %s\n' "$(date '+%d.%m.%Y %H:%M:%S')"
     ((PRIVACY)) && printf 'Privacy: включён\n'
     if [[ -n $OUTPUT_PATH ]] && ((SAVE_REPORT==1)); then
@@ -1312,19 +1479,33 @@ add_rec() {
     REC_LEVELS+=("$level"); REC_TITLES+=("$title"); REC_CAUSES+=("$cause"); REC_IMPACTS+=("$impact")
     REC_DIAGNOSTICS+=("$diagnostic"); REC_ACTIONS+=("$action"); REC_CHECKS+=("$command"); REC_VERIFICATIONS+=("$verification")
 }
+base_pad_right() {
+    local value=$1 width=$2 len=${#1}
+    printf '%s' "$value"
+    ((len<width)) && printf '%*s' "$((width-len))" ''
+}
+
 print_wrapped() {
-    local label="$1" text="$2" indent=3 label_w=19 gap=1 value_w first=1 ln
+    local label="$1" text="$2" indent=3 label_w=23 gap=1 value_w first=1 ln
     value_w=$((WIDTH-indent-label_w-gap))
     ((value_w<32)) && value_w=32
     while IFS= read -r ln || [[ -n $ln ]]; do
         if ((first)); then
-            printf '%*s%-*s %s\n' "$indent" '' "$label_w" "$label" "$ln"
+            printf '%*s%s %s\n' "$indent" '' "$(base_pad_right "$label" "$label_w")" "$ln"
             first=0
         else
-            printf '%*s%-*s %s\n' "$indent" '' "$label_w" '' "$ln"
+            printf '%*s%s %s\n' "$indent" '' "$(base_pad_right '' "$label_w")" "$ln"
         fi
     done < <(printf '%s\n' "$text" | fold -s -w "$value_w")
     ((first==0)) || printf '%*s%s\n' "$indent" '' "$label"
+}
+
+base_print_command_line() {
+    # Как и в корпоративном отчёте, команда остаётся одной физической строкой.
+    # Перенос выполняет только терминал визуально, что сохраняет копируемую строку.
+    local label=$1 cmd=$2 desc=$3 indent=3 label_w=23
+    printf '%*s%s %s\n' "$indent" '' "$(base_pad_right "$label" "$label_w")" "$cmd"
+    print_wrapped '' "($desc)"
 }
 
 base_command_description() {
@@ -1535,16 +1716,68 @@ fi
 
 # -------------------- ФАЙЛОВЫЕ СИСТЕМЫ --------------------
 ROOT_DEV=$(findmnt -no SOURCE / 2>/dev/null); [ -z "$ROOT_DEV" ]&&ROOT_DEV="-"
+
+# Физический накопитель, на котором находится корневая ФС, является приоритетным.
+# Для LVM/dm-crypt/device-mapper идём по цепочке parents до TYPE=disk.
+ROOT_BLOCK="$ROOT_DEV"
+if [[ "$ROOT_BLOCK" == /dev/* ]]; then ROOT_BLOCK=$(readlink -f "$ROOT_BLOCK" 2>/dev/null || printf '%s' "$ROOT_BLOCK"); fi
+SYSTEM_DISKS=""
+if command -v lsblk >/dev/null 2>&1 && [[ "$ROOT_BLOCK" == /dev/* ]]; then
+    SYSTEM_DISKS=$(lsblk -srno NAME,TYPE "$ROOT_BLOCK" 2>/dev/null | awk '$2=="disk"{print $1}' | sort -u)
+fi
+if [[ -z "$SYSTEM_DISKS" ]] && command -v lsblk >/dev/null 2>&1; then
+    ROOT_MAJMIN=$(findmnt -no MAJ:MIN / 2>/dev/null || true)
+    if [[ -n "$ROOT_MAJMIN" ]]; then
+        ROOT_NODE=$(lsblk -rno NAME,TYPE,MAJ:MIN 2>/dev/null | awk -v mm="$ROOT_MAJMIN" '$3==mm{print "/dev/"$1; exit}')
+        [[ -n "$ROOT_NODE" ]] && SYSTEM_DISKS=$(lsblk -srno NAME,TYPE "$ROOT_NODE" 2>/dev/null | awk '$2=="disk"{print $1}' | sort -u)
+    fi
+fi
+SYSTEM_DISKS=$(printf '%s\n' "$SYSTEM_DISKS" | sed -E 's/^[^[:alnum:]_./-]+//' | sed '/^$/d' | sort -u)
+SYSTEM_DISK_TEXT=$(printf '%s\n' "$SYSTEM_DISKS" | sed '/^$/d' | paste -sd ',' -)
+[ -z "$SYSTEM_DISK_TEXT" ] && SYSTEM_DISK_TEXT="Не определён"
+
+is_system_disk() {
+    local n=$1
+    printf '%s
+' "$SYSTEM_DISKS" | grep -Fxq -- "$n"
+}
+
+disk_is_removable() {
+    local n=$1 rmflag=0 tran=""
+    is_system_disk "$n" && return 1
+    [[ -r "/sys/class/block/$n/removable" ]] && rmflag=$(cat "/sys/class/block/$n/removable" 2>/dev/null || echo 0)
+    if command -v lsblk >/dev/null 2>&1; then tran=$(lsblk -dn -o TRAN "/dev/$n" 2>/dev/null | tr -d '[:space:]'); fi
+    [[ "$rmflag" == 1 || "$tran" == usb ]]
+}
+
+mount_is_removable() {
+    local mnt=$1 src real d
+    src=$(findmnt -no SOURCE --target "$mnt" 2>/dev/null || true)
+    real="$src"; [[ "$real" == /dev/* ]] && real=$(readlink -f "$real" 2>/dev/null || printf '%s' "$real")
+    if command -v lsblk >/dev/null 2>&1 && [[ "$real" == /dev/* ]]; then
+        while read -r d; do
+            [[ -n "$d" ]] || continue
+            disk_is_removable "$d" && return 0
+        done < <(lsblk -sno NAME,TYPE "$real" 2>/dev/null | awk '$2=="disk"{print $1}' | sort -u)
+    fi
+    # Fallback для типовых пользовательских автомонтирований, если topology недоступна.
+    [[ "$mnt" == /run/media/* || "$mnt" == /media/* ]]
+}
+
 ROOT_USE=$(df -P / 2>/dev/null | awk 'NR==2{gsub("%","",$5);print $5}'); ROOT_INODE_USE=$(df -Pi / 2>/dev/null | awk 'NR==2{gsub("%","",$5);print $5}')
 ROOT_SIZE=$(df -hP / 2>/dev/null | awk 'NR==2{print $2}'); ROOT_USED=$(df -hP / 2>/dev/null | awk 'NR==2{print $3}'); ROOT_FREE=$(df -hP / 2>/dev/null | awk 'NR==2{print $4}')
 [[ "$ROOT_USE" =~ ^[0-9]+$ ]]||ROOT_USE=0; [[ "$ROOT_INODE_USE" =~ ^[0-9]+$ ]]||ROOT_INODE_USE=0
 ROOT_RO=0; findmnt -no OPTIONS / 2>/dev/null | grep -Eq '(^|,)ro(,|$)'&&ROOT_RO=1
-LOCAL_FS_COUNT=0; LOCAL_RO_COUNT=0; FS_WORST_USE=$ROOT_USE; FS_WORST_USE_MOUNT=/; FS_WORST_INODE=$ROOT_INODE_USE; FS_WORST_INODE_MOUNT=/; FS_RO_MOUNTS=(); LOCAL_FS_ROWS=()
+LOCAL_FS_COUNT=0; REMOVABLE_FS_COUNT=0; LOCAL_RO_COUNT=0; FS_WORST_USE=$ROOT_USE; FS_WORST_USE_MOUNT=/; FS_WORST_INODE=$ROOT_INODE_USE; FS_WORST_INODE_MOUNT=/; FS_RO_MOUNTS=(); LOCAL_FS_ROWS=()
 while IFS= read -r MNT; do
     [ -n "$MNT" ]||continue
     USE=$(df -P "$MNT" 2>/dev/null | awk 'NR==2{gsub("%","",$5);print $5}'); INO=$(df -Pi "$MNT" 2>/dev/null | awk 'NR==2{gsub("%","",$5);print $5}')
     [[ "$USE" =~ ^[0-9]+$ ]]||USE=0; [[ "$INO" =~ ^[0-9]+$ ]]||INO=0
     RO=0; findmnt -no OPTIONS --target "$MNT" 2>/dev/null | grep -Eq '(^|,)ro(,|$)'&&RO=1
+    if [ "$MNT" != / ] && mount_is_removable "$MNT"; then
+        REMOVABLE_FS_COUNT=$((REMOVABLE_FS_COUNT+1))
+        continue
+    fi
     LOCAL_FS_COUNT=$((LOCAL_FS_COUNT+1)); ((USE>FS_WORST_USE))&&{ FS_WORST_USE=$USE; FS_WORST_USE_MOUNT="$MNT"; }; ((INO>FS_WORST_INODE))&&{ FS_WORST_INODE=$INO; FS_WORST_INODE_MOUNT="$MNT"; }
     ((RO==1))&&{ LOCAL_RO_COUNT=$((LOCAL_RO_COUNT+1)); FS_RO_MOUNTS+=("$MNT"); }
     if [ "$MNT" = / ] || ((USE>=70 || INO>=70 || RO==1)); then LOCAL_FS_ROWS+=("$MNT|${USE}%|${INO}%|$([ "$RO" -eq 1 ]&&echo RO||echo RW)"); fi
@@ -1642,11 +1875,22 @@ case "$DISTRO_ID" in
 esac
 
 # -------------------- ДИСКИ / SMART --------------------
-DISK_ROWS=(); DISK_SELFTEST_ROWS=(); DISK_WORST_SCORE=100; FIXED_DISKS=0; MAX_DISK_HOURS=0; SMART_UNKNOWN_COUNT=0
+DISK_ROWS=(); DISK_SYSTEM_ROWS=(); DISK_FIXED_ROWS=(); DISK_REMOVABLE_ROWS=(); DISK_OPTICAL_ROWS=(); DISK_SELFTEST_ROWS=(); DISK_WORST_SCORE=100; SYSTEM_DISK_SCORE=100; SECONDARY_WORST_KNOWN_SCORE=100; FIXED_DISKS=0; SYSTEM_DISK_COUNT=0; SECONDARY_FIXED_DISKS=0; SECONDARY_KNOWN_COUNT=0; REMOVABLE_DISKS=0; MAX_DISK_HOURS=0; SYSTEM_MAX_DISK_HOURS=0; SMART_UNKNOWN_COUNT=0; SYSTEM_SMART_UNKNOWN_COUNT=0; SECONDARY_CRITICAL=0
 while read -r NAME TYPE SIZE ROTA MODEL; do
     case "$TYPE" in disk|rom) ;; *) continue ;; esac
     DEV="/dev/$NAME"; MODEL=$(echo "$MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'); [ -z "$MODEL" ]&&MODEL="-"; [ "${#MODEL}" -gt 28 ]&&MODEL="${MODEL:0:27}…"
-    if [[ "$TYPE" = rom || "$NAME" = sr* ]]; then DISK_ROWS+=("$NAME|CD/DVD||$MODEL|-|-|-|-"); continue; fi
+    if [[ "$TYPE" = rom || "$NAME" = sr* ]]; then DISK_OPTICAL_ROWS+=("$NAME|Оптический (вне индекса)|CD/DVD||$MODEL|-|-|-|-"); continue; fi
+    TRAN=$(lsblk -dn -o TRAN "$DEV" 2>/dev/null | tr -d '[:space:]')
+    if is_system_disk "$NAME"; then
+        DISK_ROLE="Системный"; SYSTEM_DISK_COUNT=$((SYSTEM_DISK_COUNT+1))
+    elif disk_is_removable "$NAME"; then
+        DISK_ROLE="Съёмный (вне индекса)"; REMOVABLE_DISKS=$((REMOVABLE_DISKS+1))
+        if [[ "$TRAN" == usb ]]; then DISK_TYPE="USB-накопитель"; else DISK_TYPE="Съёмный накопитель"; fi
+        DISK_REMOVABLE_ROWS+=("$NAME|$DISK_ROLE|$DISK_TYPE|$SIZE|$MODEL|-|не учитывается|-|-")
+        continue
+    else
+        DISK_ROLE="Дополнительный"; SECONDARY_FIXED_DISKS=$((SECONDARY_FIXED_DISKS+1))
+    fi
     FIXED_DISKS=$((FIXED_DISKS+1)); DISK_SCORE=100; RESOURCE="-"; SMART="Н/Д"; TEMP="-"; HOURS="-"; REALLOC=0; PENDING=0; UNCORR=0; MEDIAERR=0; CRITWARN=0
     if [[ "$NAME" = nvme* ]]; then DISK_TYPE="NVMe SSD"; elif [ "$ROTA" = 0 ]; then DISK_TYPE=SSD; else DISK_TYPE=HDD; fi
     if command -v smartctl >/dev/null 2>&1; then
@@ -1655,7 +1899,7 @@ while read -r NAME TYPE SIZE ROTA MODEL; do
         _st=$(run_smart -l selftest "$DEV" 2>/dev/null | awk '/^# *1[[:space:]]/{for(i=5;i<=NF;i++){printf "%s%s",$i,(i<NF?" ":"")} exit}')
         [ -n "$_st" ] && SELFTEST="$_st"
         DISK_SELFTEST_ROWS+=("$NAME|$SELFTEST")
-        if echo "$SMART_H"|grep -Eqi 'PASSED|SMART.*OK'; then SMART=OK; elif echo "$SMART_H"|grep -Eqi 'FAILED|SMART.*BAD'; then SMART=FAIL; DISK_SCORE=0; else SMART="Н/Д"; SMART_UNKNOWN_COUNT=$((SMART_UNKNOWN_COUNT+1)); fi
+        if echo "$SMART_H"|grep -Eqi 'PASSED|SMART.*OK'; then SMART=OK; elif echo "$SMART_H"|grep -Eqi 'FAILED|SMART.*BAD'; then SMART=FAIL; DISK_SCORE=0; else SMART="Н/Д"; SMART_UNKNOWN_COUNT=$((SMART_UNKNOWN_COUNT+1)); [[ "$DISK_ROLE" == "Системный" ]] && SYSTEM_SMART_UNKNOWN_COUNT=$((SYSTEM_SMART_UNKNOWN_COUNT+1)); fi
         if [[ "$NAME" = nvme* ]]; then
             USED=$(printf '%s\n' "$SMART_ALL" | awk -F: '/Percentage Used/{x=$2;gsub(/[% \t]/,"",x);print x;exit}'); if [[ "$USED" =~ ^[0-9]+$ ]]; then REMAIN=$((100-USED)); ((REMAIN<0))&&REMAIN=0; ((REMAIN>100))&&REMAIN=100; RESOURCE="${REMAIN}%"; ((REMAIN<DISK_SCORE))&&DISK_SCORE=$REMAIN; fi
             TEMP=$(printf '%s\n' "$SMART_ALL" | awk -F: '/^Temperature:/{x=$2;gsub(/[^0-9]/,"",x);if(x!=""){print x;exit}}'); HOURS=$(printf '%s\n' "$SMART_ALL" | awk -F: '/Power On Hours/{x=$2;gsub(/[^0-9]/,"",x);if(x!=""){print x;exit}}')
@@ -1677,8 +1921,21 @@ while read -r NAME TYPE SIZE ROTA MODEL; do
             else ((TEMP>=SSD_TEMP_WARN))&&DISK_SCORE=$(min_score "$DISK_SCORE" 85); ((TEMP>=SSD_TEMP_HIGH))&&DISK_SCORE=$(min_score "$DISK_SCORE" 60); ((TEMP>=SSD_TEMP_CRIT))&&DISK_SCORE=$(min_score "$DISK_SCORE" 30); fi
         else TEMP="-"; fi
     fi
-    DISK_SCORE=$(clamp_score "$DISK_SCORE"); ((DISK_SCORE<DISK_WORST_SCORE))&&DISK_WORST_SCORE=$DISK_SCORE; [[ "$HOURS" =~ ^[0-9]+$ ]]&&((HOURS>MAX_DISK_HOURS))&&MAX_DISK_HOURS=$HOURS
-    DISK_ROWS+=("$NAME|$DISK_TYPE|$SIZE|$MODEL|$RESOURCE|$SMART|$TEMP|$HOURS")
+    DISK_SCORE=$(clamp_score "$DISK_SCORE")
+    ((DISK_SCORE<DISK_WORST_SCORE))&&DISK_WORST_SCORE=$DISK_SCORE
+    [[ "$HOURS" =~ ^[0-9]+$ ]]&&((HOURS>MAX_DISK_HOURS))&&MAX_DISK_HOURS=$HOURS
+    if [[ "$DISK_ROLE" == "Системный" ]]; then
+        ((DISK_SCORE<SYSTEM_DISK_SCORE))&&SYSTEM_DISK_SCORE=$DISK_SCORE
+        [[ "$HOURS" =~ ^[0-9]+$ ]]&&((HOURS>SYSTEM_MAX_DISK_HOURS))&&SYSTEM_MAX_DISK_HOURS=$HOURS
+        DISK_SYSTEM_ROWS+=("$NAME|$DISK_ROLE|$DISK_TYPE|$SIZE|$MODEL|$RESOURCE|$SMART|$TEMP|$HOURS")
+    else
+        if [[ "$SMART" != "Н/Д" ]]; then
+            SECONDARY_KNOWN_COUNT=$((SECONDARY_KNOWN_COUNT+1))
+            ((DISK_SCORE<SECONDARY_WORST_KNOWN_SCORE))&&SECONDARY_WORST_KNOWN_SCORE=$DISK_SCORE
+        fi
+        ((DISK_SCORE<30))&&SECONDARY_CRITICAL=1
+        DISK_FIXED_ROWS+=("$NAME|$DISK_ROLE|$DISK_TYPE|$SIZE|$MODEL|$RESOURCE|$SMART|$TEMP|$HOURS")
+    fi
 
     [ "$SMART" = FAIL ]&&add_rec "КРИТИЧНО" "Накопитель $NAME: SMART сообщает отказ" "Высокий риск внезапного отказа и потери данных." "Немедленно сохранить важные данные и заменить накопитель." "smartctl -a $DEV"
     ((REALLOC>0))&&add_rec "ВНИМАНИЕ" "Накопитель $NAME: переназначенные сектора — $REALLOC" "Носитель уже имеет дефектные области; рост счётчика означает деградацию." "Проверить резервное копирование и наблюдать SMART. При росте — заменить диск." "smartctl -A $DEV | grep -i Reallocated"
@@ -1691,11 +1948,21 @@ while read -r NAME TYPE SIZE ROTA MODEL; do
     if [[ "$TEMP" =~ ^[0-9]+$ ]]; then TW=0; [ "$DISK_TYPE" = HDD ]&&((TEMP>=HDD_TEMP_WARN))&&TW=1; [ "$DISK_TYPE" = SSD ]&&((TEMP>=SSD_TEMP_WARN))&&TW=1; [ "$DISK_TYPE" = "NVMe SSD" ]&&((TEMP>=NVME_TEMP_WARN))&&TW=1; ((TW==1))&&add_rec "ВНИМАНИЕ" "Накопитель $NAME: повышенная температура ${TEMP}°C" "Уменьшается тепловой запас, возможны троттлинг и ускорение износа." "Проверить пыль, вентиляцию корпуса и охлаждение накопителя." "smartctl -a $DEV | grep -i Temperature"; fi
 
 done < <(lsblk -dn -o NAME,TYPE,SIZE,ROTA,MODEL 2>/dev/null)
+DISK_ROWS=("${DISK_SYSTEM_ROWS[@]}" "${DISK_FIXED_ROWS[@]}" "${DISK_REMOVABLE_ROWS[@]}" "${DISK_OPTICAL_ROWS[@]}")
 ((FIXED_DISKS==0))&&DISK_WORST_SCORE=70
-((RAID_DEGRADED==1)) && DISK_WORST_SCORE=$(min_score "$DISK_WORST_SCORE" 30)
+
+# Системный накопитель задаёт основную оценку storage. Известный дополнительный
+# внутренний накопитель влияет только на 20% storage-группы. Съёмные носители
+# показываются в отчёте, но не влияют на score, SMART completeness и возраст АРМ.
+if ((SYSTEM_DISK_COUNT>0)); then
+    STORAGE_SCORE=$SYSTEM_DISK_SCORE
+    if ((SECONDARY_KNOWN_COUNT>0)); then STORAGE_SCORE=$(((SYSTEM_DISK_SCORE*80 + SECONDARY_WORST_KNOWN_SCORE*20)/100)); fi
+else
+    STORAGE_SCORE=$DISK_WORST_SCORE
+fi
+((RAID_DEGRADED==1)) && STORAGE_SCORE=$(min_score "$STORAGE_SCORE" 30)
 
 # -------------------- БАЛЛЫ --------------------
-STORAGE_SCORE=$DISK_WORST_SCORE
 FS_SCORE=100; FS_WORST=$FS_WORST_USE; ((FS_WORST_INODE>FS_WORST))&&FS_WORST=$FS_WORST_INODE
 if ((FS_WORST>=FS_CRIT)); then FS_SCORE=10; elif ((FS_WORST>=FS_HIGH)); then FS_SCORE=40; elif ((FS_WORST>=FS_WARN)); then FS_SCORE=70; elif ((FS_WORST>=70)); then FS_SCORE=90; fi
 ((LOCAL_RO_COUNT>0))&&FS_SCORE=$(min_score "$FS_SCORE" 50); ((ROOT_RO==1))&&FS_SCORE=0
@@ -1737,16 +2004,51 @@ if ((SWAP_USED_PCT>=70 && MEM_AVAIL_PCT>=40 && OOM_DETECTED==0)); then
     SWAP_NOTE="Высокое заполнение Swap не снижает оценку: доступной ОЗУ ${MEM_AVAIL_PCT}%"
 fi
 
+# Стабильность системы: прозрачная модель штрафов от 100 баллов.
+# Это не оценка качества/целостности самой ОС: сюда входят runtime-сигналы
+# systemd, kernel journal, OOM, время и ECC, то есть устойчивость АРМ в целом.
 STAB_SCORE=100
-if ((FAILED_COUNT==1)); then STAB_SCORE=$((STAB_SCORE-5)); elif ((FAILED_COUNT<=3 && FAILED_COUNT>=2)); then STAB_SCORE=$((STAB_SCORE-10)); elif ((FAILED_COUNT>3)); then STAB_SCORE=$((STAB_SCORE-20)); fi
-if ((HW_ERR_COUNT<=2 && HW_ERR_COUNT>=1)); then STAB_SCORE=$((STAB_SCORE-10)); elif ((HW_ERR_COUNT<=5 && HW_ERR_COUNT>=3)); then STAB_SCORE=$((STAB_SCORE-20)); elif ((HW_ERR_COUNT>5)); then STAB_SCORE=$((STAB_SCORE-35)); fi
-if ((JOURNAL_ERR_COUNT>=6 && JOURNAL_ERR_COUNT<=15)); then STAB_SCORE=$((STAB_SCORE-5)); elif ((JOURNAL_ERR_COUNT>=16 && JOURNAL_ERR_COUNT<=30)); then STAB_SCORE=$((STAB_SCORE-10)); elif ((JOURNAL_ERR_COUNT>30)); then STAB_SCORE=$((STAB_SCORE-15)); fi
-((OOM_DETECTED==1))&&STAB_SCORE=$((STAB_SCORE-10))
-[ "$TIME_SYNC" = "Нет" ] && STAB_SCORE=$((STAB_SCORE-5))
-((UNCLEAN_BOOT_SIGNS>0)) && STAB_SCORE=$((STAB_SCORE-5))
-((ECC_CE>0)) && STAB_SCORE=$((STAB_SCORE-5))
-((ECC_UE>0)) && STAB_SCORE=$(min_score "$STAB_SCORE" 30)
+STAB_PENALTY_FAILED=0
+STAB_PENALTY_HW=0
+STAB_PENALTY_JOURNAL=0
+STAB_PENALTY_OOM=0
+STAB_PENALTY_TIME=0
+STAB_PENALTY_UNCLEAN=0
+STAB_PENALTY_ECC_CE=0
+STAB_ECC_UE_CAP=0
+
+if ((FAILED_COUNT==1)); then STAB_PENALTY_FAILED=5
+elif ((FAILED_COUNT>=2 && FAILED_COUNT<=3)); then STAB_PENALTY_FAILED=10
+elif ((FAILED_COUNT>3)); then STAB_PENALTY_FAILED=20
+fi
+
+if ((HW_ERR_COUNT>=1 && HW_ERR_COUNT<=2)); then STAB_PENALTY_HW=10
+elif ((HW_ERR_COUNT>=3 && HW_ERR_COUNT<=5)); then STAB_PENALTY_HW=20
+elif ((HW_ERR_COUNT>5)); then STAB_PENALTY_HW=35
+fi
+
+if ((JOURNAL_ERR_COUNT>=6 && JOURNAL_ERR_COUNT<=15)); then STAB_PENALTY_JOURNAL=5
+elif ((JOURNAL_ERR_COUNT>=16 && JOURNAL_ERR_COUNT<=30)); then STAB_PENALTY_JOURNAL=10
+elif ((JOURNAL_ERR_COUNT>30)); then STAB_PENALTY_JOURNAL=15
+fi
+
+((OOM_DETECTED==1)) && STAB_PENALTY_OOM=10
+[ "$TIME_SYNC" = "Нет" ] && STAB_PENALTY_TIME=5
+((UNCLEAN_BOOT_SIGNS>0)) && STAB_PENALTY_UNCLEAN=5
+((ECC_CE>0)) && STAB_PENALTY_ECC_CE=5
+
+STAB_SCORE=$((STAB_SCORE - STAB_PENALTY_FAILED - STAB_PENALTY_HW - STAB_PENALTY_JOURNAL - STAB_PENALTY_OOM - STAB_PENALTY_TIME - STAB_PENALTY_UNCLEAN - STAB_PENALTY_ECC_CE))
+if ((ECC_UE>0)); then
+    STAB_ECC_UE_CAP=30
+    STAB_SCORE=$(min_score "$STAB_SCORE" "$STAB_ECC_UE_CAP")
+fi
 STAB_SCORE=$(clamp_score "$STAB_SCORE")
+
+if ((STAB_SCORE>=90)); then STAB_STATUS="Норма"
+elif ((STAB_SCORE>=75)); then STAB_STATUS="Незначительные отклонения"
+elif ((STAB_SCORE>=50)); then STAB_STATUS="Требует внимания"
+else STAB_STATUS="Сниженная стабильность"
+fi
 
 CPU_SCORE=100; CPU_REASONS=()
 if [[ "$CPU_TEMP" =~ ^[0-9]+$ ]]; then
@@ -1786,11 +2088,13 @@ if ((${#CPU_REASONS[@]}>0)); then
     CPU_REASON_TEXT=$(IFS='; '; echo "${CPU_REASONS[*]}")
 fi
 
-DISK_AGE_MONTHS=-1; DISK_AGE_YEARS=-1; ((MAX_DISK_HOURS>0))&&{ DISK_AGE_MONTHS=$((MAX_DISK_HOURS*12/8760)); DISK_AGE_YEARS=$((DISK_AGE_MONTHS/12)); }
+AGE_DISK_HOURS=$MAX_DISK_HOURS; AGE_DISK_SOURCE="макс. наработка внутреннего накопителя"
+if ((SYSTEM_MAX_DISK_HOURS>0)); then AGE_DISK_HOURS=$SYSTEM_MAX_DISK_HOURS; AGE_DISK_SOURCE="наработка системного накопителя"; fi
+DISK_AGE_MONTHS=-1; DISK_AGE_YEARS=-1; ((AGE_DISK_HOURS>0))&&{ DISK_AGE_MONTHS=$((AGE_DISK_HOURS*12/8760)); DISK_AGE_YEARS=$((DISK_AGE_MONTHS/12)); }
 OS_AGE_MONTHS=-1; ((AGE_DAYS>=0))&&OS_AGE_MONTHS=$((AGE_DAYS*12/365))
 SYSTEM_AGE_MONTHS=-1; AGE_SOURCE="Не определён"
-if ((DISK_AGE_MONTHS>=0 && OS_AGE_MONTHS>=0)); then if ((DISK_AGE_MONTHS>=OS_AGE_MONTHS)); then SYSTEM_AGE_MONTHS=$DISK_AGE_MONTHS; AGE_SOURCE="макс. наработка накопителя"; else SYSTEM_AGE_MONTHS=$OS_AGE_MONTHS; AGE_SOURCE="возраст текущей установки ОС"; fi
-elif ((DISK_AGE_MONTHS>=0)); then SYSTEM_AGE_MONTHS=$DISK_AGE_MONTHS; AGE_SOURCE="макс. наработка накопителя"; elif ((OS_AGE_MONTHS>=0)); then SYSTEM_AGE_MONTHS=$OS_AGE_MONTHS; AGE_SOURCE="возраст текущей установки ОС"; fi
+if ((DISK_AGE_MONTHS>=0 && OS_AGE_MONTHS>=0)); then if ((DISK_AGE_MONTHS>=OS_AGE_MONTHS)); then SYSTEM_AGE_MONTHS=$DISK_AGE_MONTHS; AGE_SOURCE="$AGE_DISK_SOURCE"; else SYSTEM_AGE_MONTHS=$OS_AGE_MONTHS; AGE_SOURCE="возраст текущей установки ОС"; fi
+elif ((DISK_AGE_MONTHS>=0)); then SYSTEM_AGE_MONTHS=$DISK_AGE_MONTHS; AGE_SOURCE="$AGE_DISK_SOURCE"; elif ((OS_AGE_MONTHS>=0)); then SYSTEM_AGE_MONTHS=$OS_AGE_MONTHS; AGE_SOURCE="возраст текущей установки ОС"; fi
 SYSTEM_AGE_TEXT="Не определён"; ((SYSTEM_AGE_MONTHS>=0))&&SYSTEM_AGE_TEXT=$(awk -v m="$SYSTEM_AGE_MONTHS" 'BEGIN{printf "%.1f",m/12}')
 AGE_SCORE=90
 if ((SYSTEM_AGE_MONTHS>=0)); then if ((SYSTEM_AGE_MONTHS<=36)); then AGE_SCORE=100; elif ((SYSTEM_AGE_MONTHS<=48)); then AGE_SCORE=97; elif ((SYSTEM_AGE_MONTHS<=60)); then AGE_SCORE=93; elif ((SYSTEM_AGE_MONTHS<=72)); then AGE_SCORE=88; elif ((SYSTEM_AGE_MONTHS<=84)); then AGE_SCORE=82; elif ((SYSTEM_AGE_MONTHS<=96)); then AGE_SCORE=75; elif ((SYSTEM_AGE_MONTHS<=108)); then AGE_SCORE=68; elif ((SYSTEM_AGE_MONTHS<=120)); then AGE_SCORE=60; else AGE_SCORE=52; fi; fi
@@ -1808,8 +2112,12 @@ fi
 # Неизвестный SMART не превращается в "100/100" — группа исключается из среднего,
 # а полнота диагностики отдельно показывает ограничение.
 STORAGE_KNOWN=1
-if ! command -v smartctl >/dev/null 2>&1 && ((FIXED_DISKS>0)); then STORAGE_KNOWN=0; fi
-((SMART_UNKNOWN_COUNT>0))&&STORAGE_KNOWN=0
+if ((SYSTEM_DISK_COUNT>0)); then
+    if ! command -v smartctl >/dev/null 2>&1 || ((SYSTEM_SMART_UNKNOWN_COUNT>0)); then STORAGE_KNOWN=0; fi
+else
+    if ! command -v smartctl >/dev/null 2>&1 && ((FIXED_DISKS>0)); then STORAGE_KNOWN=0; fi
+    ((SMART_UNKNOWN_COUNT>0))&&STORAGE_KNOWN=0
+fi
 AGE_KNOWN=1; ((SYSTEM_AGE_MONTHS<0))&&AGE_KNOWN=0
 TOTAL_NUM=$((FS_SCORE*15 + STAB_SCORE*15 + MEM_SCORE*10 + CPU_SCORE*10 + NET_SCORE*5))
 TOTAL_DEN=55
@@ -1820,7 +2128,15 @@ TOTAL_SCORE=$(clamp_score "$TOTAL_SCORE")
 
 # -------------------- ПОЛНОТА --------------------
 CONFIDENCE=100; CONFIDENCE_NOTES=()
-if ! command -v smartctl >/dev/null 2>&1 && ((FIXED_DISKS>0)); then CONFIDENCE=$((CONFIDENCE-25)); CONFIDENCE_NOTES+=("нет smartctl"); elif ((SMART_UNKNOWN_COUNT>0)); then CONFIDENCE=$((CONFIDENCE-15)); CONFIDENCE_NOTES+=("SMART частично недоступен"); fi
+if ! command -v smartctl >/dev/null 2>&1 && ((FIXED_DISKS>0)); then
+    CONFIDENCE=$((CONFIDENCE-25)); CONFIDENCE_NOTES+=("нет smartctl для внутренних накопителей")
+elif ((SYSTEM_DISK_COUNT>0 && SYSTEM_SMART_UNKNOWN_COUNT>0)); then
+    CONFIDENCE=$((CONFIDENCE-15)); CONFIDENCE_NOTES+=("SMART системного накопителя недоступен")
+elif ((SYSTEM_DISK_COUNT==0 && SMART_UNKNOWN_COUNT>0)); then
+    CONFIDENCE=$((CONFIDENCE-15)); CONFIDENCE_NOTES+=("SMART внутренних накопителей частично недоступен")
+elif ((SMART_UNKNOWN_COUNT>0)); then
+    CONFIDENCE_NOTES+=("SMART части дополнительных накопителей недоступен (без штрафа полноты)")
+fi
 [ "$CPU_TEMP" = - ]&&{ CONFIDENCE=$((CONFIDENCE-5)); CONFIDENCE_NOTES+=("нет температуры CPU"); }
 ((SYSTEM_AGE_MONTHS<0))&&{ CONFIDENCE=$((CONFIDENCE-5)); CONFIDENCE_NOTES+=("нет возраста/наработки"); }
 ((JOURNAL_AVAILABLE==0))&&{ CONFIDENCE=$((CONFIDENCE-10)); CONFIDENCE_NOTES+=("journal недоступен"); }
@@ -1831,11 +2147,11 @@ if ! command -v smartctl >/dev/null 2>&1 && ((FIXED_DISKS>0)); then CONFIDENCE=$
 CONFIDENCE_NOTE="-"; ((${#CONFIDENCE_NOTES[@]}>0))&&CONFIDENCE_NOTE=$(printf '%s, ' "${CONFIDENCE_NOTES[@]}"); CONFIDENCE_NOTE=${CONFIDENCE_NOTE%, }
 
 if ((TOTAL_SCORE>=90)); then STATE="ОТЛИЧНОЕ"; elif ((TOTAL_SCORE>=80)); then STATE="ХОРОШЕЕ"; elif ((TOTAL_SCORE>=65)); then STATE="ТРЕБУЕТ ВНИМАНИЯ"; elif ((TOTAL_SCORE>=50)); then STATE="ПЛОХОЕ"; else STATE="КРИТИЧЕСКОЕ"; fi
-if ((ROOT_RO==1 || STORAGE_SCORE<30 || ROOT_USE>=98 || RAID_DEGRADED==1 || ECC_UE>0)); then STATE="КРИТИЧЕСКОЕ"; elif ((OOM_DETECTED==1 || HW_ERR_COUNT>0 || ROOT_USE>=95 || ACTIVE_NET==0)); then [ "$STATE" = "ОТЛИЧНОЕ" ]||[ "$STATE" = "ХОРОШЕЕ" ]&&STATE="ТРЕБУЕТ ВНИМАНИЯ"; fi
+if ((ROOT_RO==1 || (SYSTEM_DISK_COUNT>0 && SYSTEM_DISK_SCORE<30) || (SYSTEM_DISK_COUNT==0 && STORAGE_SCORE<30) || ROOT_USE>=98 || RAID_DEGRADED==1 || ECC_UE>0)); then STATE="КРИТИЧЕСКОЕ"; elif ((SECONDARY_CRITICAL==1 || OOM_DETECTED==1 || HW_ERR_COUNT>0 || ROOT_USE>=95 || ACTIVE_NET==0)); then [ "$STATE" = "ОТЛИЧНОЕ" ]||[ "$STATE" = "ХОРОШЕЕ" ]&&STATE="ТРЕБУЕТ ВНИМАНИЯ"; fi
 STATE_DISPLAY="$STATE"; ((CONFIDENCE<80))&&STATE_DISPLAY="ПРЕДВАРИТЕЛЬНО: $STATE"
 
 # -------------------- РЕКОМЕНДАЦИИ --------------------
-if ! command -v smartctl >/dev/null 2>&1 && ((FIXED_DISKS>0)); then add_rec "ПРОВЕРКА" "SMART накопителей не проверен" "Без SMART нельзя достоверно оценить износ SSD/NVMe и признаки деградации HDD." "Установить smartmontools и повторить диагностику." "dnf install smartmontools"; elif ((SMART_UNKNOWN_COUNT>0)); then add_rec "ПРОВЕРКА" "SMART частично недоступен" "Состояние части накопителей оценено не полностью." "Проверить контроллер/поддержку SMART." "smartctl --scan-open"; fi
+if ! command -v smartctl >/dev/null 2>&1 && ((FIXED_DISKS>0)); then add_rec "ПРОВЕРКА" "SMART внутренних накопителей не проверен" "Без SMART нельзя достоверно оценить системный SSD/NVMe/HDD." "Установить smartmontools и повторить диагностику." "dnf install smartmontools"; elif ((SYSTEM_SMART_UNKNOWN_COUNT>0)); then add_rec "ПРОВЕРКА" "SMART системного накопителя недоступен" "Основной накопитель АРМ оценён не полностью; съёмные носители на этот статус не влияют." "Проверить поддержку SMART системного устройства и повторить диагностику." "smartctl --scan-open"; elif ((SMART_UNKNOWN_COUNT>0)); then add_rec "ПРОВЕРКА" "SMART дополнительных накопителей частично недоступен" "Системный накопитель имеет приоритет; неполные данные относятся к дополнительным внутренним дискам." "При необходимости проверить дополнительные диски отдельно." "smartctl --scan-open"; fi
 if ((FS_WORST_USE>=FS_CRIT)); then add_rec "КРИТИЧНО" "ФС $FS_WORST_USE_MOUNT заполнена на ${FS_WORST_USE}%" "Может прекратиться запись журналов, временных файлов и работа служб." "Срочно освободить минимум 10–15% объёма." "du -xhd1 '$FS_WORST_USE_MOUNT' 2>/dev/null | sort -h"; elif ((FS_WORST_USE>=FS_HIGH)); then add_rec "ВНИМАНИЕ" "ФС $FS_WORST_USE_MOUNT заполнена на ${FS_WORST_USE}%" "Мало места для обновлений, журналов и рабочих файлов." "Освободить место до уровня ниже 80%." "du -xhd1 '$FS_WORST_USE_MOUNT' 2>/dev/null | sort -h"; elif ((FS_WORST_USE>=FS_WARN)); then add_rec "ПЛАНОВО" "ФС $FS_WORST_USE_MOUNT заполнена на ${FS_WORST_USE}%" "Снижается резерв свободного места." "Выполнить плановую очистку и держать заполнение ниже 80%." "df -h '$FS_WORST_USE_MOUNT'"; fi
 ((FS_WORST_INODE>=INODE_WARN))&&add_rec "ВНИМАНИЕ" "Inode на $FS_WORST_INODE_MOUNT использованы на ${FS_WORST_INODE}%" "При исчерпании inode новые файлы создать нельзя даже при наличии свободного места." "Найти каталоги с большим количеством мелких файлов и очистить ненужные кэши/временные данные." "df -i '$FS_WORST_INODE_MOUNT'"
 ((ROOT_RO==1))&&add_rec "КРИТИЧНО" "Корневая ФС смонтирована read-only" "Запись данных, обновления и часть служб могут не работать." "Проверить журнал ядра; fsck выполнять только на размонтированной ФС из rescue/live." "journalctl -k -b -p warning..alert"
@@ -1940,6 +2256,23 @@ section "ОПЕРАТИВНАЯ ПАМЯТЬ"
  [ -n "$SWAP_NOTE" ] && echo "Примечание|$SWAP_NOTE"
 } | table
 
+section "СТАБИЛЬНОСТЬ СИСТЕМЫ"
+{
+ echo "Оценка|$STAB_SCORE / 100|вес в общем индексе 15%"
+ echo "Состояние|$STAB_STATUS|-"
+ echo "Failed-службы|$FAILED_COUNT|$STAB_PENALTY_FAILED"
+ echo "Ошибки ядра HW/storage|$HW_ERR_COUNT|$STAB_PENALTY_HW"
+ echo "Уникальные journal err..alert|$JOURNAL_ERR_COUNT|$STAB_PENALTY_JOURNAL"
+ echo "OOM-killer|$([ "$OOM_DETECTED" -eq 1 ] && echo Да || echo Нет)|$STAB_PENALTY_OOM"
+ echo "Синхронизация времени|$TIME_SYNC|$STAB_PENALTY_TIME"
+ echo "Признаки аварийной загрузки|$UNCLEAN_BOOT_SIGNS|$STAB_PENALTY_UNCLEAN"
+ echo "ECC corrected / uncorrectable|$ECC_CE / $ECC_UE|$STAB_PENALTY_ECC_CE"
+ if ((STAB_ECC_UE_CAP>0)); then echo "Ограничение из-за ECC UE|оценка не выше $STAB_ECC_UE_CAP|критический фактор"; fi
+} | { printf 'Показатель|Значение|Штраф, баллов\n'; cat; } | table
+
+echo "Примечание: показатель отражает устойчивость работы АРМ по системным событиям;"
+echo "он не означает, что сама установленная ОС повреждена или неисправна."
+
 section "СЕТЬ"
 if ((${#NET_ROWS[@]})); then
     NET_NUM=0
@@ -2031,11 +2364,12 @@ section "ОПЦИОНАЛЬНЫЕ СЕРВИСЫ"
 } | table
 
 section "НАКОПИТЕЛИ"
-{ echo "Диск|Тип|Размер|Модель|Ресурс|SMART|°C|Часы"; if ((${#DISK_ROWS[@]})); then printf '%s\n' "${DISK_ROWS[@]}"; else echo "-|-|-|Не найдены|-|-|-|-"; fi; } | table
+echo "Системный накопитель: $SYSTEM_DISK_TEXT"
+{ echo "Диск|Роль|Тип|Размер|Модель|Ресурс|SMART|°C|Часы"; if ((${#DISK_ROWS[@]})); then printf '%s\n' "${DISK_ROWS[@]}"; else echo "-|-|-|-|Не найдены|-|-|-|-"; fi; } | table
 if ((${#DISK_SELFTEST_ROWS[@]}>0)); then echo; { echo "Диск|Последний SMART self-test"; printf '%s\n' "${DISK_SELFTEST_ROWS[@]}"; } | table; fi
 
 section "ФАЙЛОВЫЕ СИСТЕМЫ"
-{ echo "Корневой раздел|$ROOT_DEV"; echo "Размер / занято / свободно|$ROOT_SIZE / $ROOT_USED / $ROOT_FREE"; echo "Корень: место / inode|${ROOT_USE}% / ${ROOT_INODE_USE}%"; echo "Локальных ФС проверено|$LOCAL_FS_COUNT"; echo "Макс. заполнение|${FS_WORST_USE}% на $FS_WORST_USE_MOUNT"; echo "Использование inode|${FS_WORST_INODE}% на $FS_WORST_INODE_MOUNT"; } | table
+{ echo "Корневой раздел|$ROOT_DEV"; echo "Размер / занято / свободно|$ROOT_SIZE / $ROOT_USED / $ROOT_FREE"; echo "Корень: место / inode|${ROOT_USE}% / ${ROOT_INODE_USE}%"; echo "Локальных ФС проверено|$LOCAL_FS_COUNT"; echo "Съёмных ФС вне индекса|$REMOVABLE_FS_COUNT"; echo "Макс. заполнение|${FS_WORST_USE}% на $FS_WORST_USE_MOUNT"; echo "Использование inode|${FS_WORST_INODE}% на $FS_WORST_INODE_MOUNT"; } | table
 if ((${#LOCAL_FS_ROWS[@]}>1)); then echo; { echo "Точка|Место|Inode|Режим"; printf '%s\n' "${LOCAL_FS_ROWS[@]}"; } | table; fi
 
 section "СВОДКА СОСТОЯНИЯ"
@@ -2046,9 +2380,9 @@ AGE_SCORE_TEXT="$AGE_SCORE / 100"; ((AGE_KNOWN==0))&&AGE_SCORE_TEXT="Н/Д"
 { echo "Показатель|Состояние|Вес в индексе"; echo "Накопители / износ|$STORAGE_SCORE_TEXT|40%"; echo "Файловая система|$FS_SCORE / 100|15%"; echo "Стабильность ОС|$STAB_SCORE / 100|15%"; echo "Оперативная память|$MEM_SCORE / 100|10%"; echo "Процессор / температура|$CPU_SCORE / 100|10%"; echo "Возраст / наработка|$AGE_SCORE_TEXT|5%"; echo "Сеть|$NET_SCORE / 100|5%"; } | table
 
 section "КЛЮЧЕВЫЕ ПОКАЗАТЕЛИ"
-SMART_SUMMARY=OK; if ((FIXED_DISKS==0)); then SMART_SUMMARY="Н/Д"; elif ! command -v smartctl >/dev/null 2>&1; then SMART_SUMMARY="Н/Д (smartctl отсутствует)"; elif ((STORAGE_SCORE==0)); then SMART_SUMMARY=FAIL; elif ((SMART_UNKNOWN_COUNT>0)); then SMART_SUMMARY="Частично / Н/Д"; fi
+SMART_SUMMARY=OK; if ((FIXED_DISKS==0)); then SMART_SUMMARY="Н/Д"; elif ! command -v smartctl >/dev/null 2>&1; then SMART_SUMMARY="Н/Д (smartctl отсутствует)"; elif ((SYSTEM_DISK_COUNT>0 && SYSTEM_DISK_SCORE==0)); then SMART_SUMMARY=FAIL; elif ((SYSTEM_DISK_COUNT>0 && SYSTEM_SMART_UNKNOWN_COUNT>0)); then SMART_SUMMARY="Н/Д (системный)"; elif ((SYSTEM_DISK_COUNT==0 && SMART_UNKNOWN_COUNT>0)); then SMART_SUMMARY="Частично / Н/Д"; fi
 ((OOM_DETECTED==1))&&OOM_TEXT="ОБНАРУЖЕНО"||OOM_TEXT="Не обнаружено"
-{ echo "SMART накопителей|$SMART_SUMMARY"; echo "Файловые системы|макс. ${FS_WORST_USE}% на $FS_WORST_USE_MOUNT; inode ${FS_WORST_INODE}% на $FS_WORST_INODE_MOUNT"; echo "ОЗУ доступно|${MEM_AVAIL_PCT}%"; echo "Swap использовано|${SWAP_USED_PCT}%"; echo "Failed-служб|$FAILED_COUNT"; echo "Аппаратных/дисковых ошибок|$HW_ERR_COUNT"; if ((JOURNAL_AVAILABLE==1)); then echo "Уникальных journal error+|$JOURNAL_ERR_COUNT"; else echo "Journal текущей загрузки|Н/Д"; fi; echo "OOM за текущую загрузку|$OOM_TEXT"; echo "Синхронизация времени|$TIME_SYNC"; echo "Software RAID|$RAID_STATUS"; echo "ECC / EDAC|$ECC_STATUS"; [[ "$CPU_TEMP" =~ ^[0-9]+$ ]]&&echo "CPU температура|${CPU_TEMP}°C"; } | table
+{ echo "SMART системного накопителя|$SMART_SUMMARY"; echo "Съёмных накопителей вне индекса|$REMOVABLE_DISKS"; echo "Файловые системы|макс. ${FS_WORST_USE}% на $FS_WORST_USE_MOUNT; inode ${FS_WORST_INODE}% на $FS_WORST_INODE_MOUNT"; echo "ОЗУ доступно|${MEM_AVAIL_PCT}%"; echo "Swap использовано|${SWAP_USED_PCT}%"; echo "Failed-служб|$FAILED_COUNT"; echo "Аппаратных/дисковых ошибок|$HW_ERR_COUNT"; if ((JOURNAL_AVAILABLE==1)); then echo "Уникальных journal error+|$JOURNAL_ERR_COUNT"; else echo "Journal текущей загрузки|Н/Д"; fi; echo "OOM за текущую загрузку|$OOM_TEXT"; echo "Синхронизация времени|$TIME_SYNC"; echo "Software RAID|$RAID_STATUS"; echo "ECC / EDAC|$ECC_STATUS"; [[ "$CPU_TEMP" =~ ^[0-9]+$ ]]&&echo "CPU температура|${CPU_TEMP}°C"; } | table
 
 section "ЗАКЛЮЧЕНИЕ"
 echo "$CONCLUSION"
@@ -2061,15 +2395,15 @@ else
   for ((i=0;i<${#REC_TITLES[@]};i++)); do
    [ "${REC_LEVELS[$i]}" = "$LEVEL_WANTED" ]||continue
    REC_NUM=$((REC_NUM+1)); echo; print_wrapped "$REC_NUM. [${REC_LEVELS[$i]}]" "${REC_TITLES[$i]}"
-   print_wrapped "Причины:" "${REC_CAUSES[$i]}"
+   print_wrapped "Возможные причины:" "${REC_CAUSES[$i]}"
    print_wrapped "Влияние:" "${REC_IMPACTS[$i]}"
-   print_wrapped "Проверить:" "${REC_DIAGNOSTICS[$i]}"
+   print_wrapped "Что проверить:" "${REC_DIAGNOSTICS[$i]}"
    print_wrapped "Действие:" "${REC_ACTIONS[$i]}"
    if [ -n "${REC_CHECKS[$i]}" ]; then
        _rec_cmd_desc=$(base_command_description "${REC_CHECKS[$i]}")
-       print_wrapped "Команда:" "${REC_CHECKS[$i]} ($_rec_cmd_desc)"
+       base_print_command_line "Команда 1:" "${REC_CHECKS[$i]}" "$_rec_cmd_desc"
    fi
-   print_wrapped "Контроль:" "${REC_VERIFICATIONS[$i]}"
+   print_wrapped "Контроль результата:" "${REC_VERIFICATIONS[$i]}"
   done
  done
 fi
@@ -2096,14 +2430,15 @@ else
         "$([[ "$CPU_TEMP" =~ ^[0-9]+$ ]] && echo "$CPU_TEMP" || echo null)" "$CPU_SCORE"
     printf '  "memory": {"available_percent":%s,"swap_used_percent":%s,"oom_detected":%s,"score":%s},\n' \
         "$MEM_AVAIL_PCT" "$SWAP_USED_PCT" "$([ "$OOM_DETECTED" -eq 1 ] && echo true || echo false)" "$MEM_SCORE"
-    printf '  "storage": {"score":%s,"known":%s,"fixed_disks":%s,"smart_unknown":%s},\n' \
-        "$STORAGE_SCORE" "$([ "$STORAGE_KNOWN" -eq 1 ] && echo true || echo false)" "$FIXED_DISKS" "$SMART_UNKNOWN_COUNT"
+    printf '  "storage": {"score":%s,"known":%s,"system_disks":%s,"fixed_disks":%s,"secondary_fixed_disks":%s,"removable_disks":%s,"smart_unknown":%s,"system_smart_unknown":%s},\n' \
+        "$STORAGE_SCORE" "$([ "$STORAGE_KNOWN" -eq 1 ] && echo true || echo false)" "$SYSTEM_DISK_COUNT" "$FIXED_DISKS" "$SECONDARY_FIXED_DISKS" "$REMOVABLE_DISKS" "$SMART_UNKNOWN_COUNT" "$SYSTEM_SMART_UNKNOWN_COUNT"
     printf '  "filesystem": {"root_use_percent":%s,"max_use_percent":%s,"max_use_mount":"%s","max_inode_percent":%s,"score":%s},\n' \
         "$ROOT_USE" "$FS_WORST_USE" "$(json_escape "$FS_WORST_USE_MOUNT")" "$FS_WORST_INODE" "$FS_SCORE"
     printf '  "network": {"active_interfaces":%s,"gateway":"%s","dns":"%s","error_ppm":%s,"drop_ppm":%s,"score":%s},\n' \
         "$ACTIVE_NET" "$(json_escape "$GW_DISPLAY")" "$(json_escape "$DNS_DISPLAY")" "$NET_ERROR_PPM" "$NET_DROP_PPM" "$NET_SCORE"
-    printf '  "stability": {"failed_units":%s,"hardware_errors":%s,"journal_errors":%s,"score":%s},\n' \
-        "$FAILED_COUNT" "$HW_ERR_COUNT" "$JOURNAL_ERR_COUNT" "$STAB_SCORE"
+    printf '  "stability": {"failed_units":%s,"hardware_errors":%s,"journal_errors":%s,"oom_detected":%s,"time_sync":"%s","unclean_boot_signs":%s,"ecc_ce":%s,"ecc_ue":%s,"penalty_failed_units":%s,"penalty_hardware":%s,"penalty_journal":%s,"penalty_oom":%s,"penalty_time":%s,"penalty_unclean_boot":%s,"penalty_ecc_ce":%s,"ecc_ue_score_cap":%s,"score":%s},\n' \
+        "$FAILED_COUNT" "$HW_ERR_COUNT" "$JOURNAL_ERR_COUNT" "$([ "$OOM_DETECTED" -eq 1 ] && echo true || echo false)" "$(json_escape "$TIME_SYNC")" "$UNCLEAN_BOOT_SIGNS" "$ECC_CE" "$ECC_UE" \
+        "$STAB_PENALTY_FAILED" "$STAB_PENALTY_HW" "$STAB_PENALTY_JOURNAL" "$STAB_PENALTY_OOM" "$STAB_PENALTY_TIME" "$STAB_PENALTY_UNCLEAN" "$STAB_PENALTY_ECC_CE" "$STAB_ECC_UE_CAP" "$STAB_SCORE"
     printf '  "diagnostics": {"time_sync":"%s","unclean_boot_signs":%s,"raid":"%s","ecc":"%s","battery_health":"%s","sssd":"%s","kerberos":"%s","cups":"%s","support_tier":"%s"},\n' \
         "$(json_escape "$TIME_SYNC")" "$UNCLEAN_BOOT_SIGNS" "$(json_escape "$RAID_STATUS")" "$(json_escape "$ECC_STATUS")" "$(json_escape "$BATTERY_HEALTH")" \
         "$(json_escape "$SSSD_STATUS")" "$(json_escape "$KRB_STATUS")" "$(json_escape "$CUPS_STATUS")" "$(json_escape "$SUPPORT_TIER")"
