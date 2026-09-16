@@ -15,10 +15,11 @@ grep -q 'UNIT_NAME' "$SCRIPT" || fail 'systemd unit placeholder missing'
 grep -q 'DEVICE_PATH' "$SCRIPT" || fail 'device placeholder missing'
 grep -q 'USER_NAME' "$SCRIPT" || fail 'user-context placeholder missing'
 
-grep -Fq 'findmnt -rn -t cifs -o TARGET | while IFS= read -r m;' "$SCRIPT" || fail 'automatic CIFS TARGET loop missing'
+grep -Fq 'findmnt -n -l -t cifs -o TARGET | while IFS= read -r m;' "$SCRIPT" || fail 'automatic CIFS TARGET loop missing'
 grep -Fq 'timeout 5 stat -f -- \"\$m\"' "$SCRIPT" || fail 'CIFS TARGET stat timeout missing'
 grep -Fq 'SOURCE вида //server/share в stat не использовать' "$SCRIPT" || fail 'CIFS TARGET/SOURCE guidance missing'
 ! grep -Fq "timeout 5 stat -f 'MOUNT_PATH'" "$SCRIPT" || fail 'manual CIFS MOUNT_PATH recommendation remains'
+! grep -Fq 'findmnt -rn -t cifs -o TARGET' "$SCRIPT" || fail 'CIFS raw findmnt mode would hex-escape non-ASCII TARGETs'
 
 ! grep -Fq 'nmcli -f NAME,IP4.DOMAIN,IP4.DNS connection show --active' "$SCRIPT" || fail 'invalid nmcli active-list fields remain'
 ! grep -Fq 'nmcli -f NAME,TYPE,802-1x.eap,802-1x.ca-cert,802-1x.client-cert connection show' "$SCRIPT" || fail 'invalid nmcli 802.1X list fields remain'
@@ -37,7 +38,7 @@ commands=(
   "openssl x509 -in \"CERT_PATH\" -noout -subject -issuer -dates"
   "timeout 5 nc -vz DC_FQDN 88"
   "findmnt -t cifs -o TARGET,SOURCE,OPTIONS"
-  "findmnt -rn -t cifs -o TARGET | while IFS= read -r m; do printf '=== %s ===\\n' \"\$m\"; timeout 5 stat -f -- \"\$m\" || printf 'ОШИБКА/ТАЙМАУТ: %s\\n' \"\$m\"; done"
+  "findmnt -n -l -t cifs -o TARGET | while IFS= read -r m; do printf '=== %s ===\\n' \"\$m\"; timeout 5 stat -f -- \"\$m\" || printf 'ОШИБКА/ТАЙМАУТ: %s\\n' \"\$m\"; done"
   "lpstat -W not-completed -o"
   "dnf provides '/usr/bin/lpstat'"
   "systemctl status UNIT_NAME --no-pager -l"

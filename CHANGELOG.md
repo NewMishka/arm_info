@@ -15,6 +15,7 @@
 - Команды, изменяющие состояние (`dnf install`, `cupsenable`, `cupsaccept`, `cancel`), получают явную пометку `ИЗМЕНЯЕТ СОСТОЯНИЕ`.
 - Каждая команда в текстовой рекомендации имеет отдельное описание ожидаемого результата.
 - CIFS-рекомендация автоматически получает локальные `TARGET` всех CIFS mounts и проверяет каждый через `stat` с timeout; ручной `MOUNT_PATH` удалён, а `SOURCE` вида `//server/share` явно не предлагается как локальный путь.
+- Исправлена полевая проблема с кириллическими CIFS mount points: из автоматической проверки удалён `findmnt -r/--raw`, который hex-экранировал не-ASCII байты (`\xd0...`) и приводил к ложному `No such file or directory`; используется list-режим `findmnt -n -l`.
 - Добавлен постоянный CI-тест `tests/test_recommendation_commands.sh` для защиты командного контракта.
 - Добавлен сквозной `tests/test_sections.sh`: проверяются все пользовательские разделы стандартного TXT, основные группы standard JSON и все секции корпоративных профилей `domain`, `network`, `print`, `software`, `enterprise`.
 - Аппаратно-зависимые пути дополнительно защищены regression guards для SMART, CPU temperature, removable storage/filesystems и корпоративных checker-функций.
