@@ -64,6 +64,8 @@ sudo bash /tmp/arm_info.sh --corp
 sudo bash /tmp/arm_info.sh --corp --privacy --json -o /tmp/arm-corp.json
 ```
 
+Без `-o` корпоративный JSON также сохраняется автоматически; `-o /tmp/arm-corp.json` нужен, когда требуется фиксированное имя и расположение файла.
+
 Полная инвентаризация всех RPM-пакетов запускается только отдельно и явно:
 
 ```bash
