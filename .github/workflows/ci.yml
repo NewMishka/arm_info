@@ -16,13 +16,15 @@ jobs:
       - name: Install ShellCheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Syntax
-        run: bash -n arm_info.sh install.sh tests/test_cli.sh tests/test_enterprise.sh packaging/build-rpm.sh
+        run: bash -n arm_info.sh install.sh tests/test_cli.sh tests/test_enterprise.sh tests/test_recommendation_commands.sh packaging/build-rpm.sh
       - name: ShellCheck
-        run: shellcheck --severity=error arm_info.sh install.sh tests/test_cli.sh tests/test_enterprise.sh packaging/build-rpm.sh
+        run: shellcheck --severity=error arm_info.sh install.sh tests/test_cli.sh tests/test_enterprise.sh tests/test_recommendation_commands.sh packaging/build-rpm.sh
       - name: Base CLI tests
         run: bash tests/test_cli.sh
       - name: Enterprise profile tests
         run: bash tests/test_enterprise.sh
+      - name: Recommendation command audit tests
+        run: bash tests/test_recommendation_commands.sh
 
   compatibility-syntax:
     runs-on: ubuntu-latest
@@ -79,6 +81,8 @@ jobs:
           grep -q 'Стабильность системы' docs/SCORING.md
           grep -q -- '--corp --no-save' docs/USAGE.md
           grep -q 'schema v2' docs/AUTOMATION.md
+          grep -q 'COMMANDS.md' README.md
+          grep -q 'ИЗМЕНЯЕТ СОСТОЯНИЕ' docs/COMMANDS.md
           grep -q 'SHA256SUMS' .github/workflows/release.yml
           grep -q 'SHA256SUMS' docs/releases/v$(tr -d '[:space:]' < VERSION).md
       - name: RPM build smoke test
