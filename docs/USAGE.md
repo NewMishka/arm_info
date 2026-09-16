@@ -172,3 +172,8 @@ make version
 ```
 
 Версия берётся из файла `VERSION`. `Makefile` не хранит отдельный номер версии; `make check` сверяет `VERSION` с `arm_info.sh` и RPM spec.
+
+
+## Команды рекомендаций в 1.2.4
+
+Все команды проходят отдельный command-audit contract. Каждая команда в TXT имеет описание ожидаемого результата; state-changing команды явно помечаются. Служебные значения задаются безопасными токенами (`DOMAIN_FQDN`, `PROFILE_NAME`, `MOUNT_PATH`, `UNIT_NAME` и т. п.), которые нужно заменить перед запуском. Подробно: [COMMANDS.md](COMMANDS.md).
