@@ -1,0 +1,38 @@
+name: Apply v1.2.3 stability transparency
+
+on:
+  push:
+    branches:
+      - feature/v1.2.3-system-storage-priority
+    paths:
+      - '.github/scripts/apply_v1_2_3_stability_transparency.py'
+      - '.github/workflows/apply-v1.2.3-stability-transparency.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v1.2.3-system-storage-priority
+      - name: Apply stability transparency patch
+        run: python3 .github/scripts/apply_v1_2_3_stability_transparency.py
+      - name: Validate
+        run: |
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y shellcheck >/dev/null
+          bash -n arm_info.sh tests/test_cli.sh tests/test_enterprise.sh
+          shellcheck --severity=error arm_info.sh tests/test_cli.sh tests/test_enterprise.sh
+          bash tests/test_cli.sh
+          bash tests/test_enterprise.sh
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add arm_info.sh tests/test_cli.sh CHANGELOG.md docs/SCORING.md docs/releases/v1.2.3.md
+          git diff --cached --quiet && exit 0
+          git commit -m 'feat: make stability score transparent'
+          git push
