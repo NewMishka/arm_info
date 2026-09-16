@@ -301,9 +301,9 @@ recommendation_for() {
         network.cifs)
             REC_CAUSE="Один или несколько CIFS mount не отвечают в короткий timeout. Возможны недоступная шара, сеть, Kerberos/учётные данные или зависший mount."
             REC_IMPACT="Caja/приложения могут зависать при открытии, сохранении, удалении и обходе каталогов."
-            REC_CHECK="Определить конкретные mount points, проверить stat с timeout, kernel CIFS messages и Kerberos ticket."
+            REC_CHECK="Определить локальные TARGET всех CIFS mount, автоматически проверить каждый TARGET через stat с timeout, затем проверить kernel CIFS messages и Kerberos ticket. SOURCE вида //server/share в stat не использовать."
             REC_ACTION="Устранить сетевую/аутентификационную причину; зависший mount размонтировать только после проверки открытых файлов и процессов."
-            REC_COMMAND="findmnt -t cifs -o TARGET,SOURCE,OPTIONS|timeout 5 stat -f 'MOUNT_PATH'|journalctl -k -b --no-pager | grep -Ei 'cifs|smb' | tail -120|sudo -u 'USER_NAME' klist -A"
+            REC_COMMAND="findmnt -t cifs -o TARGET,SOURCE,OPTIONS|findmnt -rn -t cifs -o TARGET | while IFS= read -r m; do printf '=== %s ===\n' \"\$m\"; timeout 5 stat -f -- \"\$m\" || printf 'ОШИБКА/ТАЙМАУТ: %s\n' \"\$m\"; done|journalctl -k -b --no-pager | grep -Ei 'cifs|smb' | tail -120|sudo -u 'USER_NAME' klist -A"
             ;;
         network.gvfs)
             REC_CAUSE="Один или несколько GVFS mount не отвечают. Возможны недоступный SMB-ресурс или зависшие пользовательские gvfs-процессы."
@@ -518,7 +518,7 @@ command_description() {
         *) desc="выполнит диагностическую проверку, связанную с указанной рекомендацией" ;;
     esac
 
-    if [[ $cmd =~ (DOMAIN_FQDN|DC_FQDN|DC_IP|USER_NAME|PROFILE_NAME|CERT_PATH|MOUNT_PATH|QUEUE_NAME|JOB_ID|PARENT_PID|UNIT_NAME|DEVICE_PATH|MD_DEVICE|IFACE_NAME) ]]; then
+    if [[ $cmd =~ (DOMAIN_FQDN|DC_FQDN|DC_IP|USER_NAME|PROFILE_NAME|CERT_PATH|QUEUE_NAME|JOB_ID|PARENT_PID|UNIT_NAME|DEVICE_PATH|MD_DEVICE|IFACE_NAME) ]]; then
         desc="$desc Перед выполнением замените служебный маркер на фактическое значение из отчёта/системы."
     fi
     case "$cmd" in
@@ -1551,6 +1551,7 @@ base_command_description() {
         du\ -xhd1*) desc="покажет размеры каталогов первого уровня в пределах выбранной файловой системы" ;;
         df\ -h*) desc="покажет заполнение файловой системы и доступное место" ;;
         df\ -i*) desc="покажет использование inode файловой системы" ;;
+        findmnt\ -rn\ -t\ cifs\ -o\ TARGET*) desc="автоматически проверит каждый локальный TARGET CIFS через stat с таймаутом; SOURCE вида //server/share не используется" ;;
         findmnt*) desc="покажет источник, тип и параметры монтирования файловой системы" ;;
         ps\ -eo*|ps\ aux*) desc="покажет процессы с сортировкой для поиска основных потребителей ресурсов" ;;
         free\ -h*) desc="покажет использование ОЗУ и swap" ;;
