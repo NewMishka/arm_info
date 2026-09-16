@@ -20,6 +20,7 @@ make test
 - `tests/test_enterprise.sh` — корпоративный CLI, schema v2, privacy, `--compare`, single-file policy и контракт корпоративного отчёта;
 - `tests/test_recommendation_commands.sh` — статический аудит рекомендуемых команд: безопасные placeholder-токены, отсутствие известных некорректных форм, синтаксис representative commands и обязательная маркировка state-changing действий;
 - `tests/test_sections.sh` — сквозной контроль всех пользовательских разделов стандартного TXT, всех основных групп standard JSON, всех секций профилей `domain/network/print/software/enterprise`, корпоративного TXT и критичных helper-контрактов SMART/CPU/ФС/корпоративных проверок.
+- `tests/test_cifs_probe.sh` — отдельная regression-проверка CIFS: TARGET читается одной колонкой без whitespace-splitting, UTF-8/пробелы сохраняются, а доступность проверяется фактическим чтением каталога вместо `stat -f`.
 
 `tests/test_sections.sh` специально не ограничивается проверкой наличия функций в исходнике: он запускает отчёты и проверяет, что разделы действительно доходят до пользовательского TXT/JSON. Для аппаратно-зависимых ветвей, которые нельзя гарантированно воспроизвести на GitHub runner (SMART реального NVMe, датчики CPU и т. п.), дополнительно используются статические regression guards на путь сбора данных. Это не заменяет полевой тест РЕД ОС, но не позволяет незаметно удалить критичный helper, как произошло с `run_smart()` в pre-release 1.2.4.
 
@@ -32,6 +33,7 @@ CI проверяет:
 - базовые CLI/JSON/privacy tests;
 - корпоративные profiles/compare/recommendations tests;
 - recommendation-command audit tests;
+- CIFS runtime-probe regression tests (UTF-8, пробелы, actual directory read);
 - полный тест разделов отчёта `tests/test_sections.sh`;
 - Bash syntax в Ubuntu 24.04, Fedora и Rocky Linux 9;
 - согласованность версии `VERSION` / `arm_info.sh` / RPM spec / `make version` / README;

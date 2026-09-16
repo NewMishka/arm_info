@@ -301,9 +301,9 @@ recommendation_for() {
         network.cifs)
             REC_CAUSE="Один или несколько CIFS mount не отвечают в короткий timeout. Возможны недоступная шара, сеть, Kerberos/учётные данные или зависший mount."
             REC_IMPACT="Caja/приложения могут зависать при открытии, сохранении, удалении и обходе каталогов."
-            REC_CHECK="Определить локальные TARGET всех CIFS mount без raw-режима findmnt, автоматически проверить каждый TARGET через stat с timeout, затем проверить kernel CIFS messages и Kerberos ticket. SOURCE вида //server/share в stat не использовать."
+            REC_CHECK="Определить локальные TARGET всех CIFS mount без raw-режима findmnt, затем выполнить минимальное фактическое чтение каждого каталога с timeout. Это выявляет ресурс, который смонтирован, но не открывается. SOURCE вида //server/share как локальный путь не использовать."
             REC_ACTION="Устранить сетевую/аутентификационную причину; зависший mount размонтировать только после проверки открытых файлов и процессов."
-            REC_COMMAND="findmnt -t cifs -o TARGET,SOURCE,OPTIONS|findmnt -n -l -t cifs -o TARGET | while IFS= read -r m; do printf '=== %s ===\n' \"\$m\"; timeout 5 stat -f -- \"\$m\" || printf 'ОШИБКА/ТАЙМАУТ: %s\n' \"\$m\"; done|journalctl -k -b --no-pager | grep -Ei 'cifs|smb' | tail -120|sudo -u 'USER_NAME' klist -A"
+            REC_COMMAND="findmnt -t cifs -o TARGET,SOURCE,OPTIONS|findmnt -n -l -t cifs -o TARGET | while IFS= read -r m; do printf '=== %s ===\n' \"\$m\"; if timeout 5 find \"\$m\" -mindepth 1 -maxdepth 1 -print -quit >/dev/null 2>&1; then printf 'OK: каталог читается\n'; else printf 'ОШИБКА/ТАЙМАУТ: %s\n' \"\$m\"; fi; done|journalctl -k -b --no-pager | grep -Ei 'cifs|smb' | tail -120|sudo -u 'USER_NAME' klist -A"
             ;;
         network.gvfs)
             REC_CAUSE="Один или несколько GVFS mount не отвечают. Возможны недоступный SMB-ресурс или зависшие пользовательские gvfs-процессы."
@@ -497,7 +497,7 @@ command_description() {
         ip\ -4\ route*) desc="покажет IPv4-маршруты и маршрут по умолчанию" ;;
         ip\ route\ get*) desc="покажет, через какой интерфейс и шлюз система пойдёт к указанному IP" ;;
         timeout*nc*) desc="проверит установление TCP-соединения с указанным DC/портом и ограничит ожидание 5 секундами" ;;
-        findmnt\ -n\ -l\ -t\ cifs\ -o\ TARGET*) desc="автоматически проверит каждый локальный TARGET CIFS через stat с таймаутом; SOURCE вида //server/share не используется" ;;
+        findmnt\ -n\ -l\ -t\ cifs\ -o\ TARGET*) desc="автоматически проверит фактическое чтение каждого локального TARGET CIFS через find с таймаутом; SOURCE вида //server/share не используется" ;;
         findmnt\ -t\ cifs*) desc="покажет активные CIFS-точки монтирования, источник и параметры mount" ;;
         timeout*stat*) desc="проверит доступность конкретной точки монтирования без длительного зависания" ;;
         loginctl\ list-sessions*) desc="покажет активные пользовательские sessions и UID для привязки GVFS к нужному пользователю" ;;
@@ -726,7 +726,8 @@ check_domain() {
 }
 
 check_network() {
-    local gw ifaces idx=0 row iface ip mac speed duplex link dns_domain cifs_count=0 cifs_bad=0 mnt src gvfs_count=0 gvfs_bad=0 g dir
+    local gw ifaces idx=0 row iface ip mac speed duplex link dns_domain cifs_count=0 cifs_bad=0 mnt cifs_bad_value gvfs_count=0 gvfs_bad=0 g dir
+    local -a cifs_bad_targets=()
     local eap_count=0 active_eap_count=0 cert_global_min=-1 cert_unknown=0 cert_seen=0 cert_index=0 system_ca_profiles=0 uuid type eap conn_name
     local cert_spec cert_kind cert_field cert_label certref certpath cert_display cert_start cert_end start_fmt end_fmt end_epoch now days cert_cmd_path sev
     local cert_meta cert_subject cert_issuer cert_inform phase2_auth phase2_autheap system_ca ca_path private_key phase2_private_key
@@ -982,13 +983,30 @@ check_network() {
     fi
 
     if have findmnt; then
-        while IFS='|' read -r mnt src; do
+        # Читаем только TARGET одной колонкой. Разбор TARGET,SOURCE через awk ломает
+        # точки монтирования с пробелами, а stat -f проверяет лишь метаданные ФС.
+        # find -print -quit делает минимальное реальное чтение каталога и ловит stale/hang.
+        while IFS= read -r mnt; do
             [[ -n $mnt ]] || continue; cifs_count=$((cifs_count+1))
-            if run_timeout 4 stat -f "$mnt" >/dev/null 2>&1; then :; else cifs_bad=$((cifs_bad+1)); fi
-        done < <(findmnt -n -l -t cifs -o TARGET,SOURCE 2>/dev/null | awk '{print $1"|"$2}')
-        if ((cifs_count==0)); then add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "нет" info
-        elif ((cifs_bad==0)); then add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "$cifs_count, доступны" ok
-        else add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "$cifs_count, недоступны/зависли: $cifs_bad" warn; fi
+            if run_timeout 5 find "$mnt" -mindepth 1 -maxdepth 1 -print -quit >/dev/null 2>&1; then
+                :
+            else
+                cifs_bad=$((cifs_bad+1))
+                cifs_bad_targets+=("$mnt")
+            fi
+        done < <(findmnt -n -l -t cifs -o TARGET 2>/dev/null)
+        if ((cifs_count==0)); then
+            add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "нет" info
+        elif ((cifs_bad==0)); then
+            add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "$cifs_count, каталоги читаются" ok
+        else
+            if ((PRIVACY)); then
+                cifs_bad_value="$cifs_count, недоступны/зависли: $cifs_bad; проблемные TARGET: скрыто"
+            else
+                cifs_bad_value="$cifs_count, недоступны/зависли: $cifs_bad; проблемные TARGET: $(join_by ', ' "${cifs_bad_targets[@]}")"
+            fi
+            add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "$cifs_bad_value" warn
+        fi
     else add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "findmnt отсутствует" unknown; fi
 
     for g in /run/user/*/gvfs; do
@@ -1552,7 +1570,7 @@ base_command_description() {
         du\ -xhd1*) desc="покажет размеры каталогов первого уровня в пределах выбранной файловой системы" ;;
         df\ -h*) desc="покажет заполнение файловой системы и доступное место" ;;
         df\ -i*) desc="покажет использование inode файловой системы" ;;
-        findmnt\ -n\ -l\ -t\ cifs\ -o\ TARGET*) desc="автоматически проверит каждый локальный TARGET CIFS через stat с таймаутом; SOURCE вида //server/share не используется" ;;
+        findmnt\ -n\ -l\ -t\ cifs\ -o\ TARGET*) desc="автоматически проверит фактическое чтение каждого локального TARGET CIFS через find с таймаутом; SOURCE вида //server/share не используется" ;;
         findmnt*) desc="покажет источник, тип и параметры монтирования файловой системы" ;;
         ps\ -eo*|ps\ aux*) desc="покажет процессы с сортировкой для поиска основных потребителей ресурсов" ;;
         free\ -h*) desc="покажет использование ОЗУ и swap" ;;

@@ -7,6 +7,7 @@
 - [ ] Базовые CLI/JSON/privacy tests.
 - [ ] Корпоративные profiles/compare/recommendations tests.
 - [ ] `tests/test_recommendation_commands.sh`: command-audit contract проходит без ошибок.
+- [ ] `tests/test_cifs_probe.sh`: CIFS TARGET с кириллицей/пробелами проходит без искажения; отсутствующий TARGET определяется как ошибка; metadata-only `stat -f` не используется как критерий доступности.
 - [ ] Проверка синтаксиса на Ubuntu 24.04, Fedora и Rocky Linux 9.
 - [ ] Совпадение версии в `VERSION`, `arm_info.sh`, RPM spec, `make version` и README. `Makefile` не должен содержать отдельную захардкоженную версию.
 - [ ] В репозитории отсутствует устаревший `arm_info-enterprise.sh`: корпоративные профили встроены в `arm_info.sh`.

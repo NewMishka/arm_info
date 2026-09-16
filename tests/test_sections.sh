@@ -155,6 +155,9 @@ grep -q 'mount_is_removable()' "$SCRIPT" || die "filesystem: removable filter mi
 grep -q 'disk_is_removable()' "$SCRIPT" || die "storage: removable disk filter missing"
 grep -q 'check_domain()' "$SCRIPT" || die "enterprise: domain checker missing"
 grep -q 'check_network()' "$SCRIPT" || die "enterprise: network checker missing"
+grep -Fq 'done < <(findmnt -n -l -t cifs -o TARGET 2>/dev/null)' "$SCRIPT" || die "enterprise: CIFS TARGET-only enumeration missing"
+grep -Fq 'run_timeout 5 find "$mnt" -mindepth 1 -maxdepth 1 -print -quit' "$SCRIPT" || die "enterprise: CIFS real directory-read probe missing"
+! grep -Fq "findmnt -n -l -t cifs -o TARGET,SOURCE 2>/dev/null | awk" "$SCRIPT" || die "enterprise: whitespace-splitting CIFS parser returned"
 grep -q 'check_print()' "$SCRIPT" || die "enterprise: print checker missing"
 grep -q 'check_software()' "$SCRIPT" || die "enterprise: software checker missing"
 
