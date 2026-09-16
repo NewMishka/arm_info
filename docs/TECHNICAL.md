@@ -19,6 +19,8 @@ Enterprise-профили не смешиваются с базовым health s
 - `findmnt`, `df`;
 - `systemctl`, `journalctl`;
 - `lsblk`, `smartctl`;
+- `findmnt` + `lsblk -s` для определения физического системного диска через LVM/device-mapper;
+- `/sys/class/block/*/removable` и `lsblk TRAN` для отделения съёмных/USB-носителей;
 - thermal hwmon и `sensors`;
 - `/proc/mdstat`, `/sys/devices/system/edac`, `/sys/class/power_supply`;
 - `timedatectl`/`chronyc`, `realm`, `sssctl`, `adcli`, `klist`;

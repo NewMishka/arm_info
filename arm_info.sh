@@ -2,7 +2,7 @@
 
 (
 # ============================================================
-# arm_info 1.2.2 — диагностика АРМ для РЕД ОС 7 / 8
+# arm_info 1.2.3 — диагностика АРМ для РЕД ОС 7 / 8
 # Запуск: исполняемый Bash-файл; base и enterprise находятся в одном файле.
 # Результат одновременно выводится на экран и сохраняется в TXT.
 # ============================================================
@@ -12,18 +12,18 @@ if [ -z "${BASH_VERSION:-}" ]; then
     exit 1
 fi
 
-ARM_INFO_VERSION="1.2.2"
+ARM_INFO_VERSION="1.2.3"
 
 
-# enterprise-profile-dispatch-v1.2.2 — single-file edition
+# enterprise-profile-dispatch-v1.2.3 — single-file edition
 # Enterprise-профили встроены в arm_info.sh; внешний helper не требуется.
 _arm_enterprise_run() (
-# arm_info enterprise profiles — v1.2.2
+# arm_info enterprise profiles — v1.2.3
 # Read-only diagnostics for RED OS enterprise workstations.
 set -u
 set -o pipefail
 
-VERSION="1.2.2"
+VERSION="1.2.3"
 PROFILE=""
 PRIVACY=0
 JSON_MODE=0
@@ -34,7 +34,7 @@ COMPARE_B=""
 
 usage() {
     cat <<'USAGE'
-arm_info enterprise profiles 1.2.2
+arm_info enterprise profiles 1.2.3
 
 Использование:
   arm_info --profile domain [--privacy] [--json] [-o FILE]
@@ -1535,16 +1535,68 @@ fi
 
 # -------------------- ФАЙЛОВЫЕ СИСТЕМЫ --------------------
 ROOT_DEV=$(findmnt -no SOURCE / 2>/dev/null); [ -z "$ROOT_DEV" ]&&ROOT_DEV="-"
+
+# Физический накопитель, на котором находится корневая ФС, является приоритетным.
+# Для LVM/dm-crypt/device-mapper идём по цепочке parents до TYPE=disk.
+ROOT_BLOCK="$ROOT_DEV"
+if [[ "$ROOT_BLOCK" == /dev/* ]]; then ROOT_BLOCK=$(readlink -f "$ROOT_BLOCK" 2>/dev/null || printf '%s' "$ROOT_BLOCK"); fi
+SYSTEM_DISKS=""
+if command -v lsblk >/dev/null 2>&1 && [[ "$ROOT_BLOCK" == /dev/* ]]; then
+    SYSTEM_DISKS=$(lsblk -sno NAME,TYPE "$ROOT_BLOCK" 2>/dev/null | awk '$2=="disk"{print $1}' | sort -u)
+fi
+if [[ -z "$SYSTEM_DISKS" ]] && command -v lsblk >/dev/null 2>&1; then
+    ROOT_MAJMIN=$(findmnt -no MAJ:MIN / 2>/dev/null || true)
+    if [[ -n "$ROOT_MAJMIN" ]]; then
+        ROOT_NODE=$(lsblk -rno NAME,TYPE,MAJ:MIN 2>/dev/null | awk -v mm="$ROOT_MAJMIN" '$3==mm{print "/dev/"$1; exit}')
+        [[ -n "$ROOT_NODE" ]] && SYSTEM_DISKS=$(lsblk -sno NAME,TYPE "$ROOT_NODE" 2>/dev/null | awk '$2=="disk"{print $1}' | sort -u)
+    fi
+fi
+SYSTEM_DISK_TEXT=$(printf '%s
+' "$SYSTEM_DISKS" | sed '/^$/d' | paste -sd ',' -)
+[ -z "$SYSTEM_DISK_TEXT" ] && SYSTEM_DISK_TEXT="Не определён"
+
+is_system_disk() {
+    local n=$1
+    printf '%s
+' "$SYSTEM_DISKS" | grep -Fxq -- "$n"
+}
+
+disk_is_removable() {
+    local n=$1 rmflag=0 tran=""
+    is_system_disk "$n" && return 1
+    [[ -r "/sys/class/block/$n/removable" ]] && rmflag=$(cat "/sys/class/block/$n/removable" 2>/dev/null || echo 0)
+    if command -v lsblk >/dev/null 2>&1; then tran=$(lsblk -dn -o TRAN "/dev/$n" 2>/dev/null | tr -d '[:space:]'); fi
+    [[ "$rmflag" == 1 || "$tran" == usb ]]
+}
+
+mount_is_removable() {
+    local mnt=$1 src real d
+    src=$(findmnt -no SOURCE --target "$mnt" 2>/dev/null || true)
+    real="$src"; [[ "$real" == /dev/* ]] && real=$(readlink -f "$real" 2>/dev/null || printf '%s' "$real")
+    if command -v lsblk >/dev/null 2>&1 && [[ "$real" == /dev/* ]]; then
+        while read -r d; do
+            [[ -n "$d" ]] || continue
+            disk_is_removable "$d" && return 0
+        done < <(lsblk -sno NAME,TYPE "$real" 2>/dev/null | awk '$2=="disk"{print $1}' | sort -u)
+    fi
+    # Fallback для типовых пользовательских автомонтирований, если topology недоступна.
+    [[ "$mnt" == /run/media/* || "$mnt" == /media/* ]]
+}
+
 ROOT_USE=$(df -P / 2>/dev/null | awk 'NR==2{gsub("%","",$5);print $5}'); ROOT_INODE_USE=$(df -Pi / 2>/dev/null | awk 'NR==2{gsub("%","",$5);print $5}')
 ROOT_SIZE=$(df -hP / 2>/dev/null | awk 'NR==2{print $2}'); ROOT_USED=$(df -hP / 2>/dev/null | awk 'NR==2{print $3}'); ROOT_FREE=$(df -hP / 2>/dev/null | awk 'NR==2{print $4}')
 [[ "$ROOT_USE" =~ ^[0-9]+$ ]]||ROOT_USE=0; [[ "$ROOT_INODE_USE" =~ ^[0-9]+$ ]]||ROOT_INODE_USE=0
 ROOT_RO=0; findmnt -no OPTIONS / 2>/dev/null | grep -Eq '(^|,)ro(,|$)'&&ROOT_RO=1
-LOCAL_FS_COUNT=0; LOCAL_RO_COUNT=0; FS_WORST_USE=$ROOT_USE; FS_WORST_USE_MOUNT=/; FS_WORST_INODE=$ROOT_INODE_USE; FS_WORST_INODE_MOUNT=/; FS_RO_MOUNTS=(); LOCAL_FS_ROWS=()
+LOCAL_FS_COUNT=0; REMOVABLE_FS_COUNT=0; LOCAL_RO_COUNT=0; FS_WORST_USE=$ROOT_USE; FS_WORST_USE_MOUNT=/; FS_WORST_INODE=$ROOT_INODE_USE; FS_WORST_INODE_MOUNT=/; FS_RO_MOUNTS=(); LOCAL_FS_ROWS=()
 while IFS= read -r MNT; do
     [ -n "$MNT" ]||continue
     USE=$(df -P "$MNT" 2>/dev/null | awk 'NR==2{gsub("%","",$5);print $5}'); INO=$(df -Pi "$MNT" 2>/dev/null | awk 'NR==2{gsub("%","",$5);print $5}')
     [[ "$USE" =~ ^[0-9]+$ ]]||USE=0; [[ "$INO" =~ ^[0-9]+$ ]]||INO=0
     RO=0; findmnt -no OPTIONS --target "$MNT" 2>/dev/null | grep -Eq '(^|,)ro(,|$)'&&RO=1
+    if [ "$MNT" != / ] && mount_is_removable "$MNT"; then
+        REMOVABLE_FS_COUNT=$((REMOVABLE_FS_COUNT+1))
+        continue
+    fi
     LOCAL_FS_COUNT=$((LOCAL_FS_COUNT+1)); ((USE>FS_WORST_USE))&&{ FS_WORST_USE=$USE; FS_WORST_USE_MOUNT="$MNT"; }; ((INO>FS_WORST_INODE))&&{ FS_WORST_INODE=$INO; FS_WORST_INODE_MOUNT="$MNT"; }
     ((RO==1))&&{ LOCAL_RO_COUNT=$((LOCAL_RO_COUNT+1)); FS_RO_MOUNTS+=("$MNT"); }
     if [ "$MNT" = / ] || ((USE>=70 || INO>=70 || RO==1)); then LOCAL_FS_ROWS+=("$MNT|${USE}%|${INO}%|$([ "$RO" -eq 1 ]&&echo RO||echo RW)"); fi
@@ -1642,11 +1694,22 @@ case "$DISTRO_ID" in
 esac
 
 # -------------------- ДИСКИ / SMART --------------------
-DISK_ROWS=(); DISK_SELFTEST_ROWS=(); DISK_WORST_SCORE=100; FIXED_DISKS=0; MAX_DISK_HOURS=0; SMART_UNKNOWN_COUNT=0
+DISK_ROWS=(); DISK_SYSTEM_ROWS=(); DISK_FIXED_ROWS=(); DISK_REMOVABLE_ROWS=(); DISK_OPTICAL_ROWS=(); DISK_SELFTEST_ROWS=(); DISK_WORST_SCORE=100; SYSTEM_DISK_SCORE=100; SECONDARY_WORST_KNOWN_SCORE=100; FIXED_DISKS=0; SYSTEM_DISK_COUNT=0; SECONDARY_FIXED_DISKS=0; SECONDARY_KNOWN_COUNT=0; REMOVABLE_DISKS=0; MAX_DISK_HOURS=0; SYSTEM_MAX_DISK_HOURS=0; SMART_UNKNOWN_COUNT=0; SYSTEM_SMART_UNKNOWN_COUNT=0; SECONDARY_CRITICAL=0
 while read -r NAME TYPE SIZE ROTA MODEL; do
     case "$TYPE" in disk|rom) ;; *) continue ;; esac
     DEV="/dev/$NAME"; MODEL=$(echo "$MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'); [ -z "$MODEL" ]&&MODEL="-"; [ "${#MODEL}" -gt 28 ]&&MODEL="${MODEL:0:27}…"
-    if [[ "$TYPE" = rom || "$NAME" = sr* ]]; then DISK_ROWS+=("$NAME|CD/DVD||$MODEL|-|-|-|-"); continue; fi
+    if [[ "$TYPE" = rom || "$NAME" = sr* ]]; then DISK_OPTICAL_ROWS+=("$NAME|Оптический|CD/DVD||$MODEL|-|-|-|-"); continue; fi
+    TRAN=$(lsblk -dn -o TRAN "$DEV" 2>/dev/null | tr -d '[:space:]')
+    if is_system_disk "$NAME"; then
+        DISK_ROLE="Системный"; SYSTEM_DISK_COUNT=$((SYSTEM_DISK_COUNT+1))
+    elif disk_is_removable "$NAME"; then
+        DISK_ROLE="Съёмный (вне индекса)"; REMOVABLE_DISKS=$((REMOVABLE_DISKS+1))
+        if [[ "$TRAN" == usb ]]; then DISK_TYPE="USB-накопитель"; else DISK_TYPE="Съёмный накопитель"; fi
+        DISK_REMOVABLE_ROWS+=("$NAME|$DISK_ROLE|$DISK_TYPE|$SIZE|$MODEL|-|не учитывается|-|-")
+        continue
+    else
+        DISK_ROLE="Дополнительный"; SECONDARY_FIXED_DISKS=$((SECONDARY_FIXED_DISKS+1))
+    fi
     FIXED_DISKS=$((FIXED_DISKS+1)); DISK_SCORE=100; RESOURCE="-"; SMART="Н/Д"; TEMP="-"; HOURS="-"; REALLOC=0; PENDING=0; UNCORR=0; MEDIAERR=0; CRITWARN=0
     if [[ "$NAME" = nvme* ]]; then DISK_TYPE="NVMe SSD"; elif [ "$ROTA" = 0 ]; then DISK_TYPE=SSD; else DISK_TYPE=HDD; fi
     if command -v smartctl >/dev/null 2>&1; then
@@ -1655,7 +1718,7 @@ while read -r NAME TYPE SIZE ROTA MODEL; do
         _st=$(run_smart -l selftest "$DEV" 2>/dev/null | awk '/^# *1[[:space:]]/{for(i=5;i<=NF;i++){printf "%s%s",$i,(i<NF?" ":"")} exit}')
         [ -n "$_st" ] && SELFTEST="$_st"
         DISK_SELFTEST_ROWS+=("$NAME|$SELFTEST")
-        if echo "$SMART_H"|grep -Eqi 'PASSED|SMART.*OK'; then SMART=OK; elif echo "$SMART_H"|grep -Eqi 'FAILED|SMART.*BAD'; then SMART=FAIL; DISK_SCORE=0; else SMART="Н/Д"; SMART_UNKNOWN_COUNT=$((SMART_UNKNOWN_COUNT+1)); fi
+        if echo "$SMART_H"|grep -Eqi 'PASSED|SMART.*OK'; then SMART=OK; elif echo "$SMART_H"|grep -Eqi 'FAILED|SMART.*BAD'; then SMART=FAIL; DISK_SCORE=0; else SMART="Н/Д"; SMART_UNKNOWN_COUNT=$((SMART_UNKNOWN_COUNT+1)); [[ "$DISK_ROLE" == "Системный" ]] && SYSTEM_SMART_UNKNOWN_COUNT=$((SYSTEM_SMART_UNKNOWN_COUNT+1)); fi
         if [[ "$NAME" = nvme* ]]; then
             USED=$(printf '%s\n' "$SMART_ALL" | awk -F: '/Percentage Used/{x=$2;gsub(/[% \t]/,"",x);print x;exit}'); if [[ "$USED" =~ ^[0-9]+$ ]]; then REMAIN=$((100-USED)); ((REMAIN<0))&&REMAIN=0; ((REMAIN>100))&&REMAIN=100; RESOURCE="${REMAIN}%"; ((REMAIN<DISK_SCORE))&&DISK_SCORE=$REMAIN; fi
             TEMP=$(printf '%s\n' "$SMART_ALL" | awk -F: '/^Temperature:/{x=$2;gsub(/[^0-9]/,"",x);if(x!=""){print x;exit}}'); HOURS=$(printf '%s\n' "$SMART_ALL" | awk -F: '/Power On Hours/{x=$2;gsub(/[^0-9]/,"",x);if(x!=""){print x;exit}}')
@@ -1677,8 +1740,21 @@ while read -r NAME TYPE SIZE ROTA MODEL; do
             else ((TEMP>=SSD_TEMP_WARN))&&DISK_SCORE=$(min_score "$DISK_SCORE" 85); ((TEMP>=SSD_TEMP_HIGH))&&DISK_SCORE=$(min_score "$DISK_SCORE" 60); ((TEMP>=SSD_TEMP_CRIT))&&DISK_SCORE=$(min_score "$DISK_SCORE" 30); fi
         else TEMP="-"; fi
     fi
-    DISK_SCORE=$(clamp_score "$DISK_SCORE"); ((DISK_SCORE<DISK_WORST_SCORE))&&DISK_WORST_SCORE=$DISK_SCORE; [[ "$HOURS" =~ ^[0-9]+$ ]]&&((HOURS>MAX_DISK_HOURS))&&MAX_DISK_HOURS=$HOURS
-    DISK_ROWS+=("$NAME|$DISK_TYPE|$SIZE|$MODEL|$RESOURCE|$SMART|$TEMP|$HOURS")
+    DISK_SCORE=$(clamp_score "$DISK_SCORE")
+    ((DISK_SCORE<DISK_WORST_SCORE))&&DISK_WORST_SCORE=$DISK_SCORE
+    [[ "$HOURS" =~ ^[0-9]+$ ]]&&((HOURS>MAX_DISK_HOURS))&&MAX_DISK_HOURS=$HOURS
+    if [[ "$DISK_ROLE" == "Системный" ]]; then
+        ((DISK_SCORE<SYSTEM_DISK_SCORE))&&SYSTEM_DISK_SCORE=$DISK_SCORE
+        [[ "$HOURS" =~ ^[0-9]+$ ]]&&((HOURS>SYSTEM_MAX_DISK_HOURS))&&SYSTEM_MAX_DISK_HOURS=$HOURS
+        DISK_SYSTEM_ROWS+=("$NAME|$DISK_ROLE|$DISK_TYPE|$SIZE|$MODEL|$RESOURCE|$SMART|$TEMP|$HOURS")
+    else
+        if [[ "$SMART" != "Н/Д" ]]; then
+            SECONDARY_KNOWN_COUNT=$((SECONDARY_KNOWN_COUNT+1))
+            ((DISK_SCORE<SECONDARY_WORST_KNOWN_SCORE))&&SECONDARY_WORST_KNOWN_SCORE=$DISK_SCORE
+        fi
+        ((DISK_SCORE<30))&&SECONDARY_CRITICAL=1
+        DISK_FIXED_ROWS+=("$NAME|$DISK_ROLE|$DISK_TYPE|$SIZE|$MODEL|$RESOURCE|$SMART|$TEMP|$HOURS")
+    fi
 
     [ "$SMART" = FAIL ]&&add_rec "КРИТИЧНО" "Накопитель $NAME: SMART сообщает отказ" "Высокий риск внезапного отказа и потери данных." "Немедленно сохранить важные данные и заменить накопитель." "smartctl -a $DEV"
     ((REALLOC>0))&&add_rec "ВНИМАНИЕ" "Накопитель $NAME: переназначенные сектора — $REALLOC" "Носитель уже имеет дефектные области; рост счётчика означает деградацию." "Проверить резервное копирование и наблюдать SMART. При росте — заменить диск." "smartctl -A $DEV | grep -i Reallocated"
@@ -1691,11 +1767,21 @@ while read -r NAME TYPE SIZE ROTA MODEL; do
     if [[ "$TEMP" =~ ^[0-9]+$ ]]; then TW=0; [ "$DISK_TYPE" = HDD ]&&((TEMP>=HDD_TEMP_WARN))&&TW=1; [ "$DISK_TYPE" = SSD ]&&((TEMP>=SSD_TEMP_WARN))&&TW=1; [ "$DISK_TYPE" = "NVMe SSD" ]&&((TEMP>=NVME_TEMP_WARN))&&TW=1; ((TW==1))&&add_rec "ВНИМАНИЕ" "Накопитель $NAME: повышенная температура ${TEMP}°C" "Уменьшается тепловой запас, возможны троттлинг и ускорение износа." "Проверить пыль, вентиляцию корпуса и охлаждение накопителя." "smartctl -a $DEV | grep -i Temperature"; fi
 
 done < <(lsblk -dn -o NAME,TYPE,SIZE,ROTA,MODEL 2>/dev/null)
+DISK_ROWS=("${DISK_SYSTEM_ROWS[@]}" "${DISK_FIXED_ROWS[@]}" "${DISK_REMOVABLE_ROWS[@]}" "${DISK_OPTICAL_ROWS[@]}")
 ((FIXED_DISKS==0))&&DISK_WORST_SCORE=70
-((RAID_DEGRADED==1)) && DISK_WORST_SCORE=$(min_score "$DISK_WORST_SCORE" 30)
+
+# Системный накопитель задаёт основную оценку storage. Известный дополнительный
+# внутренний накопитель влияет только на 20% storage-группы. Съёмные носители
+# показываются в отчёте, но не влияют на score, SMART completeness и возраст АРМ.
+if ((SYSTEM_DISK_COUNT>0)); then
+    STORAGE_SCORE=$SYSTEM_DISK_SCORE
+    if ((SECONDARY_KNOWN_COUNT>0)); then STORAGE_SCORE=$(((SYSTEM_DISK_SCORE*80 + SECONDARY_WORST_KNOWN_SCORE*20)/100)); fi
+else
+    STORAGE_SCORE=$DISK_WORST_SCORE
+fi
+((RAID_DEGRADED==1)) && STORAGE_SCORE=$(min_score "$STORAGE_SCORE" 30)
 
 # -------------------- БАЛЛЫ --------------------
-STORAGE_SCORE=$DISK_WORST_SCORE
 FS_SCORE=100; FS_WORST=$FS_WORST_USE; ((FS_WORST_INODE>FS_WORST))&&FS_WORST=$FS_WORST_INODE
 if ((FS_WORST>=FS_CRIT)); then FS_SCORE=10; elif ((FS_WORST>=FS_HIGH)); then FS_SCORE=40; elif ((FS_WORST>=FS_WARN)); then FS_SCORE=70; elif ((FS_WORST>=70)); then FS_SCORE=90; fi
 ((LOCAL_RO_COUNT>0))&&FS_SCORE=$(min_score "$FS_SCORE" 50); ((ROOT_RO==1))&&FS_SCORE=0
@@ -1786,11 +1872,13 @@ if ((${#CPU_REASONS[@]}>0)); then
     CPU_REASON_TEXT=$(IFS='; '; echo "${CPU_REASONS[*]}")
 fi
 
-DISK_AGE_MONTHS=-1; DISK_AGE_YEARS=-1; ((MAX_DISK_HOURS>0))&&{ DISK_AGE_MONTHS=$((MAX_DISK_HOURS*12/8760)); DISK_AGE_YEARS=$((DISK_AGE_MONTHS/12)); }
+AGE_DISK_HOURS=$MAX_DISK_HOURS; AGE_DISK_SOURCE="макс. наработка внутреннего накопителя"
+if ((SYSTEM_MAX_DISK_HOURS>0)); then AGE_DISK_HOURS=$SYSTEM_MAX_DISK_HOURS; AGE_DISK_SOURCE="наработка системного накопителя"; fi
+DISK_AGE_MONTHS=-1; DISK_AGE_YEARS=-1; ((AGE_DISK_HOURS>0))&&{ DISK_AGE_MONTHS=$((AGE_DISK_HOURS*12/8760)); DISK_AGE_YEARS=$((DISK_AGE_MONTHS/12)); }
 OS_AGE_MONTHS=-1; ((AGE_DAYS>=0))&&OS_AGE_MONTHS=$((AGE_DAYS*12/365))
 SYSTEM_AGE_MONTHS=-1; AGE_SOURCE="Не определён"
-if ((DISK_AGE_MONTHS>=0 && OS_AGE_MONTHS>=0)); then if ((DISK_AGE_MONTHS>=OS_AGE_MONTHS)); then SYSTEM_AGE_MONTHS=$DISK_AGE_MONTHS; AGE_SOURCE="макс. наработка накопителя"; else SYSTEM_AGE_MONTHS=$OS_AGE_MONTHS; AGE_SOURCE="возраст текущей установки ОС"; fi
-elif ((DISK_AGE_MONTHS>=0)); then SYSTEM_AGE_MONTHS=$DISK_AGE_MONTHS; AGE_SOURCE="макс. наработка накопителя"; elif ((OS_AGE_MONTHS>=0)); then SYSTEM_AGE_MONTHS=$OS_AGE_MONTHS; AGE_SOURCE="возраст текущей установки ОС"; fi
+if ((DISK_AGE_MONTHS>=0 && OS_AGE_MONTHS>=0)); then if ((DISK_AGE_MONTHS>=OS_AGE_MONTHS)); then SYSTEM_AGE_MONTHS=$DISK_AGE_MONTHS; AGE_SOURCE="$AGE_DISK_SOURCE"; else SYSTEM_AGE_MONTHS=$OS_AGE_MONTHS; AGE_SOURCE="возраст текущей установки ОС"; fi
+elif ((DISK_AGE_MONTHS>=0)); then SYSTEM_AGE_MONTHS=$DISK_AGE_MONTHS; AGE_SOURCE="$AGE_DISK_SOURCE"; elif ((OS_AGE_MONTHS>=0)); then SYSTEM_AGE_MONTHS=$OS_AGE_MONTHS; AGE_SOURCE="возраст текущей установки ОС"; fi
 SYSTEM_AGE_TEXT="Не определён"; ((SYSTEM_AGE_MONTHS>=0))&&SYSTEM_AGE_TEXT=$(awk -v m="$SYSTEM_AGE_MONTHS" 'BEGIN{printf "%.1f",m/12}')
 AGE_SCORE=90
 if ((SYSTEM_AGE_MONTHS>=0)); then if ((SYSTEM_AGE_MONTHS<=36)); then AGE_SCORE=100; elif ((SYSTEM_AGE_MONTHS<=48)); then AGE_SCORE=97; elif ((SYSTEM_AGE_MONTHS<=60)); then AGE_SCORE=93; elif ((SYSTEM_AGE_MONTHS<=72)); then AGE_SCORE=88; elif ((SYSTEM_AGE_MONTHS<=84)); then AGE_SCORE=82; elif ((SYSTEM_AGE_MONTHS<=96)); then AGE_SCORE=75; elif ((SYSTEM_AGE_MONTHS<=108)); then AGE_SCORE=68; elif ((SYSTEM_AGE_MONTHS<=120)); then AGE_SCORE=60; else AGE_SCORE=52; fi; fi
@@ -1808,8 +1896,12 @@ fi
 # Неизвестный SMART не превращается в "100/100" — группа исключается из среднего,
 # а полнота диагностики отдельно показывает ограничение.
 STORAGE_KNOWN=1
-if ! command -v smartctl >/dev/null 2>&1 && ((FIXED_DISKS>0)); then STORAGE_KNOWN=0; fi
-((SMART_UNKNOWN_COUNT>0))&&STORAGE_KNOWN=0
+if ((SYSTEM_DISK_COUNT>0)); then
+    if ! command -v smartctl >/dev/null 2>&1 || ((SYSTEM_SMART_UNKNOWN_COUNT>0)); then STORAGE_KNOWN=0; fi
+else
+    if ! command -v smartctl >/dev/null 2>&1 && ((FIXED_DISKS>0)); then STORAGE_KNOWN=0; fi
+    ((SMART_UNKNOWN_COUNT>0))&&STORAGE_KNOWN=0
+fi
 AGE_KNOWN=1; ((SYSTEM_AGE_MONTHS<0))&&AGE_KNOWN=0
 TOTAL_NUM=$((FS_SCORE*15 + STAB_SCORE*15 + MEM_SCORE*10 + CPU_SCORE*10 + NET_SCORE*5))
 TOTAL_DEN=55
@@ -1820,7 +1912,15 @@ TOTAL_SCORE=$(clamp_score "$TOTAL_SCORE")
 
 # -------------------- ПОЛНОТА --------------------
 CONFIDENCE=100; CONFIDENCE_NOTES=()
-if ! command -v smartctl >/dev/null 2>&1 && ((FIXED_DISKS>0)); then CONFIDENCE=$((CONFIDENCE-25)); CONFIDENCE_NOTES+=("нет smartctl"); elif ((SMART_UNKNOWN_COUNT>0)); then CONFIDENCE=$((CONFIDENCE-15)); CONFIDENCE_NOTES+=("SMART частично недоступен"); fi
+if ! command -v smartctl >/dev/null 2>&1 && ((FIXED_DISKS>0)); then
+    CONFIDENCE=$((CONFIDENCE-25)); CONFIDENCE_NOTES+=("нет smartctl для внутренних накопителей")
+elif ((SYSTEM_DISK_COUNT>0 && SYSTEM_SMART_UNKNOWN_COUNT>0)); then
+    CONFIDENCE=$((CONFIDENCE-15)); CONFIDENCE_NOTES+=("SMART системного накопителя недоступен")
+elif ((SYSTEM_DISK_COUNT==0 && SMART_UNKNOWN_COUNT>0)); then
+    CONFIDENCE=$((CONFIDENCE-15)); CONFIDENCE_NOTES+=("SMART внутренних накопителей частично недоступен")
+elif ((SMART_UNKNOWN_COUNT>0)); then
+    CONFIDENCE_NOTES+=("SMART части дополнительных накопителей недоступен (без штрафа полноты)")
+fi
 [ "$CPU_TEMP" = - ]&&{ CONFIDENCE=$((CONFIDENCE-5)); CONFIDENCE_NOTES+=("нет температуры CPU"); }
 ((SYSTEM_AGE_MONTHS<0))&&{ CONFIDENCE=$((CONFIDENCE-5)); CONFIDENCE_NOTES+=("нет возраста/наработки"); }
 ((JOURNAL_AVAILABLE==0))&&{ CONFIDENCE=$((CONFIDENCE-10)); CONFIDENCE_NOTES+=("journal недоступен"); }
@@ -1831,11 +1931,11 @@ if ! command -v smartctl >/dev/null 2>&1 && ((FIXED_DISKS>0)); then CONFIDENCE=$
 CONFIDENCE_NOTE="-"; ((${#CONFIDENCE_NOTES[@]}>0))&&CONFIDENCE_NOTE=$(printf '%s, ' "${CONFIDENCE_NOTES[@]}"); CONFIDENCE_NOTE=${CONFIDENCE_NOTE%, }
 
 if ((TOTAL_SCORE>=90)); then STATE="ОТЛИЧНОЕ"; elif ((TOTAL_SCORE>=80)); then STATE="ХОРОШЕЕ"; elif ((TOTAL_SCORE>=65)); then STATE="ТРЕБУЕТ ВНИМАНИЯ"; elif ((TOTAL_SCORE>=50)); then STATE="ПЛОХОЕ"; else STATE="КРИТИЧЕСКОЕ"; fi
-if ((ROOT_RO==1 || STORAGE_SCORE<30 || ROOT_USE>=98 || RAID_DEGRADED==1 || ECC_UE>0)); then STATE="КРИТИЧЕСКОЕ"; elif ((OOM_DETECTED==1 || HW_ERR_COUNT>0 || ROOT_USE>=95 || ACTIVE_NET==0)); then [ "$STATE" = "ОТЛИЧНОЕ" ]||[ "$STATE" = "ХОРОШЕЕ" ]&&STATE="ТРЕБУЕТ ВНИМАНИЯ"; fi
+if ((ROOT_RO==1 || (SYSTEM_DISK_COUNT>0 && SYSTEM_DISK_SCORE<30) || (SYSTEM_DISK_COUNT==0 && STORAGE_SCORE<30) || ROOT_USE>=98 || RAID_DEGRADED==1 || ECC_UE>0)); then STATE="КРИТИЧЕСКОЕ"; elif ((SECONDARY_CRITICAL==1 || OOM_DETECTED==1 || HW_ERR_COUNT>0 || ROOT_USE>=95 || ACTIVE_NET==0)); then [ "$STATE" = "ОТЛИЧНОЕ" ]||[ "$STATE" = "ХОРОШЕЕ" ]&&STATE="ТРЕБУЕТ ВНИМАНИЯ"; fi
 STATE_DISPLAY="$STATE"; ((CONFIDENCE<80))&&STATE_DISPLAY="ПРЕДВАРИТЕЛЬНО: $STATE"
 
 # -------------------- РЕКОМЕНДАЦИИ --------------------
-if ! command -v smartctl >/dev/null 2>&1 && ((FIXED_DISKS>0)); then add_rec "ПРОВЕРКА" "SMART накопителей не проверен" "Без SMART нельзя достоверно оценить износ SSD/NVMe и признаки деградации HDD." "Установить smartmontools и повторить диагностику." "dnf install smartmontools"; elif ((SMART_UNKNOWN_COUNT>0)); then add_rec "ПРОВЕРКА" "SMART частично недоступен" "Состояние части накопителей оценено не полностью." "Проверить контроллер/поддержку SMART." "smartctl --scan-open"; fi
+if ! command -v smartctl >/dev/null 2>&1 && ((FIXED_DISKS>0)); then add_rec "ПРОВЕРКА" "SMART внутренних накопителей не проверен" "Без SMART нельзя достоверно оценить системный SSD/NVMe/HDD." "Установить smartmontools и повторить диагностику." "dnf install smartmontools"; elif ((SYSTEM_SMART_UNKNOWN_COUNT>0)); then add_rec "ПРОВЕРКА" "SMART системного накопителя недоступен" "Основной накопитель АРМ оценён не полностью; съёмные носители на этот статус не влияют." "Проверить поддержку SMART системного устройства и повторить диагностику." "smartctl --scan-open"; elif ((SMART_UNKNOWN_COUNT>0)); then add_rec "ПРОВЕРКА" "SMART дополнительных накопителей частично недоступен" "Системный накопитель имеет приоритет; неполные данные относятся к дополнительным внутренним дискам." "При необходимости проверить дополнительные диски отдельно." "smartctl --scan-open"; fi
 if ((FS_WORST_USE>=FS_CRIT)); then add_rec "КРИТИЧНО" "ФС $FS_WORST_USE_MOUNT заполнена на ${FS_WORST_USE}%" "Может прекратиться запись журналов, временных файлов и работа служб." "Срочно освободить минимум 10–15% объёма." "du -xhd1 '$FS_WORST_USE_MOUNT' 2>/dev/null | sort -h"; elif ((FS_WORST_USE>=FS_HIGH)); then add_rec "ВНИМАНИЕ" "ФС $FS_WORST_USE_MOUNT заполнена на ${FS_WORST_USE}%" "Мало места для обновлений, журналов и рабочих файлов." "Освободить место до уровня ниже 80%." "du -xhd1 '$FS_WORST_USE_MOUNT' 2>/dev/null | sort -h"; elif ((FS_WORST_USE>=FS_WARN)); then add_rec "ПЛАНОВО" "ФС $FS_WORST_USE_MOUNT заполнена на ${FS_WORST_USE}%" "Снижается резерв свободного места." "Выполнить плановую очистку и держать заполнение ниже 80%." "df -h '$FS_WORST_USE_MOUNT'"; fi
 ((FS_WORST_INODE>=INODE_WARN))&&add_rec "ВНИМАНИЕ" "Inode на $FS_WORST_INODE_MOUNT использованы на ${FS_WORST_INODE}%" "При исчерпании inode новые файлы создать нельзя даже при наличии свободного места." "Найти каталоги с большим количеством мелких файлов и очистить ненужные кэши/временные данные." "df -i '$FS_WORST_INODE_MOUNT'"
 ((ROOT_RO==1))&&add_rec "КРИТИЧНО" "Корневая ФС смонтирована read-only" "Запись данных, обновления и часть служб могут не работать." "Проверить журнал ядра; fsck выполнять только на размонтированной ФС из rescue/live." "journalctl -k -b -p warning..alert"
@@ -2031,11 +2131,12 @@ section "ОПЦИОНАЛЬНЫЕ СЕРВИСЫ"
 } | table
 
 section "НАКОПИТЕЛИ"
-{ echo "Диск|Тип|Размер|Модель|Ресурс|SMART|°C|Часы"; if ((${#DISK_ROWS[@]})); then printf '%s\n' "${DISK_ROWS[@]}"; else echo "-|-|-|Не найдены|-|-|-|-"; fi; } | table
+echo "Системный накопитель: $SYSTEM_DISK_TEXT"
+{ echo "Диск|Роль|Тип|Размер|Модель|Ресурс|SMART|°C|Часы"; if ((${#DISK_ROWS[@]})); then printf '%s\n' "${DISK_ROWS[@]}"; else echo "-|-|-|-|Не найдены|-|-|-|-"; fi; } | table
 if ((${#DISK_SELFTEST_ROWS[@]}>0)); then echo; { echo "Диск|Последний SMART self-test"; printf '%s\n' "${DISK_SELFTEST_ROWS[@]}"; } | table; fi
 
 section "ФАЙЛОВЫЕ СИСТЕМЫ"
-{ echo "Корневой раздел|$ROOT_DEV"; echo "Размер / занято / свободно|$ROOT_SIZE / $ROOT_USED / $ROOT_FREE"; echo "Корень: место / inode|${ROOT_USE}% / ${ROOT_INODE_USE}%"; echo "Локальных ФС проверено|$LOCAL_FS_COUNT"; echo "Макс. заполнение|${FS_WORST_USE}% на $FS_WORST_USE_MOUNT"; echo "Использование inode|${FS_WORST_INODE}% на $FS_WORST_INODE_MOUNT"; } | table
+{ echo "Корневой раздел|$ROOT_DEV"; echo "Размер / занято / свободно|$ROOT_SIZE / $ROOT_USED / $ROOT_FREE"; echo "Корень: место / inode|${ROOT_USE}% / ${ROOT_INODE_USE}%"; echo "Локальных ФС проверено|$LOCAL_FS_COUNT"; echo "Съёмных ФС вне индекса|$REMOVABLE_FS_COUNT"; echo "Макс. заполнение|${FS_WORST_USE}% на $FS_WORST_USE_MOUNT"; echo "Использование inode|${FS_WORST_INODE}% на $FS_WORST_INODE_MOUNT"; } | table
 if ((${#LOCAL_FS_ROWS[@]}>1)); then echo; { echo "Точка|Место|Inode|Режим"; printf '%s\n' "${LOCAL_FS_ROWS[@]}"; } | table; fi
 
 section "СВОДКА СОСТОЯНИЯ"
@@ -2046,9 +2147,9 @@ AGE_SCORE_TEXT="$AGE_SCORE / 100"; ((AGE_KNOWN==0))&&AGE_SCORE_TEXT="Н/Д"
 { echo "Показатель|Состояние|Вес в индексе"; echo "Накопители / износ|$STORAGE_SCORE_TEXT|40%"; echo "Файловая система|$FS_SCORE / 100|15%"; echo "Стабильность ОС|$STAB_SCORE / 100|15%"; echo "Оперативная память|$MEM_SCORE / 100|10%"; echo "Процессор / температура|$CPU_SCORE / 100|10%"; echo "Возраст / наработка|$AGE_SCORE_TEXT|5%"; echo "Сеть|$NET_SCORE / 100|5%"; } | table
 
 section "КЛЮЧЕВЫЕ ПОКАЗАТЕЛИ"
-SMART_SUMMARY=OK; if ((FIXED_DISKS==0)); then SMART_SUMMARY="Н/Д"; elif ! command -v smartctl >/dev/null 2>&1; then SMART_SUMMARY="Н/Д (smartctl отсутствует)"; elif ((STORAGE_SCORE==0)); then SMART_SUMMARY=FAIL; elif ((SMART_UNKNOWN_COUNT>0)); then SMART_SUMMARY="Частично / Н/Д"; fi
+SMART_SUMMARY=OK; if ((FIXED_DISKS==0)); then SMART_SUMMARY="Н/Д"; elif ! command -v smartctl >/dev/null 2>&1; then SMART_SUMMARY="Н/Д (smartctl отсутствует)"; elif ((SYSTEM_DISK_COUNT>0 && SYSTEM_DISK_SCORE==0)); then SMART_SUMMARY=FAIL; elif ((SYSTEM_DISK_COUNT>0 && SYSTEM_SMART_UNKNOWN_COUNT>0)); then SMART_SUMMARY="Н/Д (системный)"; elif ((SYSTEM_DISK_COUNT==0 && SMART_UNKNOWN_COUNT>0)); then SMART_SUMMARY="Частично / Н/Д"; fi
 ((OOM_DETECTED==1))&&OOM_TEXT="ОБНАРУЖЕНО"||OOM_TEXT="Не обнаружено"
-{ echo "SMART накопителей|$SMART_SUMMARY"; echo "Файловые системы|макс. ${FS_WORST_USE}% на $FS_WORST_USE_MOUNT; inode ${FS_WORST_INODE}% на $FS_WORST_INODE_MOUNT"; echo "ОЗУ доступно|${MEM_AVAIL_PCT}%"; echo "Swap использовано|${SWAP_USED_PCT}%"; echo "Failed-служб|$FAILED_COUNT"; echo "Аппаратных/дисковых ошибок|$HW_ERR_COUNT"; if ((JOURNAL_AVAILABLE==1)); then echo "Уникальных journal error+|$JOURNAL_ERR_COUNT"; else echo "Journal текущей загрузки|Н/Д"; fi; echo "OOM за текущую загрузку|$OOM_TEXT"; echo "Синхронизация времени|$TIME_SYNC"; echo "Software RAID|$RAID_STATUS"; echo "ECC / EDAC|$ECC_STATUS"; [[ "$CPU_TEMP" =~ ^[0-9]+$ ]]&&echo "CPU температура|${CPU_TEMP}°C"; } | table
+{ echo "SMART системного накопителя|$SMART_SUMMARY"; echo "Съёмных накопителей вне индекса|$REMOVABLE_DISKS"; echo "Файловые системы|макс. ${FS_WORST_USE}% на $FS_WORST_USE_MOUNT; inode ${FS_WORST_INODE}% на $FS_WORST_INODE_MOUNT"; echo "ОЗУ доступно|${MEM_AVAIL_PCT}%"; echo "Swap использовано|${SWAP_USED_PCT}%"; echo "Failed-служб|$FAILED_COUNT"; echo "Аппаратных/дисковых ошибок|$HW_ERR_COUNT"; if ((JOURNAL_AVAILABLE==1)); then echo "Уникальных journal error+|$JOURNAL_ERR_COUNT"; else echo "Journal текущей загрузки|Н/Д"; fi; echo "OOM за текущую загрузку|$OOM_TEXT"; echo "Синхронизация времени|$TIME_SYNC"; echo "Software RAID|$RAID_STATUS"; echo "ECC / EDAC|$ECC_STATUS"; [[ "$CPU_TEMP" =~ ^[0-9]+$ ]]&&echo "CPU температура|${CPU_TEMP}°C"; } | table
 
 section "ЗАКЛЮЧЕНИЕ"
 echo "$CONCLUSION"
@@ -2096,8 +2197,8 @@ else
         "$([[ "$CPU_TEMP" =~ ^[0-9]+$ ]] && echo "$CPU_TEMP" || echo null)" "$CPU_SCORE"
     printf '  "memory": {"available_percent":%s,"swap_used_percent":%s,"oom_detected":%s,"score":%s},\n' \
         "$MEM_AVAIL_PCT" "$SWAP_USED_PCT" "$([ "$OOM_DETECTED" -eq 1 ] && echo true || echo false)" "$MEM_SCORE"
-    printf '  "storage": {"score":%s,"known":%s,"fixed_disks":%s,"smart_unknown":%s},\n' \
-        "$STORAGE_SCORE" "$([ "$STORAGE_KNOWN" -eq 1 ] && echo true || echo false)" "$FIXED_DISKS" "$SMART_UNKNOWN_COUNT"
+    printf '  "storage": {"score":%s,"known":%s,"system_disks":%s,"fixed_disks":%s,"secondary_fixed_disks":%s,"removable_disks":%s,"smart_unknown":%s,"system_smart_unknown":%s},\n' \
+        "$STORAGE_SCORE" "$([ "$STORAGE_KNOWN" -eq 1 ] && echo true || echo false)" "$SYSTEM_DISK_COUNT" "$FIXED_DISKS" "$SECONDARY_FIXED_DISKS" "$REMOVABLE_DISKS" "$SMART_UNKNOWN_COUNT" "$SYSTEM_SMART_UNKNOWN_COUNT"
     printf '  "filesystem": {"root_use_percent":%s,"max_use_percent":%s,"max_use_mount":"%s","max_inode_percent":%s,"score":%s},\n' \
         "$ROOT_USE" "$FS_WORST_USE" "$(json_escape "$FS_WORST_USE_MOUNT")" "$FS_WORST_INODE" "$FS_SCORE"
     printf '  "network": {"active_interfaces":%s,"gateway":"%s","dns":"%s","error_ppm":%s,"drop_ppm":%s,"score":%s},\n' \

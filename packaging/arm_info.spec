@@ -1,5 +1,5 @@
 Name:           arm-info
-Version:        1.2.2
+Version:        1.2.3
 Release:        1%{?dist}
 Summary:        Diagnostic utility for RED OS and compatible Linux workstations
 License:        MIT
@@ -39,6 +39,11 @@ install -Dm0644 %{SOURCE3} %{buildroot}%{_docdir}/%{name}/README.md
 %config(noreplace) %{_sysconfdir}/arm_info.conf
 
 %changelog
+* Wed Sep 16 2026 NewMishka - 1.2.3-1
+- Prioritize the physical system disk in storage health and completeness
+- Classify removable USB media separately and exclude them from score/SMART completeness
+- Exclude removable filesystems from max-fill/inode scoring
+
 * Wed Sep 16 2026 NewMishka - 1.2.2-1
 - Aligned and wrapped standard/enterprise recommendations
 - Corporate reports save by default with privacy-safe automatic filenames
