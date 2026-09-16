@@ -1,0 +1,39 @@
+name: Refine v1.2.2 reports
+
+on:
+  push:
+    branches:
+      - feature/v1.2.2-corp-report
+    paths:
+      - '.github/scripts/refine_v1_2_2_reports.py'
+      - '.github/workflows/refine-v1.2.2-reports.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  refine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v1.2.2-corp-report
+      - name: Apply report refinement
+        run: python3 .github/scripts/refine_v1_2_2_reports.py
+      - name: Validate
+        run: |
+          bash -n arm_info.sh
+          shellcheck --severity=error arm_info.sh
+          bash tests/test_cli.sh
+          bash tests/test_enterprise.sh
+          grep -q 'Температура CPU|${CPU_TEMP}°C (медиана)' arm_info.sh
+          grep -q -- '--no-save) SAVE_REPORT=0' arm_info.sh
+          grep -q 'ARM_INFO_CORP_' arm_info.sh
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add arm_info.sh README.md CHANGELOG.md docs/releases/v1.2.2.md
+          git diff --cached --quiet && exit 0
+          git commit -m 'fix: save and align reports in v1.2.2'
+          git push
