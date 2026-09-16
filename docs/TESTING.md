@@ -50,3 +50,7 @@ sudo bash arm_info.sh --profile software
 ## Storage priority 1.2.3
 
 Перед релизом дополнительно проверить: (1) обычный АРМ только с системным SSD/NVMe; (2) тот же АРМ с подключённой USB-флешкой; (3) LVM/device-mapper root. Подключение флешки не должно менять storage score/SMART completeness и `Макс. заполнение`; в таблице она должна иметь роль `Съёмный (вне индекса)`, а системный диск — `Системный`.
+
+## Дополнительный smoke-test 1.2.3: 802.1X
+
+На АРМ с активным 802.1X-профилем проверить `sudo bash arm_info.sh --profile network` и `sudo bash arm_info.sh --corp`. Для file-based PEM/DER сертификата отчёт должен показать путь/источник, Subject/Issuer, даты начала и окончания действия и остаток дней. Отдельно проверить phase2 certificate, если он используется. В privacy-режиме путь и Subject/Issuer не должны раскрываться.

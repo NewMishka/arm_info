@@ -87,3 +87,12 @@ grep -q 'ARM_INFO_CORP_' "$SCRIPT" || die "corporate automatic report name"
 grep -q 'split_rec_commands' "$SCRIPT" || die "corporate command splitter"
 grep -Fq 'done < <(split_rec_commands "$text")' "$SCRIPT" || die "corporate text commands must preserve pipelines"
 grep -Fq 'done < <(split_rec_commands "${REC_COMMANDS[i]}")' "$SCRIPT" || die "corporate JSON commands must preserve pipelines"
+
+# v1.2.3 corporate header and 802.1X certificate contract.
+grep -q "ARM_INFO КОРПОРАТИВНЫЙ" "$SCRIPT" || die "corporate Russian header"
+grep -q "Профиль: корпоративный" "$SCRIPT" || die "corporate profile label"
+grep -q 'nmcli -e no -g' "$SCRIPT" || die "802.1X nmcli unescaped certificate path"
+grep -q '802-1x.phase2-client-cert' "$SCRIPT" || die "802.1X phase2 client certificate"
+grep -q 'Начало действия —' "$SCRIPT" || die "802.1X notBefore output"
+grep -q 'Окончание действия —' "$SCRIPT" || die "802.1X notAfter output"
+grep -q 'openssl x509 -inform DER' "$SCRIPT" || die "802.1X DER certificate support"

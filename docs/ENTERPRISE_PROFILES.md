@@ -142,3 +142,7 @@ arm_info --compare arm-a.json arm-b.json --json
 Профили используют только уже установленные компоненты и не меняют конфигурацию. Максимальная полнота достигается при наличии `sssd-tools`, `adcli`, `krb5-workstation`, `bind-utils` (`dig`/`host`), `NetworkManager`, `openssl`, `cups-client`, `nc`/`nmap-ncat` и `python3` для `--compare`.
 
 Отсутствующая утилита не делает базовый `arm_info` неработоспособным: соответствующая проверка получает состояние `N/A`/`unknown`.
+
+## Отображение 802.1X сертификатов
+
+`network` и `enterprise` проверяют `802-1x.client-cert`, `802-1x.ca-cert`, `802-1x.phase2-client-cert` и `802-1x.phase2-ca-cert`. Для PEM/DER-файлов выводятся Subject/Issuer, дата начала, дата окончания и остаток срока. Значения `file://` читаются через `nmcli --escape no`; PKCS#11/blob фиксируются как источник без попытки интерактивного запроса PIN.
