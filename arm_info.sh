@@ -27,6 +27,7 @@ VERSION="1.2.2"
 PROFILE=""
 PRIVACY=0
 JSON_MODE=0
+SAVE_REPORT=1
 OUTPUT_PATH=""
 COMPARE_A=""
 COMPARE_B=""
@@ -40,8 +41,8 @@ arm_info enterprise profiles 1.2.2
   arm_info --profile network [--privacy] [--json] [-o FILE]
   arm_info --profile print [--privacy] [--json] [-o FILE]
   arm_info --profile software [--privacy] [--json] [-o FILE]
-  arm_info --corp [--privacy] [--json] [-o FILE]
-  arm_info --profile enterprise [--privacy] [--json] [-o FILE]
+  arm_info --corp [--privacy] [--json] [--no-save] [-o FILE]
+  arm_info --profile enterprise [--privacy] [--json] [--no-save] [-o FILE]
   arm_info --compare REPORT_A.json REPORT_B.json [--json] [-o FILE]
 
 Профили:
@@ -72,6 +73,7 @@ while (($#)); do
             COMPARE_A=$2; COMPARE_B=$3; shift 3 ;;
         --privacy) PRIVACY=1; shift ;;
         --json) JSON_MODE=1; shift ;;
+        --no-save) SAVE_REPORT=0; shift ;;
         -o|--output)
             [[ $# -ge 2 ]] || { echo "Ошибка: $1 требует путь" >&2; exit 64; }
             OUTPUT_PATH=$2; shift 2 ;;
@@ -102,7 +104,36 @@ if ((JSON_MODE==0)) && [[ -z $COMPARE_A ]] && [[ -t 1 ]]; then
     fi
 fi
 
-if [[ -n $OUTPUT_PATH ]]; then
+# Корпоративный профиль (--corp / --profile enterprise) по умолчанию сохраняет
+# отчёт так же, как стандартный анализ. Явный -o имеет приоритет; --no-save отключает запись.
+if [[ -z $COMPARE_A && $PROFILE == enterprise && -z $OUTPUT_PATH ]] && ((SAVE_REPORT==1)); then
+    CORP_EXT=txt
+    ((JSON_MODE==1)) && CORP_EXT=json
+    CORP_STAMP=$(date '+%Y%m%d_%H%M%S')
+    CORP_HOST=$(hostname -s 2>/dev/null || hostname 2>/dev/null || printf 'ARM')
+    CORP_HOST=$(printf '%s' "$CORP_HOST" | tr -c '[:alnum:]_.-' '_')
+    if ((PRIVACY)); then
+        CORP_NAME="ARM_INFO_CORP_PRIVATE_${CORP_STAMP}.${CORP_EXT}"
+    else
+        CORP_NAME="ARM_INFO_CORP_${CORP_HOST}_${CORP_STAMP}.${CORP_EXT}"
+    fi
+    CORP_DIR=$(pwd -P 2>/dev/null || printf '/tmp')
+    [[ -d $CORP_DIR && -w $CORP_DIR ]] || CORP_DIR=/tmp
+    OUTPUT_PATH="$CORP_DIR/$CORP_NAME"
+fi
+
+if [[ -n $OUTPUT_PATH ]] && ((SAVE_REPORT==1)); then
+    if [[ -d $OUTPUT_PATH ]]; then
+        # Для -o DIR используем то же имя, что и при автоматическом сохранении.
+        CORP_EXT=txt
+        ((JSON_MODE==1)) && CORP_EXT=json
+        CORP_STAMP=$(date '+%Y%m%d_%H%M%S')
+        CORP_HOST=$(hostname -s 2>/dev/null || hostname 2>/dev/null || printf 'ARM')
+        CORP_HOST=$(printf '%s' "$CORP_HOST" | tr -c '[:alnum:]_.-' '_')
+        if ((PRIVACY)); then CORP_NAME="ARM_INFO_CORP_PRIVATE_${CORP_STAMP}.${CORP_EXT}"
+        else CORP_NAME="ARM_INFO_CORP_${CORP_HOST}_${CORP_STAMP}.${CORP_EXT}"; fi
+        OUTPUT_PATH="${OUTPUT_PATH%/}/$CORP_NAME"
+    fi
     OUTDIR=$(dirname -- "$OUTPUT_PATH")
     [[ -d $OUTDIR && -w $OUTDIR ]] || { echo "Ошибка: каталог для отчёта недоступен: $OUTDIR" >&2; exit 73; }
     exec > >(tee "$OUTPUT_PATH")
@@ -823,6 +854,11 @@ emit_text() {
     printf 'Профиль: %s\n' "$PROFILE"
     printf 'Дата: %s\n' "$(date '+%d.%m.%Y %H:%M:%S')"
     ((PRIVACY)) && printf 'Privacy: включён\n'
+    if [[ -n $OUTPUT_PATH ]] && ((SAVE_REPORT==1)); then
+        printf 'Отчёт: %s\n' "$OUTPUT_PATH"
+    elif [[ $PROFILE == enterprise ]] && ((SAVE_REPORT==0)); then
+        printf 'Сохранение: отключено (--no-save)\n'
+    fi
 
     for i in "${!KEYS[@]}"; do
         if [[ ${SECTIONS[i]} != "$current" ]]; then
@@ -860,6 +896,9 @@ emit_text() {
             print_rec_commands "${REC_COMMANDS[i]}"
             print_rec_field 'Контроль результата:' "${REC_VERIFIES[i]}"
         done
+    fi
+    if [[ -n $OUTPUT_PATH ]] && ((SAVE_REPORT==1)); then
+        printf '\nОтчёт сохранён: %s\n' "$OUTPUT_PATH"
     fi
 }
 
@@ -966,6 +1005,13 @@ esac
 
 build_recommendations
 if ((JSON_MODE)); then emit_json; else emit_text; fi
+
+if [[ -n $OUTPUT_PATH ]] && ((SAVE_REPORT==1)); then
+    chmod 0644 "$OUTPUT_PATH" 2>/dev/null || true
+    if [[ "${SUDO_UID:-}" =~ ^[0-9]+$ && "${SUDO_GID:-}" =~ ^[0-9]+$ ]]; then
+        chown "$SUDO_UID:$SUDO_GID" "$OUTPUT_PATH" 2>/dev/null || true
+    fi
+fi
 
 if ((CRIT_COUNT>0)); then exit 2
 elif ((WARN_COUNT>0)); then exit 1
@@ -1092,7 +1138,11 @@ load_config "$CONFIG_FILE"
 # --privacy имеет приоритет над значением по умолчанию; если флаг не указан, применяем конфиг.
 if ((PRIVACY_MODE==0 && PRIVACY_DEFAULT==1)); then PRIVACY_MODE=1; fi
 
-WIDTH=92
+WIDTH=${COLUMNS:-}
+if [[ ! $WIDTH =~ ^[0-9]+$ ]] && command -v tput >/dev/null 2>&1; then WIDTH=$(tput cols 2>/dev/null || true); fi
+[[ $WIDTH =~ ^[0-9]+$ ]] || WIDTH=110
+((WIDTH<92)) && WIDTH=92
+((WIDTH>132)) && WIDTH=132
 line() { printf '%*s\n' "$WIDTH" '' | tr ' ' '-'; }
 section() { echo; echo "$1"; line; }
 table() {
@@ -1232,11 +1282,41 @@ add_rec() {
     REC_DIAGNOSTICS+=("$diagnostic"); REC_ACTIONS+=("$action"); REC_CHECKS+=("$command"); REC_VERIFICATIONS+=("$verification")
 }
 print_wrapped() {
-    local label="$1" text="$2" w=$((WIDTH-17)) first=1 ln
-    while IFS= read -r ln; do
-        if ((first)); then printf '   %-12s %s\n' "$label" "$ln"; first=0
-        else printf '   %-12s %s\n' '' "$ln"; fi
-    done < <(printf '%s\n' "$text" | fold -s -w "$w")
+    local label="$1" text="$2" indent=3 label_w=19 gap=1 value_w first=1 ln
+    value_w=$((WIDTH-indent-label_w-gap))
+    ((value_w<32)) && value_w=32
+    while IFS= read -r ln || [[ -n $ln ]]; do
+        if ((first)); then
+            printf '%*s%-*s %s\n' "$indent" '' "$label_w" "$label" "$ln"
+            first=0
+        else
+            printf '%*s%-*s %s\n' "$indent" '' "$label_w" '' "$ln"
+        fi
+    done < <(printf '%s\n' "$text" | fold -s -w "$value_w")
+    ((first==0)) || printf '%*s%s\n' "$indent" '' "$label"
+}
+
+base_command_description() {
+    local cmd=$1
+    case "$cmd" in
+        journalctl\ -k*) echo "покажет сообщения ядра текущей загрузки для поиска аппаратных, дисковых и драйверных ошибок" ;;
+        journalctl\ -b\ -p\ err..alert*) echo "покажет ошибки уровня error и выше за текущую загрузку" ;;
+        journalctl*) echo "покажет системный журнал, относящийся к диагностируемой проблеме" ;;
+        systemctl\ --failed*) echo "покажет службы systemd, завершившиеся с ошибкой" ;;
+        systemctl\ status*) echo "покажет состояние указанной службы и последние сообщения о её запуске" ;;
+        smartctl\ --scan-open*) echo "покажет накопители и способы доступа к SMART" ;;
+        smartctl*) echo "покажет SMART-состояние и диагностические атрибуты накопителя" ;;
+        dnf\ install\ smartmontools*) echo "установит smartmontools для чтения SMART накопителей" ;;
+        du\ -xhd1*) echo "покажет, какие каталоги занимают место в выбранной файловой системе" ;;
+        df\ -h*) echo "покажет заполнение файловой системы и доступное место" ;;
+        df\ -i*) echo "покажет использование inode файловой системы" ;;
+        ps\ aux*) echo "покажет процессы с сортировкой для поиска основных потребителей ресурсов" ;;
+        free\ -h*) echo "покажет использование ОЗУ и swap" ;;
+        timedatectl*) echo "покажет системное время и состояние синхронизации" ;;
+        mdadm*) echo "покажет состояние программного RAID" ;;
+        ip\ *) echo "покажет сетевые интерфейсы, адреса или маршруты" ;;
+        *) echo "покажет диагностические данные для проверки этой рекомендации" ;;
+    esac
 }
 run_smart() {
     if command -v timeout >/dev/null 2>&1; then timeout 8 smartctl "$@"; else smartctl "$@"; fi
@@ -1803,7 +1883,7 @@ section "ПРОЦЕССОР"
  echo "Ядер / потоков|$CORES / $THREADS"
  echo "Load 1 мин|$LOAD1"
  if [[ "$CPU_TEMP" =~ ^[0-9]+$ ]]; then
-     echo "Температура CPU|${CPU_TEMP}°C (медиана; максимум ${CPU_TEMP_MAX}°C)"
+     echo "Температура CPU|${CPU_TEMP}°C (медиана)"
  else
      echo "Температура CPU|Не определена"
  fi
@@ -1949,12 +2029,15 @@ else
  for LEVEL_WANTED in КРИТИЧНО ВНИМАНИЕ ПРОВЕРКА ПЛАНОВО; do
   for ((i=0;i<${#REC_TITLES[@]};i++)); do
    [ "${REC_LEVELS[$i]}" = "$LEVEL_WANTED" ]||continue
-   REC_NUM=$((REC_NUM+1)); echo; echo "$REC_NUM. [${REC_LEVELS[$i]}] ${REC_TITLES[$i]}"
+   REC_NUM=$((REC_NUM+1)); echo; print_wrapped "$REC_NUM. [${REC_LEVELS[$i]}]" "${REC_TITLES[$i]}"
    print_wrapped "Причины:" "${REC_CAUSES[$i]}"
    print_wrapped "Влияние:" "${REC_IMPACTS[$i]}"
    print_wrapped "Проверить:" "${REC_DIAGNOSTICS[$i]}"
    print_wrapped "Действие:" "${REC_ACTIONS[$i]}"
-   [ -n "${REC_CHECKS[$i]}" ]&&print_wrapped "Команда:" "${REC_CHECKS[$i]}"
+   if [ -n "${REC_CHECKS[$i]}" ]; then
+       _rec_cmd_desc=$(base_command_description "${REC_CHECKS[$i]}")
+       print_wrapped "Команда:" "${REC_CHECKS[$i]} ($_rec_cmd_desc)"
+   fi
    print_wrapped "Контроль:" "${REC_VERIFICATIONS[$i]}"
   done
  done
