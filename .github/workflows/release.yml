@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - VERSION
+      - arm_info.sh
+      - docs/releases/**
       - .github/workflows/release.yml
   workflow_dispatch:
 
@@ -18,39 +20,46 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Create historical v1.0.0 release when missing
-        env:
-          GH_TOKEN: ${{ github.token }}
+
+      - name: Validate release version
         run: |
-          if ! git rev-parse v1.0.0 >/dev/null 2>&1; then
-            git tag v1.0.0 e4dd80c3d483866fc9de62c141a319c44233c0cd
-            git push origin v1.0.0
-          fi
-          if ! gh release view v1.0.0 >/dev/null 2>&1; then
-            gh release create v1.0.0 --target e4dd80c3d483866fc9de62c141a319c44233c0cd --title "arm_info 1.0.0" --notes-file docs/releases/v1.0.0.md
-          fi
-      - name: Create or update current version release
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          test -n "$VERSION"
+          test "$VERSION" = "$(sed -n 's/^ARM_INFO_VERSION="\([^"]*\)"/\1/p' arm_info.sh | head -1)"
+          test "$VERSION" = "$(awk '/^Version:/{print $2; exit}' packaging/arm_info.spec)"
+          test -f "docs/releases/v${VERSION}.md"
+
+      - name: Build release assets
+        run: |
+          chmod 0755 arm_info.sh
+          sha256sum arm_info.sh > SHA256SUMS
+
+      - name: Create or update release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION=$(tr -d '[:space:]' < VERSION)
           TAG="v${VERSION}"
-          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
-            git tag "$TAG" "${GITHUB_SHA}"
+          NOTES="docs/releases/${TAG}.md"
+
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            TAG_SHA=$(git rev-list -n1 "$TAG")
+            if [[ "$TAG_SHA" != "$GITHUB_SHA" ]]; then
+              echo "Tag $TAG already points to $TAG_SHA, current commit is $GITHUB_SHA" >&2
+              exit 1
+            fi
+          else
+            git tag "$TAG" "$GITHUB_SHA"
             git push origin "$TAG"
           fi
-          NOTES="docs/releases/${TAG}.md"
-          ASSETS=(arm_info.sh)
-          [[ -f arm_info-enterprise.sh ]] && ASSETS+=(arm_info-enterprise.sh)
+
           if gh release view "$TAG" >/dev/null 2>&1; then
-            if [[ -f "$NOTES" ]]; then
-              gh release edit "$TAG" --title "arm_info ${VERSION}" --notes-file "$NOTES"
-            fi
-            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+            gh release edit "$TAG" --title "arm_info ${VERSION}" --notes-file "$NOTES"
+            gh release upload "$TAG" arm_info.sh SHA256SUMS --clobber
           else
-            if [[ -f "$NOTES" ]]; then
-              gh release create "$TAG" --target "${GITHUB_SHA}" --title "arm_info ${VERSION}" --notes-file "$NOTES" "${ASSETS[@]}"
-            else
-              gh release create "$TAG" --target "${GITHUB_SHA}" --title "arm_info ${VERSION}" --generate-notes "${ASSETS[@]}"
-            fi
+            gh release create "$TAG" \
+              --target "$GITHUB_SHA" \
+              --title "arm_info ${VERSION}" \
+              --notes-file "$NOTES" \
+              arm_info.sh SHA256SUMS
           fi
