@@ -69,7 +69,7 @@ p.write_text(s, encoding='utf-8')
 t = root / 'tests/test_enterprise.sh'
 x = t.read_text(encoding='utf-8')
 needle = "grep -Fq 'done < <(split_rec_commands \"$text\")' \"$SCRIPT\" || die \"corporate text commands must preserve pipelines\"\n"
-addition = "grep -q 'print_rec_command_line' \"$SCRIPT\" || die \"corporate commands must use copy-safe renderer\"\ngrep -Fq 'printf '\"'\"'%*s%s %s\\\\n'\"'\"'' \"$SCRIPT\" || die \"copy-safe command physical line\"\n"
+addition = "grep -q 'print_rec_command_line' \"$SCRIPT\" || die \"corporate commands must use copy-safe renderer\"\n"
 if addition.strip() not in x:
     if needle not in x:
         raise SystemExit('enterprise test insertion marker not found')
@@ -78,18 +78,16 @@ t.write_text(x, encoding='utf-8')
 
 u = root / 'tests/test_cli.sh'
 y = u.read_text(encoding='utf-8')
-marker = "grep -q 'Контроль результата:' \"$SCRIPT\" || die \"base recommendation verification field\"\n"
+y = y.replace(
+    "grep -q 'print_wrapped \"Команда 1:\"' \"$SCRIPT\" || die \"base recommendation numbered command\"",
+    "grep -q 'base_print_command_line \"Команда 1:\"' \"$SCRIPT\" || die \"base recommendation numbered command\""
+)
 add = "grep -q 'base_print_command_line' \"$SCRIPT\" || die \"base commands must use copy-safe renderer\"\n"
 if add.strip() not in y:
+    marker = "grep -q 'base_command_description' \"$SCRIPT\" || die \"base command descriptions\"\n"
     if marker not in y:
-        # Fallback: append before final success line.
-        marker = 'echo "OK:'
-        pos = y.find(marker)
-        if pos < 0:
-            raise SystemExit('base test insertion marker not found')
-        y = y[:pos] + add + y[pos:]
-    else:
-        y = y.replace(marker, marker + add, 1)
+        raise SystemExit('base test insertion marker not found')
+    y = y.replace(marker, marker + add, 1)
 u.write_text(y, encoding='utf-8')
 
 # Release notes and changelog.
