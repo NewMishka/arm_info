@@ -15,6 +15,10 @@
 - Команды, изменяющие состояние (`dnf install`, `cupsenable`, `cupsaccept`, `cancel`), получают явную пометку `ИЗМЕНЯЕТ СОСТОЯНИЕ`.
 - Каждая команда в текстовой рекомендации имеет отдельное описание ожидаемого результата.
 - Добавлен постоянный CI-тест `tests/test_recommendation_commands.sh` для защиты командного контракта.
+- Добавлен сквозной `tests/test_sections.sh`: проверяются все пользовательские разделы стандартного TXT, основные группы standard JSON и все секции корпоративных профилей `domain`, `network`, `print`, `software`, `enterprise`.
+- Аппаратно-зависимые пути дополнительно защищены regression guards для SMART, CPU temperature, removable storage/filesystems и корпоративных checker-функций.
+- Во время усиленного тестирования найден и исправлен оставшийся старый ярлык `Стабильность ОС` в сводной таблице; пользовательское название унифицировано как `Стабильность системы`.
+- Во время полевого pre-release теста найдено отсутствие helper `run_smart()`; helper восстановлен, а тесты теперь запрещают незаметное удаление SMART collection wrapper.
 
 ## 1.2.3 — 2026-09-16
 
@@ -43,69 +47,34 @@
 - Длинные значения, примечания и рекомендации переносятся по ширине терминала без разрушения структуры отчёта.
 - `--corp` и `--profile enterprise` по умолчанию сохраняют TXT/JSON-отчёт; `--no-save` отключает сохранение, `-o` принимает файл или каталог.
 - В privacy-режиме автоматически сформированное имя корпоративного отчёта не содержит hostname.
-- Стандартный отчёт получил выровненные рекомендации и аккуратный перенос длинного текста.
-- Команды в рекомендациях стандартного и корпоративного отчётов получают пояснение в скобках, что именно они покажут или изменят.
-- Корпоративные рекомендации сохраняют shell pipeline и `|` внутри регулярных выражений как части одной команды.
-- Температура CPU в стандартном отчёте отображается как медиана без одновременного вывода максимума.
-- Блок 802.1X показывает профиль, EAP, клиентский/CA-сертификат, даты действия, остаток срока и команду `openssl x509 -in "<CERT>" -noout -dates`.
-- Интерактивный корпоративный TXT-отчёт очищает экран перед выводом; JSON остаётся без управляющих последовательностей.
-- Release workflow приведён к single-file модели: публикуются `arm_info.sh` и `SHA256SUMS`, версия сверяется с `VERSION`, скриптом и RPM spec.
-- Документация, тестовые контракты и пример отчёта синхронизированы с поведением 1.2.2.
+- Корпоративные рекомендации сохраняют настоящие shell pipeline/regex pipes при разборе списка команд.
+- Стандартные рекомендации получили фиксированную сетку меток, выравнивание и пояснения к командам.
+- Температура CPU в стандартном отчёте отображается как `NN°C (медиана)` без одновременного показа максимума.
+- 802.1X дополнен EAP-методом, client/CA certificate, validity dates, remaining days и готовой командой `openssl x509`.
 
 ## 1.2.1 — 2026-09-15
 
 ### Changed
-- `arm_info.sh` стал полностью автономным: base + `domain/network/print/software/enterprise` + `--compare` находятся в одном файле.
-- Для запуска enterprise-профилей больше не требуется `arm_info-enterprise.sh` или каталог `libexec`.
-- Installer, RPM, CI, tests и GitHub Release переведены на однофайловую поставку.
-- Сценарий работы по SSH упрощён: на проверяемый АРМ достаточно передать один `arm_info.sh`.
-- Добавлен короткий ключ `--corp`, эквивалентный `--profile enterprise`.
-- Инвентаризация ПО не входит в `--corp`/`enterprise` и запускается только явно через `--profile software`.
+- Enterprise-профили полностью встроены в основной `arm_info.sh`; отдельный runtime-helper больше не нужен.
+- Установка и разовая передача на АРМ снова требуют только одного исполняемого файла.
+- `--profile domain|network|print|software|enterprise`, `--corp` и `--compare` работают из основного файла.
 
 ## 1.2.0 — 2026-09-15
 
 ### Added
-- Enterprise-профили `domain`, `network`, `print`, `software`, `enterprise`.
-- Проверка AD/SSSD/Kerberos, `adcli testjoin`, Kerberos ticket/cache, time sync и счётчиков ошибки Kerberos в SSSD journal.
-- Расширенная DNS-диагностика: источник `/etc/resolv.conf`, upstream DNS, DNS suffix/search, FQDN, LDAP/Kerberos SRV, TCP 88/389.
-- Проверка NetworkManager 802.1X и срока доступных CA/client certificates.
-- Проверка CIFS/GVFS/Caja с коротким timeout для потенциально зависших mounts.
-- Профиль CUPS: service/scheduler, default printer, paused/disabled queues, jobs, backend URI и journal warnings/errors.
-- Глобальная инвентаризация всех установленных RPM-пакетов без списка заранее заданного ПО.
-- `--compare` для сравнения двух JSON-отчётов АРМ.
-- Enterprise JSON schema v2 со стабильными ключами `checks[]`.
-- Документация `docs/ENTERPRISE_PROFILES.md` и отдельные CI tests.
-
-### Changed
-- Enterprise-профили формируют расширенные рекомендации с причинами, влиянием, проверками, действиями, командами и контролем результата; JSON содержит `recommendations[]`.
-- Установщик и RPM package устанавливают enterprise helper вместе с основной командой.
-- `arm_info.sh` делегирует `--profile` и `--compare` enterprise helper, сохраняя прежний запуск базовой диагностики.
-- Privacy mode расширен на доменные/enterprise-поля; printer URI очищается от встроенных учётных данных.
+- Профили `domain`, `network`, `print`, `software`, `enterprise`.
+- Проверки SSSD/AD/Kerberos/DNS, 802.1X, CIFS/GVFS, CUPS и software inventory.
+- JSON schema v2 для корпоративных профилей.
+- Сравнение двух корпоративных JSON-отчётов.
 
 ## 1.1.0 — 2026-09-15
 
 ### Added
-- Полноценный CLI (`--help`, `--version`, `--privacy`, `--no-save`, `--output`, `--quiet`, `--json`, `--config`).
-- JSON schema v1 для интеграций и автоматизации.
-- Обезличенный privacy-режим.
-- Конфигурационный файл порогов `/etc/arm_info.conf` с allow-list парсером.
-- Отдельные коды завершения `0/1/2/3/64`.
-- GitHub Actions CI, ShellCheck и базовые тесты CLI/JSON/privacy.
-- Makefile, installer/uninstaller и RPM spec/helper.
-- Документация по использованию, scoring, privacy, автоматизации, совместимости и тестированию.
-- `CONTRIBUTING.md`, `SECURITY.md`, шаблон issue и PR template.
-
-### Changed
-- Уточнена оценка памяти: swap не штрафует систему при достаточном `MemAvailable` без OOM.
-- Неизвестный SMART больше не трактуется как здоровое состояние накопителя; он снижает полноту проверки.
-- Расширена диагностика SMART/NVMe, self-test, RAID, ECC/EDAC, time sync, батареи, SSSD/Kerberos/CUPS.
-- Усилена privacy-обработка сетевых и доменных данных.
+- Технический индекс состояния и полнота диагностики.
+- SMART/NVMe, файловые системы, память, CPU, сеть, systemd/journal, RAID, ECC, батарея, SSSD/Kerberos/CUPS.
+- JSON/privacy/config/automation, installer и RPM packaging.
 
 ## 1.0.0 — 2026-09-15
 
-Первый публичный релиз `arm_info`.
-
-- Сбор сведений о системе, CPU, ОЗУ, сети, накопителях и файловых системах.
-- Расчёт объяснимого технического индекса.
-- Формирование рекомендаций по выявленным отклонениям.
-- MIT License.
+### Added
+- Первый рабочий Bash-скрипт инвентаризации и диагностики АРМ.
