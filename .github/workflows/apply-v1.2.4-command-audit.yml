@@ -35,6 +35,9 @@ jobs:
         run: |
           git config user.name NewMishka
           git config user.email '157384758+NewMishka@users.noreply.github.com'
+          # GitHub Actions token cannot modify workflow files. Keep CI unchanged in
+          # this generated commit; CI is updated separately through the connector.
+          git checkout HEAD -- .github/workflows/ci.yml
           git add -A
           if git diff --cached --quiet; then
             echo 'No changes to commit'
@@ -43,4 +46,4 @@ jobs:
           git commit -m 'arm_info 1.2.4: audit recommendation commands'
           git push origin HEAD:feature/v1.2.4-command-audit
 
-# rerun after Kerberos recommendation test fix
+# rerun with workflow mutation excluded from generated commit
