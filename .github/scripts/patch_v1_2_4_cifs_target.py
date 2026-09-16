@@ -9,20 +9,15 @@ enterprise_new = '''        findmnt\\ -rn\\ -t\\ cifs\\ -o\\ TARGET*) desc="ав
         findmnt\\ -t\\ cifs*) desc="покажет активные CIFS-точки монтирования, источник и параметры mount" ;;
         timeout*stat*) desc="проверит доступность конкретной точки монтирования без длительного зависания" ;;'''
 
-if text.count(enterprise_old) != 1:
-    raise SystemExit(f'enterprise command-description anchor count={text.count(enterprise_old)}')
+count = text.count(enterprise_old)
+if count != 1:
+    raise SystemExit(f'enterprise command-description anchor count={count}')
 text = text.replace(enterprise_old, enterprise_new, 1)
-
-base_extra = '        findmnt\\ -rn\\ -t\\ cifs\\ -o\\ TARGET*) desc="автоматически проверит каждый локальный TARGET CIFS через stat с таймаутом; SOURCE вида //server/share не используется" ;;\n'
-if text.count(base_extra) != 1:
-    raise SystemExit(f'base misplaced description count={text.count(base_extra)}')
-text = text.replace(base_extra, '', 1)
 
 required = [
     'findmnt -rn -t cifs -o TARGET | while IFS= read -r m;',
     'timeout 5 stat -f -- \\"\\$m\\"',
     'SOURCE вида //server/share в stat не использовать',
-    'findmnt\\ -rn\\ -t\\ cifs\\ -o\\ TARGET*) desc="автоматически проверит каждый локальный TARGET CIFS через stat с таймаутом; SOURCE вида //server/share не используется"',
 ]
 for token in required:
     if token not in text:
