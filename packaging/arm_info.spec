@@ -1,5 +1,5 @@
 Name:           arm-info
-Version:        1.2.1
+Version:        1.2.2
 Release:        1%{?dist}
 Summary:        Diagnostic utility for RED OS and compatible Linux workstations
 License:        MIT
@@ -39,6 +39,12 @@ install -Dm0644 %{SOURCE3} %{buildroot}%{_docdir}/%{name}/README.md
 %config(noreplace) %{_sysconfdir}/arm_info.conf
 
 %changelog
+* Wed Sep 16 2026 NewMishka - 1.2.2-1
+- Aligned and wrapped standard/enterprise recommendations
+- Corporate reports save by default with privacy-safe automatic filenames
+- Expanded 802.1X certificate diagnostics and command explanations
+- CPU temperature is presented as the median in the standard report
+
 * Tue Sep 15 2026 NewMishka - 1.2.1-1
 - Single-file distribution: enterprise profiles are embedded in arm_info
 

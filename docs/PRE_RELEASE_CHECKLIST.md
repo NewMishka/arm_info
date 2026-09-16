@@ -1,19 +1,25 @@
-# Pre-release checklist — v1.2.0
+# Pre-release checklist — arm_info 1.2.x
 
-Этот чек-лист используется перед публикацией релиза и не создаёт tag/release автоматически.
+Этот чек-лист используется перед публикацией релиза. Он не создаёт tag/release автоматически: публикация выполняется release workflow после попадания новой версии в `main` либо вручную через `workflow_dispatch`.
 
-- [ ] `bash -n` для основного скрипта, enterprise helper, installer, tests и RPM helper.
+- [ ] `bash -n` для `arm_info.sh`, installer, tests и RPM helper.
 - [ ] ShellCheck `--severity=error` без ошибок.
 - [ ] Базовые CLI/JSON/privacy tests.
 - [ ] Enterprise profiles/compare/recommendations tests.
-- [ ] Проверка синтаксиса на Ubuntu, Fedora и Rocky Linux.
-- [ ] Совпадение версии в `VERSION`, `arm_info.sh`, enterprise helper, RPM spec и README.
+- [ ] Проверка синтаксиса на Ubuntu 24.04, Fedora и Rocky Linux 9.
+- [ ] Совпадение версии в `VERSION`, `arm_info.sh`, RPM spec и README.
+- [ ] В репозитории отсутствует устаревший `arm_info-enterprise.sh`: enterprise-профили встроены в `arm_info.sh`.
 - [ ] Smoke test установки/удаления через `install.sh --destdir`.
 - [ ] RPM build smoke test и проверка состава пакета.
-- [ ] В helper нет списка конкретного корпоративного ПО и нет жёстко заданного списка кодов Kerberos.
-- [ ] Privacy mode не раскрывает hostname/IP/MAC/DNS/domain и credentials в printer URI.
-- [ ] Рекомендации для WARN/CRIT/N/A содержат причины, влияние, проверки, действия, команды и контроль результата.
+- [ ] В `arm_info.sh` нет списка конкретного корпоративного ПО и нет жёстко заданного списка кодов Kerberos.
+- [ ] Privacy mode не раскрывает hostname/IP/MAC/DNS/domain и credentials в printer URI; автоматическое имя privacy-отчёта не содержит hostname.
+- [ ] Стандартные рекомендации выровнены и содержат причины, влияние, проверки, действие, команду и контроль результата.
+- [ ] Enterprise-рекомендации содержат источник, причины, влияние, проверки, действия, команды и контроль результата; shell pipelines/regex с `|` не разрываются на отдельные команды.
+- [ ] `--corp` и `--profile enterprise` сохраняют TXT/JSON по умолчанию; `--no-save` отключает сохранение; `-o` работает для файла и каталога.
+- [ ] В стандартном отчёте температура CPU выводится как медиана без одновременного значения максимума.
+- [ ] README, CHANGELOG, `docs/USAGE.md`, `docs/AUTOMATION.md`, `docs/ENTERPRISE_PROFILES.md`, `docs/SCORING.md`, `docs/TESTING.md`, release notes и пример отчёта соответствуют текущему поведению.
+- [ ] В release workflow публикуется актуальный single-file asset `arm_info.sh` и checksum; устаревший enterprise-helper не прикладывается.
 - [ ] Проверка `main...feature` показывает `behind_by = 0` перед merge.
-- [ ] Runtime-проверка на реальном РЕД ОС 7.
-- [ ] Runtime-проверка на реальном РЕД ОС 8.
-- [ ] Только после подтверждения двух предыдущих пунктов — merge/tag/release.
+- [ ] Полный CI PR завершён со статусом success.
+- [ ] Runtime smoke-test выполнен на доступных целевых РЕД ОС; если одна из поддерживаемых веток РЕД ОС не проверена перед выпуском, это не должно описываться как подтверждённая runtime-совместимость.
+- [ ] После merge подтверждены tag, GitHub Release, release asset и checksum.

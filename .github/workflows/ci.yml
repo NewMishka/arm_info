@@ -48,6 +48,8 @@ jobs:
           test "$V" = "$(sed -n 's/^ARM_INFO_VERSION="\([^"]*\)"/\1/p' arm_info.sh | head -1)"
           test "$V" = "$(awk '/^Version:/{print $2; exit}' packaging/arm_info.spec)"
           grep -q "Текущая версия: \*\*$V\*\*" README.md
+          grep -q "^## $V" CHANGELOG.md
+          test -f "docs/releases/v${V}.md"
       - name: Installer smoke test
         run: |
           D=$(mktemp -d)
@@ -59,10 +61,23 @@ jobs:
           test ! -e "$D/usr/local/sbin/arm_info"
       - name: Single-file policy checks
         run: |
+          V=$(tr -d '[:space:]' < VERSION)
           test ! -e arm_info-enterprise.sh
-          grep -q 'enterprise-profile-dispatch-v1.2.1' arm_info.sh
+          grep -q "enterprise-profile-dispatch-v${V}" arm_info.sh
+          grep -q 'enterprise) check_domain; check_network; check_print ;;' arm_info.sh
           ! grep -Eiq '(r7|remmina|freerdp|icaclient|citrix|basis|workplace|bsscrypto|cryptopro|cprocsp|jacarta|snx)' arm_info.sh
           ! grep -Eq 'Kerberos 6/7/15|c6=|c7=|c15=' arm_info.sh
+      - name: Report and documentation contract
+        run: |
+          grep -Fq 'Температура CPU|${CPU_TEMP}°C (медиана)' arm_info.sh
+          ! grep -Fq '(медиана; максимум ${CPU_TEMP_MAX}°C)' arm_info.sh
+          grep -q 'ARM_INFO_CORP_PRIVATE_' arm_info.sh
+          grep -q 'split_rec_commands' arm_info.sh
+          grep -q 'для оценки и пользовательского отчёта используется медиана' docs/SCORING.md
+          grep -q -- '--corp --no-save' docs/USAGE.md
+          grep -q 'schema v2' docs/AUTOMATION.md
+          grep -q 'SHA256SUMS' .github/workflows/release.yml
+          grep -q 'SHA256SUMS' docs/releases/v$(tr -d '[:space:]' < VERSION).md
       - name: RPM build smoke test
         run: |
           docker run --rm -v "$PWD:/src:ro" fedora:latest bash -lc '
