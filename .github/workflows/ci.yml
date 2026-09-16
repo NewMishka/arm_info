@@ -59,8 +59,10 @@ jobs:
           test ! -e "$D/usr/local/sbin/arm_info"
       - name: Single-file policy checks
         run: |
+          V=$(tr -d '[:space:]' < VERSION)
           test ! -e arm_info-enterprise.sh
-          grep -q 'enterprise-profile-dispatch-v1.2.1' arm_info.sh
+          grep -q "enterprise-profile-dispatch-v${V}" arm_info.sh
+          grep -q 'enterprise) check_domain; check_network; check_print ;;' arm_info.sh
           ! grep -Eiq '(r7|remmina|freerdp|icaclient|citrix|basis|workplace|bsscrypto|cryptopro|cprocsp|jacarta|snx)' arm_info.sh
           ! grep -Eq 'Kerberos 6/7/15|c6=|c7=|c15=' arm_info.sh
       - name: RPM build smoke test
