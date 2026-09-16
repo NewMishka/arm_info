@@ -10,6 +10,7 @@ bash -n "$SCRIPT" || die "bash -n enterprise"
 [[ $(bash "$SCRIPT" --corp --version) == "arm_info enterprise $EXPECTED_VERSION" ]] || die "--corp version"
 bash "$SCRIPT" --profile domain --help | grep -q -- '--profile enterprise' || die "--help profiles"
 bash "$SCRIPT" --corp --help | grep -q -- '--corp' || die "--corp help"
+bash "$SCRIPT" --corp --help | grep -q -- '--no-save' || die "--corp no-save help"
 grep -q 'enterprise) check_domain; check_network; check_print ;;' "$SCRIPT" || die "enterprise profile must exclude software inventory"
 
 # No hard-coded application/vendor inventory and no hard-coded Kerberos error-code list.
@@ -75,8 +76,14 @@ set -e
 grep -q '^РЕКОМЕНДАЦИИ$' "$TXT" || die "recommendations structure"
 grep -Eq 'Возможные причины:|Дополнительных действий' "$TXT" || die "recommendations detail"
 
-# v1.2.2 text-report contract.
+# v1.2.2 text-report and saving contract.
 grep -q "print_check_row 'Параметр' 'Статус' 'Значение'" "$SCRIPT" || die "enterprise column header"
 grep -q 'openssl x509 -in' "$SCRIPT" || die "802.1X certificate date command"
 grep -q 'покажет даты начала и окончания действия сертификата' "$SCRIPT" || die "command explanations"
 grep -q 'JSON_MODE==0' "$SCRIPT" || die "interactive clear guard"
+grep -q 'SAVE_REPORT=1' "$SCRIPT" || die "corporate save default"
+grep -q -- '--no-save) SAVE_REPORT=0' "$SCRIPT" || die "corporate no-save switch"
+grep -q 'ARM_INFO_CORP_' "$SCRIPT" || die "corporate automatic report name"
+grep -q 'split_rec_commands' "$SCRIPT" || die "corporate command splitter"
+grep -Fq 'done < <(split_rec_commands "$text")' "$SCRIPT" || die "corporate text commands must preserve pipelines"
+grep -Fq 'done < <(split_rec_commands "${REC_COMMANDS[i]}")' "$SCRIPT" || die "corporate JSON commands must preserve pipelines"
