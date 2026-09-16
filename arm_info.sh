@@ -531,13 +531,22 @@ split_rec_commands() {
     [[ -n $current ]] && printf '%s\n' "$current"
 }
 
+print_rec_command_line() {
+    # Команда печатается одной физической строкой. Терминал может визуально
+    # перенести её по ширине окна, но в вывод не вставляется перевод строки,
+    # поэтому копирование длинной команды не разрывает shell pipeline/аргументы.
+    local label=$1 cmd=$2 desc=$3 indent=3 label_w=23
+    printf '%*s%s %s\n' "$indent" '' "$(pad_right "$label" "$label_w")" "$cmd"
+    print_rec_field '' "($desc)"
+}
+
 print_rec_commands() {
     local text=$1 cmd desc idx=0
     while IFS= read -r cmd; do
         [[ -n $cmd ]] || continue
         idx=$((idx+1))
         desc=$(command_description "$cmd")
-        print_rec_field "Команда $idx:" "$cmd ($desc)"
+        print_rec_command_line "Команда $idx:" "$cmd" "$desc"
     done < <(split_rec_commands "$text")
 }
 
@@ -1491,6 +1500,14 @@ print_wrapped() {
     ((first==0)) || printf '%*s%s\n' "$indent" '' "$label"
 }
 
+base_print_command_line() {
+    # Как и в корпоративном отчёте, команда остаётся одной физической строкой.
+    # Перенос выполняет только терминал визуально, что сохраняет копируемую строку.
+    local label=$1 cmd=$2 desc=$3 indent=3 label_w=23
+    printf '%*s%s %s\n' "$indent" '' "$(base_pad_right "$label" "$label_w")" "$cmd"
+    print_wrapped '' "($desc)"
+}
+
 base_command_description() {
     local cmd=$1
     case "$cmd" in
@@ -2332,7 +2349,7 @@ else
    print_wrapped "Действие:" "${REC_ACTIONS[$i]}"
    if [ -n "${REC_CHECKS[$i]}" ]; then
        _rec_cmd_desc=$(base_command_description "${REC_CHECKS[$i]}")
-       print_wrapped "Команда 1:" "${REC_CHECKS[$i]} ($_rec_cmd_desc)"
+       base_print_command_line "Команда 1:" "${REC_CHECKS[$i]}" "$_rec_cmd_desc"
    fi
    print_wrapped "Контроль результата:" "${REC_VERIFICATIONS[$i]}"
   done

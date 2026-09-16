@@ -89,6 +89,7 @@ grep -Fq 'nmcli -t -f UUID,TYPE connection show 2>/dev/null' "$SCRIPT" || die "8
 grep -q 'Сертификат АРМ (кандидат 802.1X)' "$SCRIPT" || die "802.1X host certificate fallback"
 grep -q 'Профили 802.1X' "$SCRIPT" || die "802.1X configured/active summary"
 grep -Fq 'done < <(split_rec_commands "$text")' "$SCRIPT" || die "corporate text commands must preserve pipelines"
+grep -q 'print_rec_command_line' "$SCRIPT" || die "corporate commands must use copy-safe renderer"
 grep -Fq 'done < <(split_rec_commands "${REC_COMMANDS[i]}")' "$SCRIPT" || die "corporate JSON commands must preserve pipelines"
 
 # v1.2.3 corporate header and 802.1X certificate contract.
