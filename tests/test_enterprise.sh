@@ -79,7 +79,7 @@ grep -Eq 'Возможные причины:|Дополнительных дей
 # v1.2.2 text-report and saving contract.
 grep -q "print_check_row 'Параметр' 'Статус' 'Значение'" "$SCRIPT" || die "enterprise column header"
 grep -q 'openssl x509 -in' "$SCRIPT" || die "802.1X certificate date command"
-grep -q 'покажет даты начала и окончания действия сертификата' "$SCRIPT" || die "command explanations"
+grep -q 'прочитает X.509-сертификат и покажет Subject, Issuer, начало и окончание срока действия' "$SCRIPT" || die "command explanations"
 grep -q 'JSON_MODE==0' "$SCRIPT" || die "interactive clear guard"
 grep -q 'SAVE_REPORT=1' "$SCRIPT" || die "corporate save default"
 grep -q -- '--no-save) SAVE_REPORT=0' "$SCRIPT" || die "corporate no-save switch"
