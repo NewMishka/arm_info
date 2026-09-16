@@ -1130,7 +1130,11 @@ check_network() {
 
             cifs_state=$CIFS_PROBE_STATE
             cifs_text=$(_cifs_state_text "$cifs_state")
-            cifs_detail="контекст: $cifs_context; multiuser: $cifs_multiuser"
+            if ((PRIVACY)); then
+                cifs_detail="контекст: скрыто; multiuser: $cifs_multiuser"
+            else
+                cifs_detail="контекст: $cifs_context; multiuser: $cifs_multiuser"
+            fi
             [[ -n $CIFS_PROBE_ERR ]] && cifs_detail="$cifs_detail; $CIFS_PROBE_ERR"
             case "$cifs_state" in
                 OK) cifs_ok=$((cifs_ok+1)); cifs_sev=ok ;;
