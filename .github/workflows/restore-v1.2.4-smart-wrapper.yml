@@ -1,0 +1,36 @@
+name: Restore v1.2.4 SMART wrapper
+
+on:
+  push:
+    branches: [feature/v1.2.4-command-audit]
+    paths:
+      - '.github/scripts/restore_v1_2_4_smart_wrapper.py'
+      - '.github/workflows/restore-v1.2.4-smart-wrapper.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v1.2.4-command-audit
+      - name: Restore SMART wrapper and guard
+        run: python3 .github/scripts/restore_v1_2_4_smart_wrapper.py
+      - name: Validate
+        run: |
+          bash -n arm_info.sh tests/test_cli.sh
+          bash tests/test_cli.sh
+      - name: Commit
+        run: |
+          git config user.name NewMishka
+          git config user.email '157384758+NewMishka@users.noreply.github.com'
+          git add arm_info.sh tests/test_cli.sh
+          if git diff --cached --quiet; then
+            echo 'No changes to commit'
+            exit 0
+          fi
+          git commit -m 'fix: restore SMART collection wrapper'
+          git push origin HEAD:feature/v1.2.4-command-audit
