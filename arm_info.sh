@@ -690,10 +690,12 @@ check_domain() {
 
 check_network() {
     local gw ifaces idx=0 row iface ip mac speed duplex link dns_domain cifs_count=0 cifs_bad=0 mnt src gvfs_count=0 gvfs_bad=0 g dir
-    local eap_count=0 cert_global_min=-1 cert_unknown=0 cert_seen=0 cert_index=0 system_ca_profiles=0 uuid type eap conn_name
+    local eap_count=0 active_eap_count=0 cert_global_min=-1 cert_unknown=0 cert_seen=0 cert_index=0 system_ca_profiles=0 uuid type eap conn_name
     local cert_spec cert_kind cert_field cert_label certref certpath cert_display cert_start cert_end start_fmt end_fmt end_epoch now days cert_cmd_path sev
     local cert_meta cert_subject cert_issuer cert_inform phase2_auth phase2_autheap system_ca ca_path private_key phase2_private_key
-    local client_ref phase2_client_ref proc_caja proc_gvfs
+    local client_ref phase2_client_ref probe_client probe_ca probe_p2_client probe_p2_ca probe_key probe_p2_key active_uuid_list profile_state
+    local fallback_cert_count=0 fallback_idx=0 fallback_fqdn fallback_short fallback_path fallback_meta fallback_start fallback_end fallback_start_fmt fallback_end_fmt fallback_end_epoch fallback_days
+    local proc_caja proc_gvfs
 
     gw=$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $3}')
     [[ -n $gw ]] && add_check "СЕТЬ" "network.gateway" "Шлюз" "$(mask_ipv4 "$gw")" ok || add_check "СЕТЬ" "network.gateway" "Шлюз" "не найден" warn
@@ -727,17 +729,29 @@ check_network() {
             printf '%s' "$v"
         }
 
+        active_uuid_list=$(nmcli -t -f UUID connection show --active 2>/dev/null || true)
         while IFS=: read -r uuid type; do
             [[ -n $uuid ]] || continue
             case "$type" in ethernet|802-11-wireless|wifi) ;; *) continue;; esac
             eap=$(nm_802_value 802-1x.eap "$uuid")
-            [[ -n $eap ]] || continue
+            probe_client=$(nm_802_value 802-1x.client-cert "$uuid")
+            probe_ca=$(nm_802_value 802-1x.ca-cert "$uuid")
+            probe_p2_client=$(nm_802_value 802-1x.phase2-client-cert "$uuid")
+            probe_p2_ca=$(nm_802_value 802-1x.phase2-ca-cert "$uuid")
+            probe_key=$(nm_802_value 802-1x.private-key "$uuid")
+            probe_p2_key=$(nm_802_value 802-1x.phase2-private-key "$uuid")
+            [[ -n $eap || -n $probe_client || -n $probe_ca || -n $probe_p2_client || -n $probe_p2_ca || -n $probe_key || -n $probe_p2_key ]] || continue
 
             eap_count=$((eap_count+1))
+            profile_state="настроен, не активен"
+            if grep -Fxq "$uuid" <<<"$active_uuid_list"; then
+                profile_state="активен"
+                active_eap_count=$((active_eap_count+1))
+            fi
             conn_name=$(nm_802_value connection.id "$uuid")
             if ((PRIVACY)); then conn_name="профиль $eap_count (скрыто)"; fi
-            add_check "802.1X" "network.8021x.profile.$eap_count" "Профиль 802.1X #$eap_count" "${conn_name:-$uuid}" info
-            add_check "802.1X" "network.8021x.eap.$eap_count" "EAP-метод" "$eap" info
+            add_check "802.1X" "network.8021x.profile.$eap_count" "Профиль 802.1X #$eap_count" "${conn_name:-$uuid}; $profile_state" info
+            add_check "802.1X" "network.8021x.eap.$eap_count" "EAP-метод" "${eap:-не указан}" info
 
             phase2_auth=$(nm_802_value 802-1x.phase2-auth "$uuid")
             phase2_autheap=$(nm_802_value 802-1x.phase2-autheap "$uuid")
@@ -865,7 +879,7 @@ check_network() {
             if [[ ($eap == *tls* || $phase2_auth == tls || $phase2_autheap == tls) && -z $client_ref && -z $phase2_client_ref && -z $private_key && -z $phase2_private_key ]]; then
                 add_check "802.1X" "network.8021x.client-cert.missing.$eap_count" "Клиентский сертификат" "для TLS не найден в профиле" warn
             fi
-        done < <(nmcli -t -f UUID,TYPE connection show --active 2>/dev/null)
+        done < <(nmcli -t -f UUID,TYPE connection show 2>/dev/null)
 
         if ((eap_count>0)); then
             if ((cert_global_min>=0)); then
@@ -874,19 +888,60 @@ check_network() {
                 elif ((cert_unknown>0)); then sev=warn
                 else sev=ok
                 fi
-                add_check "802.1X" "network.8021x" "Активные 802.1X" "$eap_count; минимальный остаток сертификата ${cert_global_min} дн.; непроверенных: $cert_unknown" "$sev"
+                add_check "802.1X" "network.8021x" "Профили 802.1X" "настроено: $eap_count; активных: $active_eap_count; минимальный остаток сертификата ${cert_global_min} дн.; непроверенных: $cert_unknown" "$sev"
             elif ((cert_seen>0)); then
-                add_check "802.1X" "network.8021x" "Активные 802.1X" "$eap_count; сертификаты найдены, но даты не определены; непроверенных: $cert_unknown" unknown
+                add_check "802.1X" "network.8021x" "Профили 802.1X" "настроено: $eap_count; активных: $active_eap_count; сертификаты найдены, но даты не определены; непроверенных: $cert_unknown" unknown
             elif ((system_ca_profiles>0)); then
-                add_check "802.1X" "network.8021x" "Активные 802.1X" "$eap_count; используется системное хранилище CA; отдельные сертификаты не заданы" info
+                add_check "802.1X" "network.8021x" "Профили 802.1X" "настроено: $eap_count; активных: $active_eap_count; используется системное хранилище CA; отдельные сертификаты не заданы" info
             else
-                add_check "802.1X" "network.8021x" "Активные 802.1X" "$eap_count; ссылки на сертификаты в активном профиле не обнаружены" unknown
+                add_check "802.1X" "network.8021x" "Профили 802.1X" "настроено: $eap_count; активных: $active_eap_count; ссылки на сертификаты не обнаружены" unknown
             fi
         else
-            add_check "802.1X" "network.8021x" "Активные 802.1X" "не обнаружены" info
+            add_check "802.1X" "network.8021x" "Профили 802.1X NetworkManager" "не обнаружены" info
         fi
     else
         add_check "802.1X" "network.8021x" "802.1X" "nmcli отсутствует" unknown
+    fi
+
+    # Дополнительный поиск сертификата АРМ. Нужен для РЕД ОС, где 802.1X может
+    # быть задан legacy ifcfg/wpa_supplicant/внешним механизмом, а nmcli не показывает
+    # 802-1x секцию активного профиля. Сертификат помечается как кандидат, пока связь
+    # с конкретным профилем не подтверждена.
+    if ((cert_seen==0)) && have openssl; then
+        fallback_fqdn=$(hostname -f 2>/dev/null || true)
+        fallback_short=$(hostname -s 2>/dev/null || hostname 2>/dev/null || true)
+        while IFS= read -r fallback_path; do
+            [[ -n $fallback_path && -r $fallback_path ]] || continue
+            fallback_meta=$(openssl x509 -in "$fallback_path" -noout -startdate -enddate -subject -issuer 2>/dev/null || true)
+            [[ $fallback_meta == *notAfter=* ]] || continue
+            fallback_cert_count=$((fallback_cert_count+1)); fallback_idx=$((fallback_idx+1))
+            cert_display=$fallback_path; ((PRIVACY)) && cert_display='<HOST_CERT_CANDIDATE>'
+            add_check "802.1X" "network.8021x.fallback.$fallback_idx.path" "Сертификат АРМ (кандидат 802.1X)" "$cert_display" info
+            fallback_start=$(printf '%s\n' "$fallback_meta" | sed -n 's/^notBefore=//p' | head -n1)
+            fallback_end=$(printf '%s\n' "$fallback_meta" | sed -n 's/^notAfter=//p' | head -n1)
+            fallback_start_fmt=$(date -d "$fallback_start" '+%d.%m.%Y %H:%M:%S %Z' 2>/dev/null || printf '%s' "$fallback_start")
+            fallback_end_fmt=$(date -d "$fallback_end" '+%d.%m.%Y %H:%M:%S %Z' 2>/dev/null || printf '%s' "$fallback_end")
+            fallback_end_epoch=$(date -d "$fallback_end" +%s 2>/dev/null || true); now=$(date +%s)
+            add_check "802.1X" "network.8021x.fallback.$fallback_idx.not_before" "Начало действия — сертификат АРМ" "$fallback_start_fmt" info
+            if [[ $fallback_end_epoch =~ ^[0-9]+$ ]]; then
+                fallback_days=$(((fallback_end_epoch-now)/86400))
+                if ((fallback_days<14)); then sev=crit; elif ((fallback_days<30)); then sev=warn; else sev=ok; fi
+                add_check "802.1X" "network.8021x.fallback.$fallback_idx.not_after" "Окончание действия — сертификат АРМ" "$fallback_end_fmt" "$sev"
+                add_check "802.1X" "network.8021x.fallback.$fallback_idx.remaining" "Осталось — сертификат АРМ" "${fallback_days} дн." "$sev"
+            else
+                add_check "802.1X" "network.8021x.fallback.$fallback_idx.not_after" "Окончание действия — сертификат АРМ" "$fallback_end_fmt" unknown
+            fi
+            cert_cmd_path=$fallback_path; ((PRIVACY)) && cert_cmd_path='<CERT>'
+            add_check "802.1X" "network.8021x.fallback.$fallback_idx.command" "Проверка срока" "openssl x509 -in \"$cert_cmd_path\" -noout -dates -subject -issuer" info
+        done < <({
+            [[ -n $fallback_fqdn ]] && printf '%s\n' "/etc/pki/tls/${fallback_fqdn}.pem" "/etc/pki/tls/certs/${fallback_fqdn}.pem"
+            if [[ -n $fallback_short && -d /etc/pki/tls ]]; then
+                find /etc/pki/tls /etc/pki/tls/certs -maxdepth 1 -type f -iname "${fallback_short}*.pem" 2>/dev/null
+            fi
+        } | awk '!seen[$0]++' | head -n5)
+        if ((fallback_cert_count>0)); then
+            add_check "802.1X" "network.8021x.fallback.source" "Источник сертификата 802.1X" "профиль NetworkManager не подтвердил сертификат; найден host-named сертификат АРМ" unknown
+        fi
     fi
 
     if have findmnt; then
@@ -1651,17 +1706,17 @@ ROOT_BLOCK="$ROOT_DEV"
 if [[ "$ROOT_BLOCK" == /dev/* ]]; then ROOT_BLOCK=$(readlink -f "$ROOT_BLOCK" 2>/dev/null || printf '%s' "$ROOT_BLOCK"); fi
 SYSTEM_DISKS=""
 if command -v lsblk >/dev/null 2>&1 && [[ "$ROOT_BLOCK" == /dev/* ]]; then
-    SYSTEM_DISKS=$(lsblk -sno NAME,TYPE "$ROOT_BLOCK" 2>/dev/null | awk '$2=="disk"{print $1}' | sort -u)
+    SYSTEM_DISKS=$(lsblk -srno NAME,TYPE "$ROOT_BLOCK" 2>/dev/null | awk '$2=="disk"{print $1}' | sort -u)
 fi
 if [[ -z "$SYSTEM_DISKS" ]] && command -v lsblk >/dev/null 2>&1; then
     ROOT_MAJMIN=$(findmnt -no MAJ:MIN / 2>/dev/null || true)
     if [[ -n "$ROOT_MAJMIN" ]]; then
         ROOT_NODE=$(lsblk -rno NAME,TYPE,MAJ:MIN 2>/dev/null | awk -v mm="$ROOT_MAJMIN" '$3==mm{print "/dev/"$1; exit}')
-        [[ -n "$ROOT_NODE" ]] && SYSTEM_DISKS=$(lsblk -sno NAME,TYPE "$ROOT_NODE" 2>/dev/null | awk '$2=="disk"{print $1}' | sort -u)
+        [[ -n "$ROOT_NODE" ]] && SYSTEM_DISKS=$(lsblk -srno NAME,TYPE "$ROOT_NODE" 2>/dev/null | awk '$2=="disk"{print $1}' | sort -u)
     fi
 fi
-SYSTEM_DISK_TEXT=$(printf '%s
-' "$SYSTEM_DISKS" | sed '/^$/d' | paste -sd ',' -)
+SYSTEM_DISKS=$(printf '%s\n' "$SYSTEM_DISKS" | sed -E 's/^[^[:alnum:]_./-]+//' | sed '/^$/d' | sort -u)
+SYSTEM_DISK_TEXT=$(printf '%s\n' "$SYSTEM_DISKS" | sed '/^$/d' | paste -sd ',' -)
 [ -z "$SYSTEM_DISK_TEXT" ] && SYSTEM_DISK_TEXT="Не определён"
 
 is_system_disk() {
@@ -1807,7 +1862,7 @@ DISK_ROWS=(); DISK_SYSTEM_ROWS=(); DISK_FIXED_ROWS=(); DISK_REMOVABLE_ROWS=(); D
 while read -r NAME TYPE SIZE ROTA MODEL; do
     case "$TYPE" in disk|rom) ;; *) continue ;; esac
     DEV="/dev/$NAME"; MODEL=$(echo "$MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'); [ -z "$MODEL" ]&&MODEL="-"; [ "${#MODEL}" -gt 28 ]&&MODEL="${MODEL:0:27}…"
-    if [[ "$TYPE" = rom || "$NAME" = sr* ]]; then DISK_OPTICAL_ROWS+=("$NAME|Оптический|CD/DVD||$MODEL|-|-|-|-"); continue; fi
+    if [[ "$TYPE" = rom || "$NAME" = sr* ]]; then DISK_OPTICAL_ROWS+=("$NAME|Оптический (вне индекса)|CD/DVD||$MODEL|-|-|-|-"); continue; fi
     TRAN=$(lsblk -dn -o TRAN "$DEV" 2>/dev/null | tr -d '[:space:]')
     if is_system_disk "$NAME"; then
         DISK_ROLE="Системный"; SYSTEM_DISK_COUNT=$((SYSTEM_DISK_COUNT+1))
