@@ -15,14 +15,21 @@ grep -q 'UNIT_NAME' "$SCRIPT" || fail 'systemd unit placeholder missing'
 grep -q 'DEVICE_PATH' "$SCRIPT" || fail 'device placeholder missing'
 grep -q 'USER_NAME' "$SCRIPT" || fail 'user-context placeholder missing'
 
-grep -Fq 'findmnt -n -l -t cifs -o TARGET | while IFS= read -r m;' "$SCRIPT" || fail 'automatic CIFS TARGET loop missing'
-grep -Fq 'timeout 5 find \"\$m\" -mindepth 1 -maxdepth 1 -print -quit' "$SCRIPT" || fail 'CIFS TARGET directory-read timeout missing'
-grep -Fq 'SOURCE вида //server/share как локальный путь не использовать' "$SCRIPT" || fail 'CIFS TARGET/SOURCE guidance missing'
+# CIFS recommendation/runtime contract. The recommendation no longer duplicates
+# the production probe as a large shell loop: arm_info itself performs the
+# user-aware full readdir + metadata lookup and reports each SOURCE → TARGET.
+grep -Fq 'findmnt -t cifs -o TARGET,SOURCE,OPTIONS' "$SCRIPT" || fail 'CIFS mount listing recommendation missing'
+grep -Fq 'полный readdir каталога под timeout и stat одного элемента' "$SCRIPT" || fail 'hardened CIFS guidance missing'
+grep -Fq '_cifs_desktop_user()' "$SCRIPT" || fail 'CIFS GUI-user context helper missing'
+grep -Fq 'timeout 6 ls -U -A -1 -- "$mnt"' "$SCRIPT" || fail 'CIFS full-directory readdir probe missing'
+grep -Fq 'timeout 6 stat -L -- "$sample"' "$SCRIPT" || fail 'CIFS sample metadata probe missing'
+grep -Fq 'network.cifs.mount.$cifs_count' "$SCRIPT" || fail 'per-share CIFS report row missing'
+grep -Fq 'cifs_detail="контекст: скрыто; multiuser: $cifs_multiuser"' "$SCRIPT" || fail 'CIFS privacy context masking missing'
 ! grep -Fq "timeout 5 stat -f 'MOUNT_PATH'" "$SCRIPT" || fail 'manual CIFS MOUNT_PATH recommendation remains'
 ! grep -Fq 'findmnt -rn -t cifs -o TARGET' "$SCRIPT" || fail 'CIFS raw findmnt mode would hex-escape non-ASCII TARGETs'
 ! grep -Fq "findmnt -n -l -t cifs -o TARGET,SOURCE 2>/dev/null | awk" "$SCRIPT" || fail 'CIFS checker must not split TARGET/SOURCE on whitespace'
 ! grep -Fq 'run_timeout 4 stat -f "$mnt"' "$SCRIPT" || fail 'metadata-only CIFS availability probe remains'
-grep -Fq 'run_timeout 5 find "$mnt" -mindepth 1 -maxdepth 1 -print -quit' "$SCRIPT" || fail 'runtime CIFS directory-read probe missing'
+! grep -Fq 'run_timeout 5 find "$mnt" -mindepth 1 -maxdepth 1 -print -quit' "$SCRIPT" || fail 'old first-entry-only CIFS probe remains'
 
 ! grep -Fq 'nmcli -f NAME,IP4.DOMAIN,IP4.DNS connection show --active' "$SCRIPT" || fail 'invalid nmcli active-list fields remain'
 ! grep -Fq 'nmcli -f NAME,TYPE,802-1x.eap,802-1x.ca-cert,802-1x.client-cert connection show' "$SCRIPT" || fail 'invalid nmcli 802.1X list fields remain'
@@ -41,7 +48,7 @@ commands=(
   "openssl x509 -in \"CERT_PATH\" -noout -subject -issuer -dates"
   "timeout 5 nc -vz DC_FQDN 88"
   "findmnt -t cifs -o TARGET,SOURCE,OPTIONS"
-  "findmnt -n -l -t cifs -o TARGET | while IFS= read -r m; do printf '=== %s ===\\n' \"\$m\"; if timeout 5 find \"\$m\" -mindepth 1 -maxdepth 1 -print -quit >/dev/null 2>&1; then printf 'OK: каталог читается\\n'; else printf 'ОШИБКА/ТАЙМАУТ: %s\\n' \"\$m\"; fi; done"
+  "sudo -u 'USER_NAME' klist -A"
   "lpstat -W not-completed -o"
   "dnf provides '/usr/bin/lpstat'"
   "systemctl status UNIT_NAME --no-pager -l"
