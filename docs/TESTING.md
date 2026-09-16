@@ -12,13 +12,16 @@ make test
 
 ## Что проверяют локальные тесты
 
-`make check` сначала сверяет `VERSION` с `ARM_INFO_VERSION` в `arm_info.sh` и `Version:` в RPM spec, затем выполняет Bash syntax check для основного single-file скрипта, installer, CLI/корпоративных tests, recommendation-command test и RPM helper. При наличии ShellCheck запускается `shellcheck --severity=error`.
+`make check` сначала сверяет `VERSION` с `ARM_INFO_VERSION` в `arm_info.sh` и `Version:` в RPM spec, затем выполняет Bash syntax check для основного single-file скрипта, installer, CLI/корпоративных tests, recommendation-command test, полного теста разделов отчёта и RPM helper. При наличии ShellCheck запускается `shellcheck --severity=error`.
 
 `make test` дополнительно запускает:
 
 - `tests/test_cli.sh` — версия, CLI, standard JSON schema v1, privacy и контракт стандартных рекомендаций;
 - `tests/test_enterprise.sh` — корпоративный CLI, schema v2, privacy, `--compare`, single-file policy и контракт корпоративного отчёта;
-- `tests/test_recommendation_commands.sh` — статический аудит рекомендуемых команд: безопасные placeholder-токены, отсутствие известных некорректных форм, синтаксис representative commands и обязательная маркировка state-changing действий.
+- `tests/test_recommendation_commands.sh` — статический аудит рекомендуемых команд: безопасные placeholder-токены, отсутствие известных некорректных форм, синтаксис representative commands и обязательная маркировка state-changing действий;
+- `tests/test_sections.sh` — сквозной контроль всех пользовательских разделов стандартного TXT, всех основных групп standard JSON, всех секций профилей `domain/network/print/software/enterprise`, корпоративного TXT и критичных helper-контрактов SMART/CPU/ФС/корпоративных проверок.
+
+`tests/test_sections.sh` специально не ограничивается проверкой наличия функций в исходнике: он запускает отчёты и проверяет, что разделы действительно доходят до пользовательского TXT/JSON. Для аппаратно-зависимых ветвей, которые нельзя гарантированно воспроизвести на GitHub runner (SMART реального NVMe, датчики CPU и т. п.), дополнительно используются статические regression guards на путь сбора данных. Это не заменяет полевой тест РЕД ОС, но не позволяет незаметно удалить критичный helper, как произошло с `run_smart()` в pre-release 1.2.4.
 
 ## CI
 
@@ -29,6 +32,7 @@ CI проверяет:
 - базовые CLI/JSON/privacy tests;
 - корпоративные profiles/compare/recommendations tests;
 - recommendation-command audit tests;
+- полный тест разделов отчёта `tests/test_sections.sh`;
 - Bash syntax в Ubuntu 24.04, Fedora и Rocky Linux 9;
 - согласованность версии `VERSION` / `arm_info.sh` / RPM spec / `make version` / README;
 - smoke-test установки/удаления через `install.sh --destdir`;
