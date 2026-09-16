@@ -1,0 +1,38 @@
+name: Apply v1.2.2 corporate report patch
+
+on:
+  push:
+    branches:
+      - feature/v1.2.2-corp-report
+    paths:
+      - .github/scripts/apply_v1_2_2_patch.py
+      - .github/workflows/apply-v1.2.2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v1.2.2-corp-report
+      - name: Apply patch
+        run: python3 .github/scripts/apply_v1_2_2_patch.py
+      - name: Validate syntax and tests
+        run: |
+          bash -n arm_info.sh
+          bash tests/test_cli.sh
+          bash tests/test_enterprise.sh
+      - name: Commit generated changes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add arm_info.sh VERSION packaging/arm_info.spec README.md CHANGELOG.md docs/ENTERPRISE_PROFILES.md docs/releases/v1.2.2.md tests/test_enterprise.sh
+          if git diff --cached --quiet; then
+            echo 'No generated changes'
+            exit 0
+          fi
+          git commit -m 'feat: improve corporate report formatting in v1.2.2'
+          git push
