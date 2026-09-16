@@ -4,7 +4,7 @@ set -o pipefail
 
 # Полевой read-only probe для стабилизации CIFS в arm_info 1.2.4.
 # Ничего не монтирует/размонтирует и не меняет Kerberos/CIFS credentials.
-# Цель: отличить реальный timeout ресурса от ошибки пользовательского контекста
+# Цель: отличить реальный timeout/metadata failure ресурса от ошибки пользовательского контекста
 # на sec=krb5,multiuser и зафиксировать причину без ложного «зависла».
 
 TIMEOUT_SEC=${CIFS_PROBE_TIMEOUT:-5}
@@ -51,8 +51,8 @@ run_probe() {
     PROBE_RC=125
     PROBE_ERR=''
 
-    if ! have timeout || ! have find; then
-        PROBE_ERR='timeout/find отсутствует — безопасная проверка не выполнена'
+    if ! have timeout || ! have ls || ! have find || ! have stat; then
+        PROBE_ERR='timeout/ls/find/stat отсутствует — безопасная проверка не выполнена'
         return 0
     fi
 
@@ -61,26 +61,34 @@ run_probe() {
         return 0
     }
 
+    local -a prefix=()
+    local samplefile sample
     if [[ -n $as_user ]]; then
-        if have runuser; then
-            runuser -u "$as_user" -- env LC_ALL=C timeout "$TIMEOUT_SEC" \
-                find "$mnt" -mindepth 1 -maxdepth 1 -print -quit \
-                >/dev/null 2>"$errfile"
-            PROBE_RC=$?
-        elif have sudo; then
-            sudo -n -u "$as_user" -- env LC_ALL=C timeout "$TIMEOUT_SEC" \
-                find "$mnt" -mindepth 1 -maxdepth 1 -print -quit \
-                >/dev/null 2>"$errfile"
-            PROBE_RC=$?
+        if have runuser; then prefix=(runuser -u "$as_user" --)
+        elif have sudo; then prefix=(sudo -n -u "$as_user" --)
         else
             PROBE_RC=125
             printf '%s\n' 'runuser/sudo отсутствует — нет безопасного способа сменить UID' >"$errfile"
+            PROBE_ERR=$(cat "$errfile")
+            rm -f -- "$errfile"
+            return 0
         fi
-    else
-        env LC_ALL=C timeout "$TIMEOUT_SEC" \
-            find "$mnt" -mindepth 1 -maxdepth 1 -print -quit \
-            >/dev/null 2>"$errfile"
+    fi
+
+    "${prefix[@]}" env LC_ALL=C timeout "$TIMEOUT_SEC" ls -U -A -1 -- "$mnt" >/dev/null 2>"$errfile"
+    PROBE_RC=$?
+    if ((PROBE_RC == 0)); then
+        samplefile=$(mktemp)
+        : >"$errfile"
+        "${prefix[@]}" env LC_ALL=C timeout "$TIMEOUT_SEC" find "$mnt" -mindepth 1 -maxdepth 1 -print -quit >"$samplefile" 2>"$errfile"
         PROBE_RC=$?
+        IFS= read -r sample <"$samplefile" || sample=''
+        rm -f -- "$samplefile"
+        if ((PROBE_RC == 0)) && [[ -n $sample ]]; then
+            : >"$errfile"
+            "${prefix[@]}" env LC_ALL=C timeout "$TIMEOUT_SEC" stat -L -- "$sample" >/dev/null 2>"$errfile"
+            PROBE_RC=$?
+        fi
     fi
 
     PROBE_ERR=$(tr '\n' ' ' <"$errfile" | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//' | cut -c1-240)

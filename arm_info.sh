@@ -298,12 +298,12 @@ recommendation_for() {
             REC_ACTION="Заранее обновить истекающий сертификат или исправить профиль 802.1X согласно политике организации."
             REC_COMMAND="nmcli -f NAME,UUID,TYPE connection show|nmcli connection show 'PROFILE_NAME' | grep -E '^802-1x\.(eap|identity|ca-cert|client-cert|phase2-ca-cert|phase2-client-cert|private-key|system-ca-certs):'|openssl x509 -in \"CERT_PATH\" -noout -subject -issuer -dates|journalctl -u NetworkManager -b --no-pager | grep -Ei '802.1x|eap|supplicant|certificate' | tail -120"
             ;;
-        network.cifs)
-            REC_CAUSE="Один или несколько CIFS mount не отвечают в короткий timeout. Возможны недоступная шара, сеть, Kerberos/учётные данные или зависший mount."
-            REC_IMPACT="Caja/приложения могут зависать при открытии, сохранении, удалении и обходе каталогов."
-            REC_CHECK="Определить локальные TARGET всех CIFS mount без raw-режима findmnt, затем выполнить минимальное фактическое чтение каждого каталога с timeout. Это выявляет ресурс, который смонтирован, но не открывается. SOURCE вида //server/share как локальный путь не использовать."
-            REC_ACTION="Устранить сетевую/аутентификационную причину; зависший mount размонтировать только после проверки открытых файлов и процессов."
-            REC_COMMAND="findmnt -t cifs -o TARGET,SOURCE,OPTIONS|findmnt -n -l -t cifs -o TARGET | while IFS= read -r m; do printf '=== %s ===\n' \"\$m\"; if timeout 5 find \"\$m\" -mindepth 1 -maxdepth 1 -print -quit >/dev/null 2>&1; then printf 'OK: каталог читается\n'; else printf 'ОШИБКА/ТАЙМАУТ: %s\n' \"\$m\"; fi; done|journalctl -k -b --no-pager | grep -Ei 'cifs|smb' | tail -120|sudo -u 'USER_NAME' klist -A"
+        network.cifs|network.cifs.mount.*)
+            REC_CAUSE="CIFS смонтирован, но фактическое чтение каталога или metadata lookup завершились ошибкой/тайм-аутом. Для sec=krb5,multiuser результат проверяется в контексте активного локального GUI-пользователя, а не root."
+            REC_IMPACT="Caja/приложения могут зависать либо не открывать конкретную шару, даже если mount формально присутствует."
+            REC_CHECK="Сопоставить SOURCE → TARGET и статус конкретного SMB-ресурса. Проверка выполняет полный readdir каталога под timeout и stat одного элемента, поэтому она не ограничивается первым cached dentry."
+            REC_ACTION="Устранить фактическую сетевую, Kerberos/credential или I/O-причину. Размонтирование выполнять только после проверки открытых файлов и процессов."
+            REC_COMMAND="findmnt -t cifs -o TARGET,SOURCE,OPTIONS|journalctl -k -b --no-pager | grep -Ei 'cifs|smb' | tail -120|sudo -u 'USER_NAME' klist -A"
             ;;
         network.gvfs)
             REC_CAUSE="Один или несколько GVFS mount не отвечают. Возможны недоступный SMB-ресурс или зависшие пользовательские gvfs-процессы."
@@ -497,7 +497,7 @@ command_description() {
         ip\ -4\ route*) desc="покажет IPv4-маршруты и маршрут по умолчанию" ;;
         ip\ route\ get*) desc="покажет, через какой интерфейс и шлюз система пойдёт к указанному IP" ;;
         timeout*nc*) desc="проверит установление TCP-соединения с указанным DC/портом и ограничит ожидание 5 секундами" ;;
-        findmnt\ -n\ -l\ -t\ cifs\ -o\ TARGET*) desc="автоматически проверит фактическое чтение каждого локального TARGET CIFS через find с таймаутом; SOURCE вида //server/share не используется" ;;
+        findmnt\ -n\ -l\ -t\ cifs\ -o\ TARGET*) desc="покажет локальные TARGET CIFS; arm_info дополнительно выполняет полный readdir и metadata lookup с таймаутом в пользовательском контексте для multiuser" ;;
         findmnt\ -t\ cifs*) desc="покажет активные CIFS-точки монтирования, источник и параметры mount" ;;
         timeout*stat*) desc="проверит доступность конкретной точки монтирования без длительного зависания" ;;
         loginctl\ list-sessions*) desc="покажет активные пользовательские sessions и UID для привязки GVFS к нужному пользователю" ;;
@@ -725,9 +725,131 @@ check_domain() {
     check_dns_common "DNS / DOMAIN" "$d"
 }
 
+
+_cifs_desktop_user() {
+    local sid uid user active remote stype
+    if have loginctl; then
+        while read -r sid uid user _; do
+            [[ -n ${sid:-} && ${uid:-} =~ ^[0-9]+$ && -n ${user:-} ]] || continue
+            ((uid > 0)) || continue
+            case "$user" in root|gdm|lightdm|sddm) continue ;; esac
+            active=$(loginctl show-session "$sid" -p Active --value 2>/dev/null || true)
+            remote=$(loginctl show-session "$sid" -p Remote --value 2>/dev/null || true)
+            stype=$(loginctl show-session "$sid" -p Type --value 2>/dev/null || true)
+            if [[ $active == yes && $remote != yes && ($stype == x11 || $stype == wayland) ]]; then
+                printf '%s\n' "$user"
+                return 0
+            fi
+        done < <(loginctl list-sessions --no-legend 2>/dev/null)
+    fi
+    if have who; then
+        user=$(who 2>/dev/null | awk '$0 ~ /\(:[0-9]+\)/ {print $1; exit}')
+        if [[ -n ${user:-} ]]; then printf '%s\n' "$user"; return 0; fi
+    fi
+    return 1
+}
+
+_cifs_exec_as() {
+    local as_user=${1:-}; shift
+    if [[ -n $as_user ]]; then
+        if have runuser; then runuser -u "$as_user" -- "$@"
+        elif have sudo; then sudo -n -u "$as_user" -- "$@"
+        else return 125
+        fi
+    else
+        "$@"
+    fi
+}
+
+_cifs_classify() {
+    local rc=$1 err=${2:-}
+    case "$rc" in
+        0) printf 'OK'; return ;;
+        124|137) printf 'TIMEOUT'; return ;;
+        125) printf 'INCONCLUSIVE'; return ;;
+    esac
+    case "$err" in
+        *'Permission denied'*|*'Operation not permitted'*) printf 'DENIED' ;;
+        *'Required key not available'*|*'Key has expired'*|*'No credentials'*) printf 'AUTH' ;;
+        *'Host is down'*|*'Network is unreachable'*|*'No route to host'*|*'Connection timed out'*) printf 'NETWORK' ;;
+        *'Stale file handle'*|*'Input/output error'*) printf 'IO' ;;
+        *'No such file or directory'*) printf 'MISSING' ;;
+        *) printf 'ERROR' ;;
+    esac
+}
+
+CIFS_PROBE_STATE=INCONCLUSIVE
+CIFS_PROBE_RC=125
+CIFS_PROBE_ERR=''
+_cifs_probe() {
+    local mnt=$1 as_user=${2:-} errfile samplefile sample rc
+    CIFS_PROBE_STATE=INCONCLUSIVE; CIFS_PROBE_RC=125; CIFS_PROBE_ERR=''
+    if ! have timeout || ! have ls || ! have find || ! have stat; then
+        CIFS_PROBE_ERR='для надёжной проверки нужны timeout, ls, find и stat'
+        return 0
+    fi
+    errfile=$(mktemp) || { CIFS_PROBE_ERR='не удалось создать временный stderr'; return 0; }
+    samplefile=$(mktemp) || { rm -f -- "$errfile"; CIFS_PROBE_ERR='не удалось создать временный sample'; return 0; }
+
+    # Этап 1: полностью прочитать список имён в каталоге. В отличие от
+    # find -print -quit это не завершается после первого cached dentry.
+    _cifs_exec_as "$as_user" env LC_ALL=C timeout 6 ls -U -A -1 -- "$mnt" >/dev/null 2>"$errfile"
+    rc=$?
+    if ((rc != 0)); then
+        CIFS_PROBE_RC=$rc
+        CIFS_PROBE_ERR=$(tr '\n' ' ' <"$errfile" | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//' | cut -c1-240)
+        CIFS_PROBE_STATE=$(_cifs_classify "$rc" "$CIFS_PROBE_ERR")
+        rm -f -- "$errfile" "$samplefile"
+        return 0
+    fi
+
+    # Этап 2: если каталог не пустой, получить метаданные одного элемента.
+    # Caja/приложения делают metadata lookup, поэтому простой readdir недостаточен.
+    : >"$errfile"
+    _cifs_exec_as "$as_user" env LC_ALL=C timeout 6 find "$mnt" -mindepth 1 -maxdepth 1 -print -quit >"$samplefile" 2>"$errfile"
+    rc=$?
+    if ((rc != 0)); then
+        CIFS_PROBE_RC=$rc
+        CIFS_PROBE_ERR=$(tr '\n' ' ' <"$errfile" | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//' | cut -c1-240)
+        CIFS_PROBE_STATE=$(_cifs_classify "$rc" "$CIFS_PROBE_ERR")
+        rm -f -- "$errfile" "$samplefile"
+        return 0
+    fi
+    IFS= read -r sample <"$samplefile" || sample=''
+    if [[ -n $sample ]]; then
+        : >"$errfile"
+        _cifs_exec_as "$as_user" env LC_ALL=C timeout 6 stat -L -- "$sample" >/dev/null 2>"$errfile"
+        rc=$?
+        if ((rc != 0)); then
+            CIFS_PROBE_RC=$rc
+            CIFS_PROBE_ERR=$(tr '\n' ' ' <"$errfile" | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//' | cut -c1-240)
+            CIFS_PROBE_STATE=$(_cifs_classify "$rc" "$CIFS_PROBE_ERR")
+            rm -f -- "$errfile" "$samplefile"
+            return 0
+        fi
+    fi
+
+    CIFS_PROBE_STATE=OK; CIFS_PROBE_RC=0; CIFS_PROBE_ERR=''
+    rm -f -- "$errfile" "$samplefile"
+}
+
+_cifs_state_text() {
+    case "$1" in
+        OK) printf 'доступен' ;;
+        TIMEOUT) printf 'тайм-аут' ;;
+        DENIED) printf 'нет доступа' ;;
+        AUTH) printf 'ошибка аутентификации' ;;
+        NETWORK) printf 'сеть недоступна' ;;
+        IO) printf 'ошибка I/O' ;;
+        MISSING) printf 'точка недоступна' ;;
+        INCONCLUSIVE) printf 'не проверен' ;;
+        *) printf 'ошибка' ;;
+    esac
+}
+
 check_network() {
-    local gw ifaces idx=0 row iface ip mac speed duplex link dns_domain cifs_count=0 cifs_bad=0 mnt cifs_bad_value gvfs_count=0 gvfs_bad=0 g dir
-    local -a cifs_bad_targets=()
+    local gw ifaces idx=0 row iface ip mac speed duplex link dns_domain cifs_count=0 cifs_ok=0 cifs_bad=0 cifs_unknown=0 mnt gvfs_count=0 gvfs_bad=0 g dir
+    local cifs_source cifs_options cifs_multiuser cifs_user cifs_context cifs_state cifs_text cifs_detail cifs_sev cifs_source_display cifs_target_display
     local eap_count=0 active_eap_count=0 cert_global_min=-1 cert_unknown=0 cert_seen=0 cert_index=0 system_ca_profiles=0 uuid type eap conn_name
     local cert_spec cert_kind cert_field cert_label certref certpath cert_display cert_start cert_end start_fmt end_fmt end_epoch now days cert_cmd_path sev
     local cert_meta cert_subject cert_issuer cert_inform phase2_auth phase2_autheap system_ca ca_path private_key phase2_private_key
@@ -983,31 +1105,57 @@ check_network() {
     fi
 
     if have findmnt; then
-        # Читаем только TARGET одной колонкой. Разбор TARGET,SOURCE через awk ломает
-        # точки монтирования с пробелами, а stat -f проверяет лишь метаданные ФС.
-        # find -print -quit делает минимальное реальное чтение каталога и ловит stale/hang.
+        cifs_user=$(_cifs_desktop_user 2>/dev/null || true)
         while IFS= read -r mnt; do
-            [[ -n $mnt ]] || continue; cifs_count=$((cifs_count+1))
-            if run_timeout 5 find "$mnt" -mindepth 1 -maxdepth 1 -print -quit >/dev/null 2>&1; then
-                :
+            [[ -n $mnt ]] || continue
+            cifs_count=$((cifs_count+1))
+            cifs_source=$(findmnt -n -T "$mnt" -o SOURCE 2>/dev/null | head -n1)
+            cifs_options=$(findmnt -n -T "$mnt" -o OPTIONS 2>/dev/null | head -n1)
+            cifs_multiuser=no
+            [[ ,$cifs_options, == *,multiuser,* ]] && cifs_multiuser=yes
+            cifs_context=$(id -un 2>/dev/null || printf 'uid=%s' "$(id -u)")
+
+            if [[ $cifs_multiuser == yes && $(id -u) -eq 0 ]]; then
+                if [[ -n $cifs_user ]]; then
+                    cifs_context=$cifs_user
+                    _cifs_probe "$mnt" "$cifs_user"
+                else
+                    CIFS_PROBE_STATE=INCONCLUSIVE
+                    CIFS_PROBE_RC=125
+                    CIFS_PROBE_ERR='multiuser mount: активный локальный GUI-пользователь не определён'
+                fi
             else
-                cifs_bad=$((cifs_bad+1))
-                cifs_bad_targets+=("$mnt")
+                _cifs_probe "$mnt" ''
             fi
+
+            cifs_state=$CIFS_PROBE_STATE
+            cifs_text=$(_cifs_state_text "$cifs_state")
+            cifs_detail="контекст: $cifs_context; multiuser: $cifs_multiuser"
+            [[ -n $CIFS_PROBE_ERR ]] && cifs_detail="$cifs_detail; $CIFS_PROBE_ERR"
+            case "$cifs_state" in
+                OK) cifs_ok=$((cifs_ok+1)); cifs_sev=ok ;;
+                INCONCLUSIVE) cifs_unknown=$((cifs_unknown+1)); cifs_sev=unknown ;;
+                *) cifs_bad=$((cifs_bad+1)); cifs_sev=warn ;;
+            esac
+
+            if ((PRIVACY)); then
+                cifs_source_display='источник скрыт'
+                cifs_target_display='TARGET скрыт'
+            else
+                cifs_source_display=${cifs_source:-не определён}
+                cifs_target_display=$mnt
+            fi
+            add_check "SMB / GVFS" "network.cifs.mount.$cifs_count" "SMB-ресурс #$cifs_count" "$cifs_source_display → $cifs_target_display; $cifs_text" "$cifs_sev" "$cifs_detail"
         done < <(findmnt -n -l -t cifs -o TARGET 2>/dev/null)
+
         if ((cifs_count==0)); then
             add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "нет" info
-        elif ((cifs_bad==0)); then
-            add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "$cifs_count, каталоги читаются" ok
         else
-            if ((PRIVACY)); then
-                cifs_bad_value="$cifs_count, недоступны/зависли: $cifs_bad; проблемные TARGET: скрыто"
-            else
-                cifs_bad_value="$cifs_count, недоступны/зависли: $cifs_bad; проблемные TARGET: $(join_by ', ' "${cifs_bad_targets[@]}")"
-            fi
-            add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "$cifs_bad_value" warn
+            add_check "SMB / GVFS" "network.cifs" "CIFS итого" "$cifs_count; доступны: $cifs_ok; проблемы: $cifs_bad; не проверены: $cifs_unknown" info
         fi
-    else add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "findmnt отсутствует" unknown; fi
+    else
+        add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "findmnt отсутствует" unknown
+    fi
 
     for g in /run/user/*/gvfs; do
         [[ -d $g ]] || continue
