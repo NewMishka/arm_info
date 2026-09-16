@@ -10,4 +10,5 @@ if old in text:
 elif new not in text:
     raise SystemExit('stability summary label not found')
 
+# Idempotent helper: used only to apply this one-line correction on the feature branch.
 path.write_text(text, encoding='utf-8')
