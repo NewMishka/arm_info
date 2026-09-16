@@ -40,8 +40,10 @@ install -Dm0644 %{SOURCE3} %{buildroot}%{_docdir}/%{name}/README.md
 
 %changelog
 * Wed Sep 16 2026 NewMishka - 1.2.2-1
-- Aligned/wrapped enterprise report, expanded 802.1X certificate diagnostics
-- Command explanations and interactive screen clear for corporate profiles
+- Aligned and wrapped standard/enterprise recommendations
+- Corporate reports save by default with privacy-safe automatic filenames
+- Expanded 802.1X certificate diagnostics and command explanations
+- CPU temperature is presented as the median in the standard report
 
 * Tue Sep 15 2026 NewMishka - 1.2.1-1
 - Single-file distribution: enterprise profiles are embedded in arm_info
