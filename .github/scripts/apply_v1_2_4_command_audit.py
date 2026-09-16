@@ -326,7 +326,7 @@ grep -q 'USER_NAME' "$SCRIPT" || fail 'user-context placeholder missing'
 ! grep -Fq 'nmcli -f NAME,TYPE,802-1x.eap,802-1x.ca-cert,802-1x.client-cert connection show' "$SCRIPT" || fail 'invalid nmcli 802.1X list fields remain'
 ! grep -Fq 'rpm -qf "$(command -v lpstat' "$SCRIPT" || fail 'guaranteed-fail lpstat rpm query remains'
 ! grep -Fq 'mdadm --detail /dev/md0' "$SCRIPT" || fail 'hard-coded md0 remains'
-! grep -Fq 'find /tmp -maxdepth 1 -type f -name '\''krb5cc_*' "$SCRIPT" || fail 'FILE-cache-only Kerberos recommendation remains'
+! grep -Fq "find /tmp -maxdepth 1 -type f -name 'krb5cc_*'" "$SCRIPT" || fail 'FILE-cache-only Kerberos recommendation remains'
 ! grep -Fq '<DOMAIN>' "$SCRIPT" || fail 'shell-redirection-style DOMAIN placeholder remains'
 ! grep -Fq '<MOUNT>' "$SCRIPT" || fail 'shell-redirection-style MOUNT placeholder remains'
 ! grep -Fq '<QUEUE>' "$SCRIPT" || fail 'shell-redirection-style QUEUE placeholder remains'
@@ -360,9 +360,9 @@ readme = readme.replace('стабильности ОС,', 'стабильнос�
 readme = readme.replace('| Стабильность ОС | 15% |', '| Стабильность системы | 15% |')
 readme = readme.replace('`arm_info 1.2.3` содержит', '`arm_info 1.2.4` содержит')
 readme = readme.replace('Текущая версия: **1.2.3**.', 'Текущая версия: **1.2.4**.')
-anchor = 'В **1.2.3** анализ накопителей ориентирован прежде всего на диск, с которого работает корневая файловая система. Он помечается как `Системный` и выводится первым. Подключённые USB/съёмные носители показываются отдельно, но не снижают storage score и полноту SMART. Их файловые системы также не подменяют показатель `Макс. заполнение` системных/внутренних ФС.\n'
-addition = anchor + '\nВ **1.2.4** проведена ревизия всех команд из рекомендаций: исправлены некорректные варианты `nmcli`, исключены заведомо бесполезные проверки отсутствующих утилит, добавлены пользовательский контекст Kerberos, таймауты сетевых проверок, безопасные маркеры (`DOMAIN_FQDN`, `PROFILE_NAME`, `MOUNT_PATH` и т. п.) и явное предупреждение `ИЗМЕНЯЕТ СОСТОЯНИЕ` для команд, меняющих конфигурацию/очередь. Каждая выводимая команда получает отдельное описание результата.\n'
-readme = replace_once(readme, anchor, addition, 'README 1.2.4 paragraph')
+insert_before = '\nЕсли отчёт нужно передать вне внутреннего контура или использовать для сравнения АРМ:\n'
+audit_note = '\nВ **1.2.4** проведена ревизия всех команд из рекомендаций: исправлены некорректные варианты `nmcli`, исключены заведомо бесполезные проверки отсутствующих утилит, добавлены пользовательский контекст Kerberos, таймауты сетевых проверок, безопасные маркеры (`DOMAIN_FQDN`, `PROFILE_NAME`, `MOUNT_PATH` и т. п.) и явное предупреждение `ИЗМЕНЯЕТ СОСТОЯНИЕ` для команд, меняющих конфигурацию/очередь. Каждая выводимая команда получает отдельное описание результата.\n'
+readme = replace_once(readme, insert_before, audit_note + insert_before, 'README 1.2.4 paragraph')
 readme = readme.replace('- [Тестирование](docs/TESTING.md)\n', '- [Тестирование](docs/TESTING.md)\n- [Команды рекомендаций](docs/COMMANDS.md)\n')
 (ROOT / 'README.md').write_text(readme, encoding='utf-8')
 
