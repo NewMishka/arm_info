@@ -2,7 +2,7 @@
 
 (
 # ============================================================
-# arm_info 1.2.1 — диагностика АРМ для РЕД ОС 7 / 8
+# arm_info 1.2.2 — диагностика АРМ для РЕД ОС 7 / 8
 # Запуск: исполняемый Bash-файл; base и enterprise находятся в одном файле.
 # Результат одновременно выводится на экран и сохраняется в TXT.
 # ============================================================
@@ -12,18 +12,18 @@ if [ -z "${BASH_VERSION:-}" ]; then
     exit 1
 fi
 
-ARM_INFO_VERSION="1.2.1"
+ARM_INFO_VERSION="1.2.2"
 
 
-# enterprise-profile-dispatch-v1.2.1 — single-file edition
+# enterprise-profile-dispatch-v1.2.2 — single-file edition
 # Enterprise-профили встроены в arm_info.sh; внешний helper не требуется.
 _arm_enterprise_run() (
-# arm_info enterprise profiles — v1.2.1
+# arm_info enterprise profiles — v1.2.2
 # Read-only diagnostics for RED OS enterprise workstations.
 set -u
 set -o pipefail
 
-VERSION="1.2.1"
+VERSION="1.2.2"
 PROFILE=""
 PRIVACY=0
 JSON_MODE=0
@@ -33,7 +33,7 @@ COMPARE_B=""
 
 usage() {
     cat <<'USAGE'
-arm_info enterprise profiles 1.2.1
+arm_info enterprise profiles 1.2.2
 
 Использование:
   arm_info --profile domain [--privacy] [--json] [-o FILE]
@@ -90,6 +90,16 @@ else
         "") echo "Ошибка: требуется --profile или --compare" >&2; usage >&2; exit 64 ;;
         *) echo "Ошибка: неизвестный профиль: $PROFILE" >&2; exit 64 ;;
     esac
+fi
+
+# Интерактивный корпоративный TXT-отчёт начинает вывод с чистого экрана.
+# JSON и --compare не получают управляющих последовательностей.
+if ((JSON_MODE==0)) && [[ -z $COMPARE_A ]] && [[ -t 1 ]]; then
+    if command -v clear >/dev/null 2>&1; then
+        clear
+    else
+        printf '\033[2J\033[H'
+    fi
 fi
 
 if [[ -n $OUTPUT_PATH ]]; then
@@ -246,7 +256,7 @@ recommendation_for() {
             REC_IMPACT="АРМ может потерять сетевой доступ после переподключения или по истечении сертификата."
             REC_CHECK="Проверить EAP-метод, CA/client certificate, срок действия и ошибки NetworkManager/supplicant."
             REC_ACTION="Заранее обновить истекающий сертификат или исправить профиль 802.1X согласно политике организации."
-            REC_COMMAND="nmcli -f NAME,TYPE,802-1x.eap,802-1x.ca-cert,802-1x.client-cert connection show|openssl x509 -in <CERT> -noout -subject -issuer -dates|journalctl -u NetworkManager -b --no-pager | grep -Ei '802.1x|eap|supplicant|certificate' | tail -120"
+            REC_COMMAND="nmcli -f NAME,TYPE,802-1x.eap,802-1x.ca-cert,802-1x.client-cert connection show|openssl x509 -in \"<CERT>\" -noout -dates|openssl x509 -in \"<CERT>\" -noout -subject -issuer|journalctl -u NetworkManager -b --no-pager | grep -Ei '802.1x|eap|supplicant|certificate' | tail -120"
             ;;
         network.cifs)
             REC_CAUSE="Один или несколько CIFS mount не отвечают в короткий timeout. Возможны недоступная шара, сеть, Kerberos/учётные данные или зависший mount."
@@ -346,17 +356,126 @@ build_recommendations() {
     done
 }
 
+report_width() {
+    local cols=${COLUMNS:-}
+    if [[ ! $cols =~ ^[0-9]+$ ]] && command -v tput >/dev/null 2>&1; then
+        cols=$(tput cols 2>/dev/null || true)
+    fi
+    [[ $cols =~ ^[0-9]+$ ]] || cols=110
+    ((cols<86)) && cols=86
+    ((cols>132)) && cols=132
+    printf '%d' "$cols"
+}
+
+repeat_char() {
+    local count=$1 char=${2:--}
+    printf '%*s' "$count" '' | tr ' ' "$char"
+}
+
+pad_right() {
+    local value=$1 width=$2 len=${#1}
+    printf '%s' "$value"
+    ((len<width)) && printf '%*s' "$((width-len))" ''
+}
+
+print_check_row() {
+    local label=$1 status=$2 value=$3 total label_w=31 status_w=9 gap=2 value_w i max
+    local -a label_lines=() value_lines=()
+    total=$(report_width)
+    ((total<96)) && label_w=27
+    value_w=$((total-label_w-status_w-(gap*2)))
+    ((value_w<24)) && value_w=24
+
+    mapfile -t label_lines < <(printf '%s\n' "$label" | fold -s -w "$label_w")
+    mapfile -t value_lines < <(printf '%s\n' "$value" | fold -s -w "$value_w")
+    ((${#label_lines[@]})) || label_lines=("")
+    ((${#value_lines[@]})) || value_lines=("")
+    max=${#label_lines[@]}; ((${#value_lines[@]}>max)) && max=${#value_lines[@]}
+
+    for ((i=0; i<max; i++)); do
+        local l=${label_lines[i]:-} s='' v=${value_lines[i]:-}
+        ((i==0)) && s=$status
+        printf '%s%*s%s%*s%s\n' \
+            "$(pad_right "$l" "$label_w")" "$gap" '' \
+            "$(pad_right "$s" "$status_w")" "$gap" '' "$v"
+    done
+}
+
 print_rec_field() {
-    local label=$1 text=$2
-    printf '   %-18s %s\n' "$label" "$text"
+    local label=$1 text=$2 total label_w=23 indent=3 gap=1 value_w i=0 line
+    total=$(report_width)
+    value_w=$((total-indent-label_w-gap))
+    ((value_w<32)) && value_w=32
+    while IFS= read -r line || [[ -n $line ]]; do
+        if ((i==0)); then
+            printf '%*s%s %s\n' "$indent" '' "$(pad_right "$label" "$label_w")" "$line"
+        else
+            printf '%*s%s %s\n' "$indent" '' "$(pad_right '' "$label_w")" "$line"
+        fi
+        i=$((i+1))
+    done < <(printf '%s\n' "$text" | fold -s -w "$value_w")
+    ((i>0)) || printf '%*s%s\n' "$indent" '' "$label"
+}
+
+command_description() {
+    local cmd=$1
+    case "$cmd" in
+        realm\ list*) echo "покажет параметры присоединения к realm/домену" ;;
+        sssctl\ domain-list*) echo "покажет домены, которые видит SSSD" ;;
+        sssctl\ config-check*) echo "проверит конфигурацию SSSD на синтаксические ошибки" ;;
+        hostname\ -f*) echo "покажет полное доменное имя АРМ" ;;
+        *sssd.conf*) echo "покажет доменные секции конфигурации SSSD" ;;
+        systemctl\ status\ sssd*) echo "покажет состояние службы SSSD и последнюю причину отказа" ;;
+        systemctl\ status\ cups*) echo "покажет состояние службы CUPS и последнюю причину отказа" ;;
+        journalctl*-u\ sssd*) echo "покажет события SSSD текущей загрузки для поиска первичной ошибки" ;;
+        journalctl*-u\ NetworkManager*) echo "покажет ошибки NetworkManager/802.1X/EAP текущей загрузки" ;;
+        journalctl*-u\ cups*) echo "покажет ошибки и события CUPS текущей загрузки" ;;
+        journalctl*-k*) echo "покажет сообщения ядра, связанные с устройствами/сетевыми файловыми системами" ;;
+        journalctl*) echo "покажет системные события, относящиеся к диагностируемой проблеме" ;;
+        adcli\ testjoin*) echo "проверит доверительные отношения машинной учётной записи с AD" ;;
+        timedatectl*) echo "покажет системное время, часовой пояс и состояние синхронизации" ;;
+        chronyc\ tracking*) echo "покажет текущий offset и качество синхронизации времени" ;;
+        chronyc\ sources*) echo "покажет доступные и выбранный источники времени" ;;
+        dig*) echo "покажет DNS/SRV-записи, необходимые для поиска доменных служб" ;;
+        host*) echo "выполнит DNS-проверку указанного имени/записи" ;;
+        klist*) echo "покажет Kerberos cache, principal и сроки действия билетов" ;;
+        find\ /tmp*krb5cc*) echo "найдёт файловые Kerberos cache на АРМ" ;;
+        resolvectl*) echo "покажет фактические DNS-серверы и настройки systemd-resolved" ;;
+        nmcli*-f*802-1x*) echo "покажет параметры 802.1X активных/сохранённых профилей NetworkManager" ;;
+        nmcli*) echo "покажет состояние сетевых устройств и профилей NetworkManager" ;;
+        openssl\ x509*-dates*) echo "покажет даты начала и окончания действия сертификата" ;;
+        openssl\ x509*) echo "покажет сведения X.509: субъект, издатель и параметры сертификата" ;;
+        getent*) echo "проверит разрешение имени через системные NSS/DNS-настройки" ;;
+        ip\ -br\ link*) echo "покажет краткое состояние сетевых интерфейсов и link" ;;
+        ip\ -br\ addr*) echo "покажет краткий список адресов сетевых интерфейсов" ;;
+        ip\ -4\ route*) echo "покажет IPv4-маршруты и шлюз по умолчанию" ;;
+        findmnt*) echo "покажет активные точки монтирования и их параметры" ;;
+        timeout*stat*) echo "проверит доступность точки монтирования с ограничением времени ожидания" ;;
+        gio\ mount*) echo "покажет пользовательские GVFS/GIO-подключения" ;;
+        ps*) echo "покажет процессы и позволит определить зависший/родительский процесс" ;;
+        find\ /run/user*) echo "покажет пользовательские GVFS-точки монтирования" ;;
+        lpstat\ -r*) echo "проверит, отвечает ли планировщик CUPS" ;;
+        lpstat*) echo "покажет очереди, задания, принтер по умолчанию и backend CUPS" ;;
+        cupsctl*) echo "покажет текущие параметры сервера CUPS" ;;
+        cupsenable*) echo "возобновит указанную очередь после устранения первичной причины" ;;
+        cupsaccept*) echo "разрешит указанной очереди принимать новые задания" ;;
+        cancel*) echo "отменит указанное задание печати; выполнять только после подтверждения" ;;
+        du\ -sh\ /var/spool/cups*) echo "покажет объём диска, занятый spool CUPS" ;;
+        command\ -v*) echo "проверит наличие требуемой диагностической утилиты" ;;
+        rpm*) echo "покажет сведения RPM или пакет, которому принадлежит файл" ;;
+        dnf*) echo "покажет пакет/провайдера требуемой утилиты в репозиториях" ;;
+        arm_info*) echo "повторно запустит профиль arm_info для контроля после исправления" ;;
+        *) echo "выполнит диагностическую проверку, связанную с указанной рекомендацией" ;;
+    esac
 }
 
 print_rec_commands() {
-    local text=$1 cmd first=1
+    local text=$1 cmd desc idx=0
     while IFS='|' read -r cmd; do
         [[ -n $cmd ]] || continue
-        if ((first)); then printf '   %-18s %s\n' 'Команды:' "$cmd"; first=0
-        else printf '   %-18s %s\n' '' "$cmd"; fi
+        idx=$((idx+1))
+        desc=$(command_description "$cmd")
+        print_rec_field "Команда $idx:" "$cmd ($desc)"
     done <<<"${text//|/$'\n'}"
 }
 
@@ -508,7 +627,10 @@ check_domain() {
 }
 
 check_network() {
-    local gw ifaces idx=0 row iface ip mac speed duplex link dns_domain cifs_count=0 cifs_bad=0 mnt src gvfs_count=0 gvfs_bad=0 g dir eap_count=0 cert_min=-1 cert_global_min=-1 uuid type eap certpath end end_epoch now days proc_caja proc_gvfs
+    local gw ifaces idx=0 row iface ip mac speed duplex link dns_domain cifs_count=0 cifs_bad=0 mnt src gvfs_count=0 gvfs_bad=0 g dir
+    local eap_count=0 cert_global_min=-1 cert_unknown=0 cert_seen=0 cert_index=0 uuid type eap conn_name ca_cert client_cert cert_kind certpath cert_display cert_label
+    local cert_start cert_end start_fmt end_fmt end_epoch now days cert_cmd_path sev proc_caja proc_gvfs
+
     gw=$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $3}')
     [[ -n $gw ]] && add_check "СЕТЬ" "network.gateway" "Шлюз" "$(mask_ipv4 "$gw")" ok || add_check "СЕТЬ" "network.gateway" "Шлюз" "не найден" warn
 
@@ -533,22 +655,78 @@ check_network() {
             case "$type" in ethernet|802-11-wireless|wifi) ;; *) continue;; esac
             eap=$(nmcli -g 802-1x.eap connection show uuid "$uuid" 2>/dev/null | head -n1)
             [[ -n $eap ]] || continue
-            eap_count=$((eap_count+1)); cert_min=-1
-            while IFS= read -r certpath; do
-                certpath=${certpath#file://}; [[ -r $certpath ]] || continue
-                if have openssl; then
-                    end=$(openssl x509 -in "$certpath" -noout -enddate 2>/dev/null | cut -d= -f2-)
-                    end_epoch=$(date -d "$end" +%s 2>/dev/null || true); now=$(date +%s)
-                    if [[ $end_epoch =~ ^[0-9]+$ ]]; then days=$(((end_epoch-now)/86400)); ((cert_min<0 || days<cert_min)) && cert_min=$days; fi
+
+            eap_count=$((eap_count+1))
+            conn_name=$(nmcli -g connection.id connection show uuid "$uuid" 2>/dev/null | head -n1)
+            if ((PRIVACY)); then conn_name="профиль $eap_count (скрыто)"; fi
+            add_check "802.1X" "network.8021x.profile.$eap_count" "Профиль 802.1X #$eap_count" "${conn_name:-$uuid}" info
+            add_check "802.1X" "network.8021x.eap.$eap_count" "EAP-метод" "$eap" info
+
+            ca_cert=$(nmcli -g 802-1x.ca-cert connection show uuid "$uuid" 2>/dev/null | head -n1)
+            client_cert=$(nmcli -g 802-1x.client-cert connection show uuid "$uuid" 2>/dev/null | head -n1)
+
+            for cert_kind in client ca; do
+                if [[ $cert_kind == client ]]; then
+                    certpath=$client_cert; cert_label="Клиентский сертификат"
+                else
+                    certpath=$ca_cert; cert_label="CA-сертификат"
                 fi
-            done < <(nmcli -g 802-1x.ca-cert,802-1x.client-cert connection show uuid "$uuid" 2>/dev/null | grep -v '^$')
-            if ((cert_min>=0 && (cert_global_min<0 || cert_min<cert_global_min))); then cert_global_min=$cert_min; fi
+                [[ -n $certpath ]] || continue
+                cert_seen=$((cert_seen+1)); cert_index=$((cert_index+1))
+                certpath=${certpath#file://}
+                cert_display=$certpath
+                if ((PRIVACY)); then
+                    [[ $cert_kind == client ]] && cert_display='<CLIENT_CERT>' || cert_display='<CA_CERT>'
+                fi
+                add_check "802.1X" "network.8021x.cert.$cert_index.path" "$cert_label" "$cert_display" info
+
+                if [[ -r $certpath ]] && have openssl; then
+                    cert_start=$(openssl x509 -in "$certpath" -noout -startdate 2>/dev/null | sed 's/^notBefore=//')
+                    cert_end=$(openssl x509 -in "$certpath" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')
+                    start_fmt=$(date -d "$cert_start" '+%d.%m.%Y %H:%M:%S %Z' 2>/dev/null || printf '%s' "$cert_start")
+                    end_fmt=$(date -d "$cert_end" '+%d.%m.%Y %H:%M:%S %Z' 2>/dev/null || printf '%s' "$cert_end")
+                    end_epoch=$(date -d "$cert_end" +%s 2>/dev/null || true); now=$(date +%s)
+                    if [[ $end_epoch =~ ^[0-9]+$ ]]; then
+                        days=$(((end_epoch-now)/86400))
+                        ((cert_global_min<0 || days<cert_global_min)) && cert_global_min=$days
+                        if ((days<14)); then sev=crit; elif ((days<30)); then sev=warn; else sev=ok; fi
+                        add_check "802.1X" "network.8021x.cert.$cert_index.validity" "Срок действия" "$start_fmt — $end_fmt; осталось ${days} дн." info
+                    else
+                        cert_unknown=$((cert_unknown+1))
+                        add_check "802.1X" "network.8021x.cert.$cert_index.validity" "Срок действия" "не удалось вычислить; notBefore=$cert_start; notAfter=$cert_end" info
+                    fi
+                    cert_cmd_path=$certpath; ((PRIVACY)) && cert_cmd_path='<CERT>'
+                    add_check "802.1X" "network.8021x.cert.$cert_index.command" "Проверка срока" "openssl x509 -in \\\"$cert_cmd_path\\\" -noout -dates" info
+                else
+                    cert_unknown=$((cert_unknown+1))
+                    if ! have openssl; then
+                        add_check "802.1X" "network.8021x.cert.$cert_index.validity" "Срок действия" "не проверен: openssl отсутствует" info
+                    else
+                        add_check "802.1X" "network.8021x.cert.$cert_index.validity" "Срок действия" "не проверен: файл сертификата недоступен" info
+                    fi
+                fi
+            done
         done < <(nmcli -t -f UUID,TYPE connection show --active 2>/dev/null)
+
         if ((eap_count>0)); then
-            if ((cert_global_min>=0)); then add_check "802.1X" "network.8021x" "Активные 802.1X" "$eap_count; минимальный срок сертификата ${cert_global_min} дн." "$([[ $cert_global_min -lt 14 ]] && echo crit || { [[ $cert_global_min -lt 30 ]] && echo warn || echo ok; })"
-            else add_check "802.1X" "network.8021x" "Активные 802.1X" "$eap_count; срок сертификата не определён" unknown; fi
-        else add_check "802.1X" "network.8021x" "Активные 802.1X" "не обнаружены" info; fi
-    else add_check "802.1X" "network.8021x" "802.1X" "nmcli отсутствует" unknown; fi
+            if ((cert_global_min>=0)); then
+                if ((cert_global_min<14)); then sev=crit
+                elif ((cert_global_min<30)); then sev=warn
+                elif ((cert_unknown>0)); then sev=warn
+                else sev=ok
+                fi
+                add_check "802.1X" "network.8021x" "Активные 802.1X" "$eap_count; минимальный остаток сертификата ${cert_global_min} дн.; непроверенных: $cert_unknown" "$sev"
+            elif ((cert_seen>0)); then
+                add_check "802.1X" "network.8021x" "Активные 802.1X" "$eap_count; срок сертификатов не определён" unknown
+            else
+                add_check "802.1X" "network.8021x" "Активные 802.1X" "$eap_count; пути сертификатов в активном профиле не обнаружены" unknown
+            fi
+        else
+            add_check "802.1X" "network.8021x" "Активные 802.1X" "не обнаружены" info
+        fi
+    else
+        add_check "802.1X" "network.8021x" "802.1X" "nmcli отсутствует" unknown
+    fi
 
     if have findmnt; then
         while IFS='|' read -r mnt src; do
@@ -639,29 +817,41 @@ check_software() {
 }
 
 emit_text() {
-    local current="" i sevmark n=0
+    local current="" i sevmark n=0 width
+    width=$(report_width)
     printf 'ARM_INFO ENTERPRISE %s\n' "$VERSION"
     printf 'Профиль: %s\n' "$PROFILE"
     printf 'Дата: %s\n' "$(date '+%d.%m.%Y %H:%M:%S')"
     ((PRIVACY)) && printf 'Privacy: включён\n'
-    for i in "${!KEYS[@]}"; do
-        if [[ ${SECTIONS[i]} != "$current" ]]; then current=${SECTIONS[i]}; printf '\n%s\n' "$current"; printf '%*s\n' 92 '' | tr ' ' '-'; fi
-        case "${SEVERITIES[i]}" in ok) sevmark='OK';; info) sevmark='INFO';; warn) sevmark='WARN';; crit) sevmark='CRIT';; *) sevmark='N/A';; esac
-        printf '%-31s %-7s %s\n' "${LABELS[i]}" "[$sevmark]" "${VALUES[i]}"
-        [[ -n ${DETAILS[i]} ]] && printf '  %-29s %s\n' 'Примечание:' "${DETAILS[i]}"
-    done
-    printf '\nСВОДКА\n'; printf '%*s\n' 92 '' | tr ' ' '-'
-    printf '%-31s %s\n' 'Критично' "$CRIT_COUNT"
-    printf '%-31s %s\n' 'Предупреждения' "$WARN_COUNT"
-    printf '%-31s %s\n' 'Неполные проверки' "$UNKNOWN_COUNT"
 
-    printf '\nРЕКОМЕНДАЦИИ\n'; printf '%*s\n' 92 '' | tr ' ' '-'
+    for i in "${!KEYS[@]}"; do
+        if [[ ${SECTIONS[i]} != "$current" ]]; then
+            current=${SECTIONS[i]}
+            printf '\n%s\n' "$current"
+            repeat_char "$width" '-'; printf '\n'
+            print_check_row 'Параметр' 'Статус' 'Значение'
+            repeat_char "$width" '-'; printf '\n'
+        fi
+        case "${SEVERITIES[i]}" in ok) sevmark='[OK]';; info) sevmark='[INFO]';; warn) sevmark='[WARN]';; crit) sevmark='[CRIT]';; *) sevmark='[N/A]';; esac
+        print_check_row "${LABELS[i]}" "$sevmark" "${VALUES[i]}"
+        [[ -n ${DETAILS[i]} ]] && print_check_row 'Примечание' '' "${DETAILS[i]}"
+    done
+
+    printf '\nСВОДКА\n'; repeat_char "$width" '-'; printf '\n'
+    print_check_row 'Показатель' '' 'Количество'
+    repeat_char "$width" '-'; printf '\n'
+    print_check_row 'Критично' '' "$CRIT_COUNT"
+    print_check_row 'Предупреждения' '' "$WARN_COUNT"
+    print_check_row 'Неполные проверки' '' "$UNKNOWN_COUNT"
+
+    printf '\nРЕКОМЕНДАЦИИ\n'; repeat_char "$width" '-'; printf '\n'
     if ((${#REC_KEYS[@]}==0)); then
-        printf 'Дополнительных действий по выбранному профилю не требуется.\n'
+        print_rec_field 'Статус:' 'Дополнительных действий по выбранному профилю не требуется.'
     else
         for i in "${!REC_KEYS[@]}"; do
             n=$((n+1))
-            printf '\n%d. [%s] %s\n' "$n" "${REC_LEVELS[i]}" "${REC_TITLES[i]}"
+            printf '\n'
+            print_rec_field "$n. [${REC_LEVELS[i]}]" "${REC_TITLES[i]}"
             print_rec_field 'Источник:' "${REC_SOURCES[i]}"
             print_rec_field 'Возможные причины:' "${REC_CAUSES[i]}"
             print_rec_field 'Влияние:' "${REC_IMPACTS[i]}"

@@ -74,3 +74,9 @@ set -e
 ((RC>=0 && RC<=3)) || die "domain text exit code $RC"
 grep -q '^РЕКОМЕНДАЦИИ$' "$TXT" || die "recommendations structure"
 grep -Eq 'Возможные причины:|Дополнительных действий' "$TXT" || die "recommendations detail"
+
+# v1.2.2 text-report contract.
+grep -q "print_check_row 'Параметр' 'Статус' 'Значение'" "$SCRIPT" || die "enterprise column header"
+grep -q 'openssl x509 -in' "$SCRIPT" || die "802.1X certificate date command"
+grep -q 'покажет даты начала и окончания действия сертификата' "$SCRIPT" || die "command explanations"
+grep -q 'JSON_MODE==0' "$SCRIPT" || die "interactive clear guard"
