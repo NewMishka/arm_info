@@ -500,14 +500,45 @@ command_description() {
     esac
 }
 
+split_rec_commands() {
+    # REC_COMMAND historical format uses an unquoted | as a list separator.
+    # Preserve real shell pipelines (" | ") and regex pipes inside quotes.
+    local s=$1 current="" quote="" i ch prev next len=${#1}
+    for ((i=0; i<len; i++)); do
+        ch=${s:i:1}
+        if [[ $ch == "'" && $quote != '"' ]]; then
+            if [[ $quote == "'" ]]; then quote=""; else quote="'"; fi
+            current+=$ch
+            continue
+        fi
+        if [[ $ch == '"' && $quote != "'" ]]; then
+            if [[ $quote == '"' ]]; then quote=""; else quote='"'; fi
+            current+=$ch
+            continue
+        fi
+        if [[ $ch == '|' && -z $quote ]]; then
+            prev=""; next=""
+            ((i>0)) && prev=${s:i-1:1}
+            ((i+1<len)) && next=${s:i+1:1}
+            if [[ $prev != [[:space:]] && $next != [[:space:]] && $prev != '|' && $next != '|' ]]; then
+                printf '%s\n' "$current"
+                current=""
+                continue
+            fi
+        fi
+        current+=$ch
+    done
+    [[ -n $current ]] && printf '%s\n' "$current"
+}
+
 print_rec_commands() {
     local text=$1 cmd desc idx=0
-    while IFS='|' read -r cmd; do
+    while IFS= read -r cmd; do
         [[ -n $cmd ]] || continue
         idx=$((idx+1))
         desc=$(command_description "$cmd")
         print_rec_field "Команда $idx:" "$cmd ($desc)"
-    done <<<"${text//|/$'\n'}"
+    done < <(split_rec_commands "$text")
 }
 
 json_escape() {
@@ -928,11 +959,11 @@ emit_json() {
           "$comma" "$(json_escape "${REC_KEYS[i]}")" "$(json_escape "${REC_LEVELS[i]}")" "$(json_escape "${REC_TITLES[i]}")" "$(json_escape "${REC_SOURCES[i]}")" \
           "$(json_escape "${REC_CAUSES[i]}")" "$(json_escape "${REC_IMPACTS[i]}")" "$(json_escape "${REC_CHECKS[i]}")" "$(json_escape "${REC_ACTIONS[i]}")"
         local cmd ccomma=""
-        while IFS='|' read -r cmd; do
+        while IFS= read -r cmd; do
             [[ -n $cmd ]] || continue
             printf '%s"%s"' "$ccomma" "$(json_escape "$cmd")"
             ccomma=','
-        done <<<"${REC_COMMANDS[i]//|/$'\n'}"
+        done < <(split_rec_commands "${REC_COMMANDS[i]}")
         printf '],"verification":"%s"}' "$(json_escape "${REC_VERIFIES[i]}")"
         comma=$',\n'
     done
