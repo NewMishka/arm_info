@@ -16,15 +16,17 @@ jobs:
       - name: Install ShellCheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Syntax
-        run: bash -n arm_info.sh install.sh tests/test_cli.sh tests/test_enterprise.sh tests/test_recommendation_commands.sh packaging/build-rpm.sh
+        run: bash -n arm_info.sh install.sh tests/test_cli.sh tests/test_enterprise.sh tests/test_recommendation_commands.sh tests/test_sections.sh packaging/build-rpm.sh
       - name: ShellCheck
-        run: shellcheck --severity=error arm_info.sh install.sh tests/test_cli.sh tests/test_enterprise.sh tests/test_recommendation_commands.sh packaging/build-rpm.sh
+        run: shellcheck --severity=error arm_info.sh install.sh tests/test_cli.sh tests/test_enterprise.sh tests/test_recommendation_commands.sh tests/test_sections.sh packaging/build-rpm.sh
       - name: Base CLI tests
         run: bash tests/test_cli.sh
       - name: Enterprise profile tests
         run: bash tests/test_enterprise.sh
       - name: Recommendation command audit tests
         run: bash tests/test_recommendation_commands.sh
+      - name: Full report section coverage
+        run: bash tests/test_sections.sh
 
   compatibility-syntax:
     runs-on: ubuntu-latest
@@ -85,6 +87,8 @@ jobs:
           grep -q 'ИЗМЕНЯЕТ СОСТОЯНИЕ' docs/COMMANDS.md
           grep -q 'SHA256SUMS' .github/workflows/release.yml
           grep -q 'SHA256SUMS' docs/releases/v$(tr -d '[:space:]' < VERSION).md
+          test -f tests/test_sections.sh
+          grep -q 'Full report section coverage' .github/workflows/ci.yml
       - name: RPM build smoke test
         run: |
           docker run --rm -v "$PWD:/src:ro" fedora:latest bash -lc '
