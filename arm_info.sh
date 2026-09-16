@@ -628,7 +628,7 @@ check_domain() {
 
 check_network() {
     local gw ifaces idx=0 row iface ip mac speed duplex link dns_domain cifs_count=0 cifs_bad=0 mnt src gvfs_count=0 gvfs_bad=0 g dir
-    local eap_count=0 cert_global_min=-1 cert_unknown=0 cert_seen=0 cert_index=0 uuid type eap conn_name ca_cert client_cert cert_kind certpath cert_display cert_label
+    local eap_count=0 cert_global_min=-1 cert_unknown=0 cert_seen=0 cert_index=0 uuid type eap conn_name ca_cert client_cert cert_kind certpath cert_display cert_label cert_validity_label
     local cert_start cert_end start_fmt end_fmt end_epoch now days cert_cmd_path sev proc_caja proc_gvfs
 
     gw=$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $3}')
@@ -667,9 +667,9 @@ check_network() {
 
             for cert_kind in client ca; do
                 if [[ $cert_kind == client ]]; then
-                    certpath=$client_cert; cert_label="Клиентский сертификат"
+                    certpath=$client_cert; cert_label="Клиентский сертификат"; cert_validity_label="Срок клиентского сертификата"
                 else
-                    certpath=$ca_cert; cert_label="CA-сертификат"
+                    certpath=$ca_cert; cert_label="CA-сертификат"; cert_validity_label="Срок CA-сертификата"
                 fi
                 [[ -n $certpath ]] || continue
                 cert_seen=$((cert_seen+1)); cert_index=$((cert_index+1))
@@ -690,19 +690,19 @@ check_network() {
                         days=$(((end_epoch-now)/86400))
                         ((cert_global_min<0 || days<cert_global_min)) && cert_global_min=$days
                         if ((days<14)); then sev=crit; elif ((days<30)); then sev=warn; else sev=ok; fi
-                        add_check "802.1X" "network.8021x.cert.$cert_index.validity" "Срок действия" "$start_fmt — $end_fmt; осталось ${days} дн." info
+                        add_check "802.1X" "network.8021x.cert.$cert_index.validity" "$cert_validity_label" "$start_fmt — $end_fmt; осталось ${days} дн." info
                     else
                         cert_unknown=$((cert_unknown+1))
-                        add_check "802.1X" "network.8021x.cert.$cert_index.validity" "Срок действия" "не удалось вычислить; notBefore=$cert_start; notAfter=$cert_end" info
+                        add_check "802.1X" "network.8021x.cert.$cert_index.validity" "$cert_validity_label" "не удалось вычислить; notBefore=$cert_start; notAfter=$cert_end" info
                     fi
                     cert_cmd_path=$certpath; ((PRIVACY)) && cert_cmd_path='<CERT>'
-                    add_check "802.1X" "network.8021x.cert.$cert_index.command" "Проверка срока" "openssl x509 -in \\\"$cert_cmd_path\\\" -noout -dates" info
+                    add_check "802.1X" "network.8021x.cert.$cert_index.command" "Проверка срока" "openssl x509 -in \"$cert_cmd_path\" -noout -dates" info
                 else
                     cert_unknown=$((cert_unknown+1))
                     if ! have openssl; then
-                        add_check "802.1X" "network.8021x.cert.$cert_index.validity" "Срок действия" "не проверен: openssl отсутствует" info
+                        add_check "802.1X" "network.8021x.cert.$cert_index.validity" "$cert_validity_label" "не проверен: openssl отсутствует" info
                     else
-                        add_check "802.1X" "network.8021x.cert.$cert_index.validity" "Срок действия" "не проверен: файл сертификата недоступен" info
+                        add_check "802.1X" "network.8021x.cert.$cert_index.validity" "$cert_validity_label" "не проверен: файл сертификата недоступен" info
                     fi
                 fi
             done
