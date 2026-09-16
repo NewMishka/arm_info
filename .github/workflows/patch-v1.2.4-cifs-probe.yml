@@ -19,7 +19,9 @@ jobs:
           ref: feature/v1.2.4-command-audit
           fetch-depth: 0
       - name: Apply CIFS runtime probe patch
-        run: python3 .github/scripts/patch_v1_2_4_cifs_probe.py
+        run: |
+          python3 .github/scripts/patch_v1_2_4_cifs_probe.py
+          sed -i 's#SOURCE вида //server/share в stat не использовать#SOURCE вида //server/share как локальный путь не использовать#' tests/test_recommendation_commands.sh
       - name: Validate syntax and focused tests
         run: |
           bash -n arm_info.sh tests/test_recommendation_commands.sh tests/test_sections.sh tests/test_cifs_probe.sh
