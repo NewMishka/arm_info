@@ -22,10 +22,13 @@ sudo arm_info --json --privacy --no-save
 
 Стандартный JSON содержит `schema_version`, системные показатели, scores, confidence, diagnostics и массив `recommendations[]`.
 
+Начиная с 1.2.3 объект `storage` дополнительно разделяет типы накопителей: `system_disks`, `fixed_disks`, `secondary_fixed_disks`, `removable_disks`, `smart_unknown` и `system_smart_unknown`. Это позволяет автоматизации отличить неполную проверку системного диска от подключённой USB-флешки. Съёмные носители не должны делать `storage.known=false` и не участвуют в `storage.score`.
+
 Пример:
 
 ```bash
 sudo arm_info --json --privacy --no-save | jq '.summary'
+sudo arm_info --json --privacy --no-save | jq '.storage'
 ```
 
 ## Корпоративный JSON — schema v2
