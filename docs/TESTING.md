@@ -12,12 +12,13 @@ make test
 
 ## Что проверяют локальные тесты
 
-`make check` сначала сверяет `VERSION` с `ARM_INFO_VERSION` в `arm_info.sh` и `Version:` в RPM spec, затем выполняет Bash syntax check для основного single-file скрипта, installer, CLI/корпоративных tests и RPM helper. При наличии ShellCheck запускается `shellcheck --severity=error`.
+`make check` сначала сверяет `VERSION` с `ARM_INFO_VERSION` в `arm_info.sh` и `Version:` в RPM spec, затем выполняет Bash syntax check для основного single-file скрипта, installer, CLI/корпоративных tests, recommendation-command test и RPM helper. При наличии ShellCheck запускается `shellcheck --severity=error`.
 
 `make test` дополнительно запускает:
 
 - `tests/test_cli.sh` — версия, CLI, standard JSON schema v1, privacy и контракт стандартных рекомендаций;
-- `tests/test_enterprise.sh` — корпоративный CLI, schema v2, privacy, `--compare`, single-file policy и контракт корпоративного отчёта.
+- `tests/test_enterprise.sh` — корпоративный CLI, schema v2, privacy, `--compare`, single-file policy и контракт корпоративного отчёта;
+- `tests/test_recommendation_commands.sh` — статический аудит рекомендуемых команд: безопасные placeholder-токены, отсутствие известных некорректных форм, синтаксис representative commands и обязательная маркировка state-changing действий.
 
 ## CI
 
@@ -27,6 +28,7 @@ CI проверяет:
 - ShellCheck уровня `error`;
 - базовые CLI/JSON/privacy tests;
 - корпоративные profiles/compare/recommendations tests;
+- recommendation-command audit tests;
 - Bash syntax в Ubuntu 24.04, Fedora и Rocky Linux 9;
 - согласованность версии `VERSION` / `arm_info.sh` / RPM spec / `make version` / README;
 - smoke-test установки/удаления через `install.sh --destdir`;
@@ -35,6 +37,12 @@ CI проверяет:
 - RPM build smoke test и состав пакета.
 
 Автоматический CI на Ubuntu/Fedora/Rocky проверяет синтаксис, тестовые контракты, установку и упаковку, но не является runtime-проверкой РЕД ОС.
+
+## Аудит команд рекомендаций 1.2.4
+
+Автоматический тест защищает найденные в ревизии ошибки: некорректные поля `nmcli`, FILE-cache-only Kerberos-проверку, hard-coded `/dev/md0`, shell placeholders вида `<DOMAIN>`, заведомо бесполезный `rpm -qf` для отсутствующего `lpstat` и физический разрыв команд. Representative команды дополнительно проверяются через `bash -n -c` после подстановки безопасных служебных маркеров.
+
+Автотест не заменяет полевой запуск: команды, зависящие от конкретной инфраструктуры (`adcli`, DNS SRV, 802.1X, Kerberos user context, CUPS и CIFS), перед production release должны быть просмотрены на целевом РЕД ОС. State-changing команды не запускаются тестами автоматически.
 
 ## Полевой smoke-test РЕД ОС
 
@@ -53,7 +61,7 @@ sudo bash arm_info.sh --profile software
 
 ## Полевые проверки 1.2.3
 
-Перед release 1.2.3 отдельно проверяются:
+Перед release 1.2.3 отдельно проверялись:
 
 - LVM/device-mapper root: физический root-диск должен отображаться как `Системный` без tree-префикса `lsblk`;
 - тот же АРМ с USB-флешкой: USB должен быть `Съёмный (вне индекса)`, оптический привод — `Оптический (вне индекса)`; removable media не должны менять storage score/SMART completeness и `Макс. заполнение` внутренних ФС;
