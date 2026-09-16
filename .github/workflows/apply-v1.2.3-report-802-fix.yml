@@ -36,3 +36,4 @@ jobs:
           git diff --cached --quiet && exit 0
           git commit -m 'fix: align reports and expand 802.1X certificate details'
           git push
+# trigger: 2026-09-16
