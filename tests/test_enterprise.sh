@@ -16,6 +16,10 @@ grep -Fq -- '-c|--corp) PROFILE=enterprise' "$SCRIPT" || die "-c parser"
 grep -Fq -- '-c|--corp|--profile' "$SCRIPT" || die "-c dispatcher"
 bash "$SCRIPT" --corp --help | grep -q -- '--save' || die "--corp save help"
 grep -q 'enterprise) check_domain; check_network; check_print ;;' "$SCRIPT" || die "enterprise profile must exclude software inventory"
+grep -Fq 'domain.dc.node.$dc_index' "$SCRIPT" || die "per-DC detail key"
+grep -Fq '"Контроллер #$dc_index"' "$SCRIPT" || die "per-DC detail label"
+grep -Fq '_cifs_probe "$dir" "$gvfs_user"' "$SCRIPT" || die "GVFS must use real directory probe"
+! grep -Fq 'run_timeout 4 stat -f "$dir"' "$SCRIPT" || die "GVFS must not use metadata-only stat -f"
 
 # No hard-coded application/vendor inventory and no hard-coded Kerberos error-code list.
 if grep -Eiq '(r7|remmina|freerdp|icaclient|citrix|basis|workplace|bsscrypto|cryptopro|cprocsp|jacarta|snx)' "$SCRIPT"; then

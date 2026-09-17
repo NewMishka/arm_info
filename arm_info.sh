@@ -681,13 +681,37 @@ check_dns_common() {
         if ((ldap_count>0)); then add_check "$section" "dns.srv.ldap" "LDAP SRV" "$ldap_count записей" ok; else add_check "$section" "dns.srv.ldap" "LDAP SRV" "не найден" warn; fi
         if ((krb_count>0)); then add_check "$section" "dns.srv.kerberos" "Kerberos SRV" "$krb_count записей" ok; else add_check "$section" "dns.srv.kerberos" "Kerberos SRV" "не найден" warn; fi
 
-        targets=$(printf '%s\n%s\n' "$ldap_srv" "$krb_srv" | awk 'NF{print $NF}' | sed 's/\.$//' | sort -u | head -n3)
+        targets=$(printf '%s\
+%s\
+' "$ldap_srv" "$krb_srv" | awk 'NF{print $NF}' | sed 's/\.$//' | sort -u | head -n3)
+        local dc_index=0 krb_ok ldap_ok dc_sev dc_display krb_text ldap_text
         while IFS= read -r target; do
             [[ -n $target ]] || continue
-            for port in 88 389; do
-                if _tcp_ok "$target" "$port"; then reachable=$((reachable+1)); fi
-                tested=$((tested+1))
-            done
+            dc_index=$((dc_index+1))
+            krb_ok=0; ldap_ok=0
+
+            if _tcp_ok "$target" 88; then
+                krb_ok=1; reachable=$((reachable+1))
+            fi
+            tested=$((tested+1))
+
+            if _tcp_ok "$target" 389; then
+                ldap_ok=1; reachable=$((reachable+1))
+            fi
+            tested=$((tested+1))
+
+            if ((krb_ok)); then krb_text='доступен'; else krb_text='недоступен'; fi
+            if ((ldap_ok)); then ldap_text='доступен'; else ldap_text='недоступен'; fi
+            if ((krb_ok && ldap_ok)); then
+                dc_sev=ok
+            elif ((krb_ok || ldap_ok)); then
+                dc_sev=warn
+            else
+                dc_sev=crit
+            fi
+            if ((PRIVACY)); then dc_display='скрыто'; else dc_display=$target; fi
+            add_check "$section" "domain.dc.node.$dc_index" "Контроллер #$dc_index" \
+              "$dc_display — Kerberos 88: $krb_text; LDAP 389: $ldap_text" "$dc_sev"
         done <<<"$targets"
         if ((tested>0)); then
             if ((reachable==tested)); then rc=ok; elif ((reachable>0)); then rc=warn; else rc=crit; fi
@@ -867,7 +891,7 @@ _cifs_state_text() {
 }
 
 check_network() {
-    local gw ifaces idx=0 row iface ip mac speed duplex link dns_domain cifs_count=0 cifs_ok=0 cifs_bad=0 cifs_unknown=0 mnt gvfs_count=0 gvfs_bad=0 g dir
+    local gw ifaces idx=0 row iface ip mac speed duplex link dns_domain cifs_count=0 cifs_ok=0 cifs_bad=0 cifs_unknown=0 mnt gvfs_count=0 gvfs_bad=0 gvfs_unknown=0 g dir gvfs_uid gvfs_user gvfs_dirs gvfs_state
     local cifs_source cifs_options cifs_multiuser cifs_user cifs_context cifs_state cifs_text cifs_detail cifs_sev cifs_source_display cifs_target_display
     local eap_count=0 active_eap_count=0 cert_global_min=-1 cert_unknown=0 cert_seen=0 cert_index=0 system_ca_profiles=0 uuid type eap conn_name
     local cert_spec cert_kind cert_field cert_label certref certpath cert_display cert_start cert_end start_fmt end_fmt end_epoch now days cert_cmd_path sev
@@ -1182,14 +1206,38 @@ check_network() {
 
     for g in /run/user/*/gvfs; do
         [[ -d $g ]] || continue
+        gvfs_uid=${g#/run/user/}; gvfs_uid=${gvfs_uid%%/*}
+        gvfs_user=''
+        if have getent; then gvfs_user=$(getent passwd "$gvfs_uid" 2>/dev/null | cut -d: -f1 | head -n1); fi
+        [[ -n $gvfs_user ]] || gvfs_user=$(id -nu "$gvfs_uid" 2>/dev/null || true)
+
+        if [[ -n $gvfs_user ]]; then
+            gvfs_dirs=$(_cifs_exec_as "$gvfs_user" find "$g" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null || true)
+        else
+            gvfs_dirs=$(find "$g" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null || true)
+        fi
+
         while IFS= read -r dir; do
-            [[ -n $dir ]] || continue; gvfs_count=$((gvfs_count+1))
-            if run_timeout 4 stat -f "$dir" >/dev/null 2>&1; then :; else gvfs_bad=$((gvfs_bad+1)); fi
-        done < <(find "$g" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+            [[ -n $dir ]] || continue
+            gvfs_count=$((gvfs_count+1))
+            _cifs_probe "$dir" "$gvfs_user"
+            gvfs_state=$CIFS_PROBE_STATE
+            case "$gvfs_state" in
+                OK) ;;
+                INCONCLUSIVE) gvfs_unknown=$((gvfs_unknown+1)) ;;
+                *) gvfs_bad=$((gvfs_bad+1)) ;;
+            esac
+        done <<<"$gvfs_dirs"
     done
-    if ((gvfs_count==0)); then add_check "SMB / GVFS" "network.gvfs" "GVFS mounts" "нет" info
-    elif ((gvfs_bad==0)); then add_check "SMB / GVFS" "network.gvfs" "GVFS mounts" "$gvfs_count, доступны" ok
-    else add_check "SMB / GVFS" "network.gvfs" "GVFS mounts" "$gvfs_count, недоступны/зависли: $gvfs_bad" warn; fi
+    if ((gvfs_count==0)); then
+        add_check "SMB / GVFS" "network.gvfs" "GVFS mounts" "нет" info
+    elif ((gvfs_bad==0 && gvfs_unknown==0)); then
+        add_check "SMB / GVFS" "network.gvfs" "GVFS mounts" "$gvfs_count, доступны" ok
+    elif ((gvfs_bad==0)); then
+        add_check "SMB / GVFS" "network.gvfs" "GVFS mounts" "$gvfs_count; не проверены: $gvfs_unknown" unknown
+    else
+        add_check "SMB / GVFS" "network.gvfs" "GVFS mounts" "$gvfs_count; проблемы: $gvfs_bad; не проверены: $gvfs_unknown" warn
+    fi
     proc_caja=$(pgrep -xc caja 2>/dev/null || true); proc_gvfs=$(pgrep -fc 'gvfsd-smb|gvfsd-fuse' 2>/dev/null || true)
     add_check "SMB / GVFS" "network.desktop" "Caja / GVFS процессы" "caja:$proc_caja gvfs:$proc_gvfs" ok
 }
