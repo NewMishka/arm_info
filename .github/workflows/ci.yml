@@ -6,9 +6,149 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  apply-corp-short-alias:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/v1.2.4-command-audit'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v1.2.4-command-audit
+          fetch-depth: 0
+      - name: Apply -c alias and docs
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new, label):
+              p = Path(path)
+              s = p.read_text(encoding='utf-8')
+              if new in s:
+                  return
+              if old not in s:
+                  raise SystemExit(f'{label}: source text not found')
+              p.write_text(s.replace(old, new, 1), encoding='utf-8')
+
+          # arm_info: corporate parser, early dispatcher and help.
+          replace_once('arm_info.sh',
+              '  arm_info --corp [--privacy] [--json] [-s|--save] [-o FILE]',
+              '  arm_info -c [--privacy] [--json] [-s|--save] [-o FILE]\n  arm_info --corp [--privacy] [--json] [-s|--save] [-o FILE]',
+              'enterprise usage')
+          replace_once('arm_info.sh',
+              '        --corp) PROFILE=enterprise; shift ;;',
+              '        -c|--corp) PROFILE=enterprise; shift ;;',
+              'enterprise parser')
+          replace_once('arm_info.sh',
+              '        --corp|--profile|--profile=*|--compare) _arm_enterprise_requested=1; break ;;',
+              '        -c|--corp|--profile|--profile=*|--compare) _arm_enterprise_requested=1; break ;;',
+              'enterprise dispatcher')
+          replace_once('arm_info.sh',
+              '  --corp                  сокращённый запуск corporate-профиля: domain+network+print',
+              '  -c, --corp              сокращённый запуск corporate-профиля: domain+network+print',
+              'standard help')
+
+          # Regression tests.
+          replace_once('tests/test_enterprise.sh',
+              '[[ $(bash "$SCRIPT" --corp --version) == "arm_info enterprise $EXPECTED_VERSION" ]] || die "--corp version"',
+              '[[ $(bash "$SCRIPT" --corp --version) == "arm_info enterprise $EXPECTED_VERSION" ]] || die "--corp version"\n[[ $(bash "$SCRIPT" -c --version) == "arm_info enterprise $EXPECTED_VERSION" ]] || die "-c version"',
+              'short alias version test')
+          replace_once('tests/test_enterprise.sh',
+              'bash "$SCRIPT" --corp --help | grep -q -- \'--corp\' || die "--corp help"',
+              'bash "$SCRIPT" --corp --help | grep -q -- \'--corp\' || die "--corp help"\nbash "$SCRIPT" -c --help | grep -q -- \'--corp\' || die "-c help"\ngrep -Fq -- \'-c|--corp) PROFILE=enterprise\' "$SCRIPT" || die "-c parser"\ngrep -Fq -- \'-c|--corp|--profile\' "$SCRIPT" || die "-c dispatcher"',
+              'short alias help test')
+
+          # README: advertise the alias without removing the long form.
+          replace_once('README.md',
+              'sudo bash /tmp/arm_info.sh --corp\n```\n\nПо умолчанию корпоративный отчёт',
+              'sudo bash /tmp/arm_info.sh -c\n```\n\n`-c` — короткий алиас `--corp`; оба варианта запускают один и тот же корпоративный профиль.\n\nПо умолчанию корпоративный отчёт',
+              'README quick launch')
+          replace_once('README.md',
+              '--corp\n--profile domain|network|print|software|enterprise',
+              '-c, --corp\n--profile domain|network|print|software|enterprise',
+              'README CLI')
+          replace_once('README.md',
+              '- `enterprise` / `--corp` — объединяет `domain + network + print`;',
+              '- `enterprise` / `-c` / `--corp` — объединяет `domain + network + print`;',
+              'README profile list')
+
+          # Current usage docs: add alias and remove stale autosave wording left from pre-1.2.4 behavior.
+          replace_once('docs/USAGE.md',
+              'sudo bash /tmp/arm_info.sh --corp\n```',
+              'sudo bash /tmp/arm_info.sh -c\n```\n\n`-c` — короткий алиас `--corp`.',
+              'USAGE quick corporate')
+          replace_once('docs/USAGE.md',
+              'Обычный запуск по умолчанию создаёт:\n\n```text\nARM_INFO_<hostname>_YYYY-MM-DD_HH-MM-SS.txt\n```\n\nВ `--privacy`:\n\n```text\nARM_INFO_PRIVATE_YYYY-MM-DD_HH-MM-SS.txt\n```\n\nДля JSON используется расширение `.json`.',
+              'Обычный запуск по умолчанию выводит отчёт только в терминал. Файл создаётся только при `-s/--save`. При сохранении без `-o` используется автоматическое имя:\n\n```text\nARM_INFO_<hostname>_YYYY-MM-DD_HH-MM-SS.txt\n```\n\nВ `--privacy`:\n\n```text\nARM_INFO_PRIVATE_YYYY-MM-DD_HH-MM-SS.txt\n```\n\nДля JSON используется расширение `.json`.',
+              'USAGE standard save behavior')
+          replace_once('docs/USAGE.md',
+              'Короткий корпоративный профиль:\n\n```bash\nsudo arm_info --corp\n```\n\nОн эквивалентен `--profile enterprise`',
+              'Короткий корпоративный профиль:\n\n```bash\nsudo arm_info -c\n```\n\n`-c` — алиас `--corp`; оба варианта эквивалентны `--profile enterprise`',
+              'USAGE corporate alias')
+          replace_once('docs/USAGE.md',
+              '`--corp` и `--profile enterprise` сохраняют отчёт по умолчанию. Имена формируются так:',
+              '`-c` / `--corp` и `--profile enterprise` по умолчанию ничего не сохраняют. При явном `-s/--save` без `-o` имена формируются так:',
+              'USAGE corporate save behavior')
+          replace_once('docs/USAGE.md',
+              'Отдельные профили `domain`, `network`, `print` и `software` без `-o/--output` выводятся в терминал; файл создаётся только при явном указании пути.',
+              'Отдельные профили `domain`, `network`, `print` и `software` также выводятся только в терминал; файл создаётся только при явном `-s/--save`, а `-o/--output` используется вместе с ним.',
+              'USAGE profile save behavior')
+          replace_once('docs/USAGE.md',
+              'sudo arm_info --corp\n```\n\n## Только файл',
+              'sudo arm_info -c\n```\n\n## Только файл',
+              'USAGE no-save example')
+          replace_once('docs/USAGE.md',
+              'Для корпоративного профиля пользовательская шапка содержит `ARM_INFO КОРПОРАТИВНЫЙ`; CLI-ключ `--profile enterprise` сохранён для совместимости.',
+              'Для корпоративного профиля пользовательская шапка содержит `ARM_INFO КОРПОРАТИВНЫЙ`; `-c` является коротким алиасом `--corp`, а CLI-ключ `--profile enterprise` сохранён для совместимости.',
+              'USAGE header note')
+
+          # Enterprise profile reference.
+          replace_once('docs/ENTERPRISE_PROFILES.md',
+              'Короткий запуск полного корпоративного профиля: `sudo arm_info --corp`. Он эквивалентен `--profile enterprise`',
+              'Короткий запуск полного корпоративного профиля: `sudo arm_info -c`. Ключ `-c` является алиасом `--corp`; оба варианта эквивалентны `--profile enterprise`',
+              'enterprise docs intro')
+          replace_once('docs/ENTERPRISE_PROFILES.md',
+              '`--corp` и остальные профили **по умолчанию ничего не сохраняют**',
+              '`-c` / `--corp` и остальные профили **по умолчанию ничего не сохраняют**',
+              'enterprise docs save')
+          replace_once('docs/ENTERPRISE_PROFILES.md',
+              'Пользовательский TXT-отчёт при `--corp`/`--profile enterprise`',
+              'Пользовательский TXT-отчёт при `-c`/`--corp`/`--profile enterprise`',
+              'enterprise docs header')
+          replace_once('docs/ENTERPRISE_PROFILES.md',
+              'sudo arm_info --corp\nsudo arm_info --corp --privacy --json --save -o /tmp/arm-corp.json',
+              'sudo arm_info -c\nsudo arm_info --corp --privacy --json --save -o /tmp/arm-corp.json',
+              'enterprise docs recommended')
+          replace_once('docs/ENTERPRISE_PROFILES.md',
+              'Чтобы сохранить его, используйте `sudo arm_info --corp --save`;',
+              'Чтобы сохранить его, используйте `sudo arm_info -c --save` или `sudo arm_info --corp --save`;',
+              'enterprise docs save example')
+
+          # Release note.
+          replace_once('docs/releases/v1.2.4.md',
+              '- сохранение отчёта переведено в opt-in режим: по умолчанию файл не создаётся; `-s` / `--save` включает сохранение, прежний отрицательный ключ удалён, а `-o/--output` допустим только вместе с `--save`; строки о пути/сохранении выводятся только когда файл действительно создаётся;',
+              '- сохранение отчёта переведено в opt-in режим: по умолчанию файл не создаётся; `-s` / `--save` включает сохранение, прежний отрицательный ключ удалён, а `-o/--output` допустим только вместе с `--save`; строки о пути/сохранении выводятся только когда файл действительно создаётся;\n- добавлен короткий алиас `-c` для корпоративного профиля `--corp`;',
+              'release note alias')
+          PY
+          bash -n arm_info.sh
+          bash tests/test_enterprise.sh
+          grep -Fq -- '-c, --corp' arm_info.sh
+          grep -Fq -- '-c, --corp' README.md
+      - name: Commit source changes
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'Alias already applied; nothing to commit.'
+            exit 0
+          fi
+          git config user.name arm_info-ci
+          git config user.email 157384758+NewMishka@users.noreply.github.com
+          git add arm_info.sh tests/test_enterprise.sh README.md docs/USAGE.md docs/ENTERPRISE_PROFILES.md docs/releases/v1.2.4.md
+          git commit -m 'feat: add -c alias for corporate profile'
+          git push origin HEAD:feature/v1.2.4-command-audit
+
   bash:
     runs-on: ubuntu-latest
     steps:
