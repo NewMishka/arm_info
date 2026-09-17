@@ -13,8 +13,10 @@ sudo bash /tmp/arm_info.sh
 Для корпоративной диагностики:
 
 ```bash
-sudo bash /tmp/arm_info.sh --corp
+sudo bash /tmp/arm_info.sh -c
 ```
+
+`-c` — короткий алиас `--corp`.
 
 Запуск через `sh` не рекомендуется: используются Bash-конструкции.
 
@@ -37,7 +39,7 @@ sudo bash install.sh --uninstall
 
 ## Стандартный отчёт
 
-Обычный запуск по умолчанию создаёт:
+Обычный запуск по умолчанию выводит отчёт только в терминал. Файл создаётся только при `-s/--save`. При сохранении без `-o` используется автоматическое имя:
 
 ```text
 ARM_INFO_<hostname>_YYYY-MM-DD_HH-MM-SS.txt
@@ -56,12 +58,12 @@ ARM_INFO_PRIVATE_YYYY-MM-DD_HH-MM-SS.txt
 Короткий корпоративный профиль:
 
 ```bash
-sudo arm_info --corp
+sudo arm_info -c
 ```
 
-Он эквивалентен `--profile enterprise` и выполняет `domain + network + print`. Глобальная инвентаризация ПО в него не входит.
+`-c` — алиас `--corp`; оба варианта эквивалентны `--profile enterprise` и выполняет `domain + network + print`. Глобальная инвентаризация ПО в него не входит.
 
-`--corp` и `--profile enterprise` сохраняют отчёт по умолчанию. Имена формируются так:
+`-c` / `--corp` и `--profile enterprise` по умолчанию ничего не сохраняют. При явном `-s/--save` без `-o` имена формируются так:
 
 ```text
 ARM_INFO_CORP_<hostname>_YYYYMMDD_HHMMSS.txt
@@ -70,56 +72,58 @@ ARM_INFO_CORP_PRIVATE_YYYYMMDD_HHMMSS.txt   # --privacy
 
 Для корпоративного JSON расширение меняется на `.json`.
 
-Отдельные профили `domain`, `network`, `print` и `software` без `-o/--output` выводятся в терминал; файл создаётся только при явном указании пути.
+Отдельные профили `domain`, `network`, `print` и `software` также выводятся только в терминал; файл создаётся только при явном `-s/--save`, а `-o/--output` используется вместе с ним.
 
 ## Выбор места сохранения
 
 Стандартный отчёт:
 
 ```bash
-sudo arm_info --output /var/tmp/
-sudo arm_info --output /var/tmp/report.txt
+sudo arm_info --save --output /var/tmp/
+sudo arm_info --save --output /var/tmp/report.txt
 ```
 
 Корпоративный отчёт:
 
 ```bash
-sudo arm_info --corp -o /var/tmp/
-sudo arm_info --corp -o /var/tmp/arm-corp.txt
+sudo arm_info --corp --save -o /var/tmp/
+sudo arm_info --corp --save -o /var/tmp/arm-corp.txt
 ```
 
-Если стандартный каталог недоступен для записи, стандартный анализ использует `/tmp`. Для явного `-o/--output` корпоративный профиль завершится ошибкой, если каталог недоступен.
+По умолчанию файл не создаётся. `-o/--output` допустим только вместе с `-s/--save`. Если каталог автоматического сохранения недоступен, используется `/tmp`; для явного `-o/--output` недоступный путь завершает запуск ошибкой.
 
 ## Без сохранения
 
+Никакой отдельный ключ не требуется — это поведение по умолчанию:
+
 ```bash
-sudo arm_info --no-save
-sudo arm_info --corp --no-save
+sudo arm_info
+sudo arm_info -c
 ```
 
 ## Только файл
 
-Опция `--quiet` относится к стандартному анализу:
+Опция `--quiet` относится к стандартному анализу и используется вместе с сохранением:
 
 ```bash
-sudo arm_info --quiet
+sudo arm_info --save --quiet
 ```
 
-Для корпоративного профиля используйте перенаправление shell либо `-o`; профиль всё равно печатает результат в терминал.
+Для корпоративного профиля используйте `--save -o PATH` и при необходимости перенаправление shell; профиль печатает результат в терминал.
 
 ## JSON
 
 Стандартная schema v1:
 
 ```bash
-sudo arm_info --json --privacy --no-save
+sudo arm_info --json --privacy
 ```
 
 Корпоративная schema v2:
 
 ```bash
-sudo arm_info --corp --privacy --json --no-save
-sudo arm_info --corp --privacy --json -o /tmp/arm-corp.json
+sudo arm_info --corp --privacy --json
+sudo arm_info --corp --privacy --json --save -o /tmp/arm-corp.json
 ```
 
 ## Публичный отчёт
@@ -149,7 +153,7 @@ USB/съёмные носители показываются как `Съёмн�
 
 В 1.2.3 команда выводится одной физической строкой. Терминал может визуально переносить её на следующую строку, но при копировании pipeline, regex и аргументы остаются одной shell-командой. Пояснение к команде выводится отдельной строкой в скобках.
 
-Для корпоративного профиля пользовательская шапка содержит `ARM_INFO КОРПОРАТИВНЫЙ`; CLI-ключ `--profile enterprise` сохранён для совместимости.
+Для корпоративного профиля пользовательская шапка содержит `ARM_INFO КОРПОРАТИВНЫЙ`; `-c` является коротким алиасом `--corp`, а CLI-ключ `--profile enterprise` сохранён для совместимости.
 
 ## 802.1X в 1.2.3
 
@@ -172,3 +176,8 @@ make version
 ```
 
 Версия берётся из файла `VERSION`. `Makefile` не хранит отдельный номер версии; `make check` сверяет `VERSION` с `arm_info.sh` и RPM spec.
+
+
+## Команды рекомендаций в 1.2.4
+
+Все команды проходят отдельный command-audit contract. Каждая команда в TXT имеет описание ожидаемого результата; state-changing команды явно помечаются. Служебные значения задаются безопасными токенами (`DOMAIN_FQDN`, `PROFILE_NAME`, `MOUNT_PATH`, `UNIT_NAME` и т. п.), которые нужно заменить перед запуском. Подробно: [COMMANDS.md](COMMANDS.md).

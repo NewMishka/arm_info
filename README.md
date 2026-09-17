@@ -11,7 +11,7 @@
 - ОС, ядро, архитектура, модель системы, BIOS, uptime и ориентир возраста установки;
 - CPU: модель, физические ядра/потоки, load, температура по нескольким замерам с выводом медианы;
 - ОЗУ: объём, доступность, модули, тип/частота, swap, OOM;
-- сеть: IP/MAC, gateway, DNS, link, RX/TX errors и dropped, ppm;
+- сеть: IP/MAC, gateway, DNS, link, RX/TX errors, `rx_missed_errors`, TX dropped и информационный RX dropped; score учитывает только диагностически значимые ошибки/потери;
 - HDD/SSD/NVMe: SMART, ресурс, температура, Power-On Hours, bad/pending/uncorrectable, NVMe critical/media errors;
 - файловые системы: заполнение, inode, read-only;
 - стабильность системы: failed units, аппаратные/дисковые ошибки ядра, journal `err..alert`, OOM, time sync, признаки аварийной загрузки и ECC/EDAC;
@@ -47,10 +47,12 @@ sudo arm_info
 ```bash
 scp arm_info.sh admin@HOST:/tmp/
 ssh admin@HOST
-sudo bash /tmp/arm_info.sh --corp
+sudo bash /tmp/arm_info.sh -c
 ```
 
-Корпоративный TXT-отчёт при таком запуске сохраняется автоматически в текущий каталог. Чтобы только вывести результат без сохранения, используйте `--no-save`.
+`-c` — короткий алиас `--corp`; оба варианта запускают один и тот же корпоративный профиль.
+
+По умолчанию корпоративный отчёт выводится только в терминал и файл не создаётся. Для сохранения добавьте `-s` или `--save`; при необходимости путь задаётся через `-o/--output`.
 
 `--corp` запускает `domain + network + print` и **не выполняет глобальную инвентаризацию ПО**, поэтому отчёт не раздувается сотнями строк.
 
@@ -64,10 +66,12 @@ sudo bash /tmp/arm_info.sh --corp
 
 В стандартном отчёте группа `Стабильность системы` показывает оценку из 100, каждый учитываемый сигнал и его штраф. Это оценка устойчивости работы АРМ по системным событиям, а не утверждение о повреждении самой ОС.
 
+В **1.2.4** проведена ревизия всех команд из рекомендаций: исправлены некорректные варианты `nmcli`, исключены заведомо бесполезные проверки отсутствующих утилит, добавлены пользовательский контекст Kerberos, таймауты сетевых проверок, безопасные маркеры (`DOMAIN_FQDN`, `PROFILE_NAME`, `USER_NAME` и т. п.) и явное предупреждение `ИЗМЕНЯЕТ СОСТОЯНИЕ` для команд, меняющих конфигурацию/очередь. Каждая выводимая команда получает отдельное описание результата. CI дополнительно запускает `tests/test_sections.sh`, который проверяет все пользовательские разделы стандартного TXT, основные группы JSON и все секции корпоративных профилей. CIFS-проверка в 1.2.4 использует TARGET одной колонкой и фактическое минимальное чтение каталога с timeout: это исключает ложные WARN из-за пробелов/кириллицы и не считает успешный `stat -f` доказательством доступности содержимого.
+
 Если отчёт нужно передать вне внутреннего контура или использовать для сравнения АРМ:
 
 ```bash
-sudo bash /tmp/arm_info.sh --corp --privacy --json -o /tmp/arm-corp.json
+sudo bash /tmp/arm_info.sh --corp --privacy --json --save -o /tmp/arm-corp.json
 ```
 
 Полная инвентаризация всех RPM-пакетов запускается только отдельно и явно:
@@ -90,12 +94,12 @@ sha256sum -c SHA256SUMS
 -h, --help
 -V, --version
 --privacy
---no-save
+-s, --save
 -o, --output PATH
 -q, --quiet
 --json
 --config PATH
---corp
+-c, --corp
 --profile domain|network|print|software|enterprise
 --compare REPORT_A.json REPORT_B.json
 ```
@@ -104,17 +108,17 @@ sha256sum -c SHA256SUMS
 
 ```bash
 sudo arm_info --privacy
-sudo arm_info --json --privacy --no-save | jq '.summary'
-sudo arm_info --output /var/tmp/arm-reports/
+sudo arm_info --json --privacy | jq '.summary'
+sudo arm_info --save --output /var/tmp/arm-reports/
 sudo arm_info --config /etc/arm_info.conf
 sudo arm_info --profile domain --privacy
-sudo arm_info --corp --privacy --json -o /tmp/arm-corp.json
+sudo arm_info --corp --privacy --json --save -o /tmp/arm-corp.json
 arm_info --compare arm-a.json arm-b.json
 ```
 
 ## Корпоративные профили
 
-`arm_info 1.2.3` содержит встроенные профили для типовых проблем корпоративных АРМ РЕД ОС. Они **не смешиваются с базовым health score** и выводят самостоятельные статусы `OK/WARN/CRIT/N/A`.
+`arm_info 1.2.4` содержит встроенные профили для типовых проблем корпоративных АРМ РЕД ОС. Они **не смешиваются с базовым health score** и выводят самостоятельные статусы `OK/WARN/CRIT/N/A`.
 
 Для `WARN/CRIT/N/A` формируется максимально подробный блок рекомендаций: возможные причины → влияние → что проверить → действие → команды → контроль результата. В JSON те же данные доступны в `recommendations[]`.
 
@@ -122,7 +126,7 @@ arm_info --compare arm-a.json arm-b.json
 - `network` — DNS/upstream, FQDN, интерфейсы, 802.1X и сроки сертификатов, CIFS/GVFS/Caja;
 - `print` — CUPS service/scheduler, default printer, paused queues, jobs, backend URI и журнал;
 - `software` — глобальная инвентаризация всех установленных RPM-пакетов, общее число процессов и zombie-процессы;
-- `enterprise` / `--corp` — объединяет `domain + network + print`; глобальная инвентаризация ПО **не запускается автоматически** и доступна только отдельно через `--profile software`.
+- `enterprise` / `-c` / `--corp` — объединяет `domain + network + print`; глобальная инвентаризация ПО **не запускается автоматически** и доступна только отдельно через `--profile software`.
 
 Подробно: [docs/ENTERPRISE_PROFILES.md](docs/ENTERPRISE_PROFILES.md).
 
@@ -131,8 +135,8 @@ arm_info --compare arm-a.json arm-b.json
 Для ситуации «на рабочем АРМ всё работает, на проблемном нет» можно получить два обезличенных JSON и сравнить их:
 
 ```bash
-sudo arm_info --corp --privacy --json -o arm-a.json
-sudo arm_info --corp --privacy --json -o arm-b.json
+sudo arm_info --corp --privacy --json --save -o arm-a.json
+sudo arm_info --corp --privacy --json --save -o arm-b.json
 arm_info --compare arm-a.json arm-b.json
 ```
 
@@ -146,7 +150,7 @@ arm_info --compare arm-a.json arm-b.json
 sudo arm_info --privacy
 ```
 
-Privacy-режим скрывает hostname, MAC, DNS, SSSD-домены, маскирует IP и заменяет имена интерфейсов. В корпоративных профилях дополнительно скрываются доменные значения; printer URI всегда очищается от встроенных учётных данных. Автоматическое имя privacy-отчёта не содержит hostname. Подробно: [docs/PRIVACY.md](docs/PRIVACY.md).
+Privacy-режим скрывает hostname, MAC, DNS, SSSD-домены, маскирует IP и заменяет имена интерфейсов. В корпоративных профилях дополнительно скрываются доменные значения; printer URI всегда очищается от встроенных учётных данных. При явном сохранении автоматическое имя privacy-отчёта не содержит hostname. Подробно: [docs/PRIVACY.md](docs/PRIVACY.md).
 
 ## Технический индекс
 
@@ -206,14 +210,14 @@ bash packaging/build-rpm.sh
 ## Разработка
 
 ```bash
-make version   # версия берётся из VERSION; для 1.2.3 выводит 1.2.3
+make version   # версия берётся из VERSION; для 1.2.4 выводит 1.2.4
 make check
 make test
 ```
 
 `Makefile` не содержит отдельной захардкоженной версии: он читает `VERSION` и в `make check` сверяет её с `arm_info.sh` и RPM spec. CI дополнительно проверяет эту же согласованность перед merge/release.
 
-CI выполняет `bash -n`, ShellCheck уровня error, базовые CLI/JSON/privacy tests, корпоративные tests, compatibility syntax, installer smoke, документационный contract и RPM build smoke test.
+CI выполняет `bash -n`, ShellCheck уровня error, базовые CLI/JSON/privacy tests, корпоративные tests, аудит команд рекомендаций, полную проверку разделов отчёта, compatibility syntax, installer smoke, документационный contract и RPM build smoke test.
 
 ## Документация
 
@@ -226,6 +230,7 @@ CI выполняет `bash -n`, ShellCheck уровня error, базовые C
 - [Дополнительные проверки](docs/OPTIONAL_CHECKS.md)
 - [Совместимость](docs/COMPATIBILITY.md)
 - [Тестирование](docs/TESTING.md)
+- [Команды рекомендаций](docs/COMMANDS.md)
 - [Pre-release checklist](docs/PRE_RELEASE_CHECKLIST.md)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
@@ -233,7 +238,7 @@ CI выполняет `bash -n`, ShellCheck уровня error, базовые C
 
 ## Версия
 
-Текущая версия: **1.2.3**.
+Текущая версия: **1.2.4**.
 
 ## Лицензия
 

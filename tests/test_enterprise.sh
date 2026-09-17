@@ -8,9 +8,13 @@ die() { echo "TEST FAIL: $*" >&2; exit 1; }
 bash -n "$SCRIPT" || die "bash -n enterprise"
 [[ $(bash "$SCRIPT" --profile domain --version) == "arm_info enterprise $EXPECTED_VERSION" ]] || die "--version"
 [[ $(bash "$SCRIPT" --corp --version) == "arm_info enterprise $EXPECTED_VERSION" ]] || die "--corp version"
+[[ $(bash "$SCRIPT" -c --version) == "arm_info enterprise $EXPECTED_VERSION" ]] || die "-c version"
 bash "$SCRIPT" --profile domain --help | grep -q -- '--profile enterprise' || die "--help profiles"
 bash "$SCRIPT" --corp --help | grep -q -- '--corp' || die "--corp help"
-bash "$SCRIPT" --corp --help | grep -q -- '--no-save' || die "--corp no-save help"
+bash "$SCRIPT" -c --help | grep -q -- '--corp' || die "-c help"
+grep -Fq -- '-c|--corp) PROFILE=enterprise' "$SCRIPT" || die "-c parser"
+grep -Fq -- '-c|--corp|--profile' "$SCRIPT" || die "-c dispatcher"
+bash "$SCRIPT" --corp --help | grep -q -- '--save' || die "--corp save help"
 grep -q 'enterprise) check_domain; check_network; check_print ;;' "$SCRIPT" || die "enterprise profile must exclude software inventory"
 
 # No hard-coded application/vendor inventory and no hard-coded Kerberos error-code list.
@@ -79,11 +83,25 @@ grep -Eq 'Возможные причины:|Дополнительных дей
 # v1.2.2 text-report and saving contract.
 grep -q "print_check_row 'Параметр' 'Статус' 'Значение'" "$SCRIPT" || die "enterprise column header"
 grep -q 'openssl x509 -in' "$SCRIPT" || die "802.1X certificate date command"
-grep -q 'покажет даты начала и окончания действия сертификата' "$SCRIPT" || die "command explanations"
+grep -q 'прочитает X.509-сертификат и покажет Subject, Issuer, начало и окончание срока действия' "$SCRIPT" || die "command explanations"
 grep -q 'JSON_MODE==0' "$SCRIPT" || die "interactive clear guard"
-grep -q 'SAVE_REPORT=1' "$SCRIPT" || die "corporate save default"
-grep -q -- '--no-save) SAVE_REPORT=0' "$SCRIPT" || die "corporate no-save switch"
-grep -q 'ARM_INFO_CORP_' "$SCRIPT" || die "corporate automatic report name"
+grep -q 'SAVE_REPORT=0' "$SCRIPT" || die "save must be opt-in"
+grep -q -- '-s|--save) SAVE_REPORT=1' "$SCRIPT" || die "corporate save switch"
+grep -q 'ARM_INFO_${CORP_TAG}_' "$SCRIPT" || die "profile automatic report name"
+SAVE_DIR=$(mktemp -d)
+set +e
+(cd "$SAVE_DIR" && bash "$SCRIPT" --corp --privacy >/dev/null)
+RC=$?
+set -e
+((RC>=0 && RC<=3)) || die "corp default exit code $RC"
+! find "$SAVE_DIR" -maxdepth 1 -type f -name 'ARM_INFO_*' | grep -q . || die "corp default must not save"
+set +e
+bash "$SCRIPT" --corp --privacy --save -o "$SAVE_DIR/corp.txt" >/dev/null
+RC=$?
+set -e
+((RC>=0 && RC<=3)) || die "corp --save exit code $RC"
+[[ -s "$SAVE_DIR/corp.txt" ]] || die "corp --save did not create report"
+rm -rf "$SAVE_DIR"
 grep -q 'split_rec_commands' "$SCRIPT" || die "corporate command splitter"
 grep -Fq 'nmcli -t -f UUID,TYPE connection show 2>/dev/null' "$SCRIPT" || die "802.1X must inspect all configured NM profiles"
 grep -q 'Сертификат АРМ (кандидат 802.1X)' "$SCRIPT" || die "802.1X host certificate fallback"

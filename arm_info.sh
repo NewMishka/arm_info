@@ -2,9 +2,9 @@
 
 (
 # ============================================================
-# arm_info 1.2.3 — диагностика АРМ для РЕД ОС 7 / 8
+# arm_info 1.2.4 — диагностика АРМ для РЕД ОС 7 / 8
 # Запуск: исполняемый Bash-файл; base и enterprise находятся в одном файле.
-# Результат одновременно выводится на экран и сохраняется в TXT.
+# Результат выводится на экран; сохранение выполняется только по -s/--save.
 # ============================================================
 
 if [ -z "${BASH_VERSION:-}" ]; then
@@ -12,38 +12,48 @@ if [ -z "${BASH_VERSION:-}" ]; then
     exit 1
 fi
 
-ARM_INFO_VERSION="1.2.3"
+ARM_INFO_VERSION="1.2.4"
+
+ARM_INFO_SELF_SOURCE=${BASH_SOURCE[0]:-$0}
+if [[ -f $ARM_INFO_SELF_SOURCE ]]; then
+    ARM_INFO_SELF_PATH=$(readlink -f -- "$ARM_INFO_SELF_SOURCE" 2>/dev/null || printf '%s' "$ARM_INFO_SELF_SOURCE")
+    printf -v ARM_INFO_SELF_Q '%q' "$ARM_INFO_SELF_PATH"
+    ARM_INFO_SELF_CMD="bash $ARM_INFO_SELF_Q"
+else
+    ARM_INFO_SELF_CMD="arm_info"
+fi
 
 
-# enterprise-profile-dispatch-v1.2.3 — single-file edition
+# enterprise-profile-dispatch-v1.2.4 — single-file edition
 # Enterprise-профили встроены в arm_info.sh; внешний helper не требуется.
 _arm_enterprise_run() (
-# arm_info enterprise profiles — v1.2.3
+# arm_info enterprise profiles — v1.2.4
 # Read-only diagnostics for RED OS enterprise workstations.
 set -u
 set -o pipefail
 
-VERSION="1.2.3"
+VERSION="1.2.4"
 PROFILE=""
 PRIVACY=0
 JSON_MODE=0
-SAVE_REPORT=1
+SAVE_REPORT=0
 OUTPUT_PATH=""
 COMPARE_A=""
 COMPARE_B=""
 
 usage() {
     cat <<'USAGE'
-arm_info enterprise profiles 1.2.3
+arm_info enterprise profiles 1.2.4
 
 Использование:
-  arm_info --profile domain [--privacy] [--json] [-o FILE]
-  arm_info --profile network [--privacy] [--json] [-o FILE]
-  arm_info --profile print [--privacy] [--json] [-o FILE]
-  arm_info --profile software [--privacy] [--json] [-o FILE]
-  arm_info --corp [--privacy] [--json] [--no-save] [-o FILE]
-  arm_info --profile enterprise [--privacy] [--json] [--no-save] [-o FILE]
-  arm_info --compare REPORT_A.json REPORT_B.json [--json] [-o FILE]
+  arm_info --profile domain [--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --profile network [--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --profile print [--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --profile software [--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info -c [--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --corp [--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --profile enterprise [--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --compare REPORT_A.json REPORT_B.json [--json] [-s|--save] [-o FILE]
 
 Профили:
   domain       AD/SSSD/Kerberos, DNS SRV, KDC/LDAP, синхронизация времени
@@ -63,7 +73,7 @@ USAGE
 
 while (($#)); do
     case "$1" in
-        --corp) PROFILE=enterprise; shift ;;
+        -c|--corp) PROFILE=enterprise; shift ;;
         --profile)
             [[ $# -ge 2 ]] || { echo "Ошибка: --profile требует значение" >&2; exit 64; }
             PROFILE=$2; shift 2 ;;
@@ -73,7 +83,7 @@ while (($#)); do
             COMPARE_A=$2; COMPARE_B=$3; shift 3 ;;
         --privacy) PRIVACY=1; shift ;;
         --json) JSON_MODE=1; shift ;;
-        --no-save) SAVE_REPORT=0; shift ;;
+        -s|--save) SAVE_REPORT=1; shift ;;
         -o|--output)
             [[ $# -ge 2 ]] || { echo "Ошибка: $1 требует путь" >&2; exit 64; }
             OUTPUT_PATH=$2; shift 2 ;;
@@ -83,6 +93,11 @@ while (($#)); do
         *) echo "Ошибка: неизвестный параметр: $1" >&2; usage >&2; exit 64 ;;
     esac
 done
+
+if [[ -n $OUTPUT_PATH && $SAVE_REPORT -ne 1 ]]; then
+    echo "Ошибка: -o/--output используется только вместе с -s/--save" >&2
+    exit 64
+fi
 
 if [[ -n $COMPARE_A || -n $COMPARE_B ]]; then
     [[ -n $COMPARE_A && -n $COMPARE_B ]] || { echo "Ошибка: укажите два файла для сравнения" >&2; exit 64; }
@@ -104,34 +119,47 @@ if ((JSON_MODE==0)) && [[ -z $COMPARE_A ]] && [[ -t 1 ]]; then
     fi
 fi
 
-# Корпоративный профиль (--corp / --profile enterprise) по умолчанию сохраняет
-# отчёт так же, как стандартный анализ. Явный -o имеет приоритет; --no-save отключает запись.
-if [[ -z $COMPARE_A && $PROFILE == enterprise && -z $OUTPUT_PATH ]] && ((SAVE_REPORT==1)); then
+# Файл создаётся только по явному -s/--save. Без -o имя формируется автоматически.
+# Для профилей используются отдельные теги; enterprise/--corp сохраняет CORP-префикс.
+if [[ -z $COMPARE_A && -z $OUTPUT_PATH ]] && ((SAVE_REPORT==1)); then
+    CORP_TAG=${PROFILE^^}
+    [[ $PROFILE == enterprise ]] && CORP_TAG=CORP
     CORP_EXT=txt
     ((JSON_MODE==1)) && CORP_EXT=json
     CORP_STAMP=$(date '+%Y%m%d_%H%M%S')
     CORP_HOST=$(hostname -s 2>/dev/null || hostname 2>/dev/null || printf 'ARM')
     CORP_HOST=$(printf '%s' "$CORP_HOST" | tr -c '[:alnum:]_.-' '_')
     if ((PRIVACY)); then
-        CORP_NAME="ARM_INFO_CORP_PRIVATE_${CORP_STAMP}.${CORP_EXT}"
+        CORP_NAME="ARM_INFO_${CORP_TAG}_PRIVATE_${CORP_STAMP}.${CORP_EXT}"
     else
-        CORP_NAME="ARM_INFO_CORP_${CORP_HOST}_${CORP_STAMP}.${CORP_EXT}"
+        CORP_NAME="ARM_INFO_${CORP_TAG}_${CORP_HOST}_${CORP_STAMP}.${CORP_EXT}"
     fi
     CORP_DIR=$(pwd -P 2>/dev/null || printf '/tmp')
     [[ -d $CORP_DIR && -w $CORP_DIR ]] || CORP_DIR=/tmp
     OUTPUT_PATH="$CORP_DIR/$CORP_NAME"
 fi
 
+if [[ -n $COMPARE_A && -z $OUTPUT_PATH ]] && ((SAVE_REPORT==1)); then
+    CORP_EXT=txt
+    ((JSON_MODE==1)) && CORP_EXT=json
+    CORP_STAMP=$(date '+%Y%m%d_%H%M%S')
+    CORP_DIR=$(pwd -P 2>/dev/null || printf '/tmp')
+    [[ -d $CORP_DIR && -w $CORP_DIR ]] || CORP_DIR=/tmp
+    OUTPUT_PATH="$CORP_DIR/ARM_INFO_COMPARE_${CORP_STAMP}.${CORP_EXT}"
+fi
+
 if [[ -n $OUTPUT_PATH ]] && ((SAVE_REPORT==1)); then
     if [[ -d $OUTPUT_PATH ]]; then
         # Для -o DIR используем то же имя, что и при автоматическом сохранении.
+        CORP_TAG=${PROFILE^^}
+        [[ $PROFILE == enterprise ]] && CORP_TAG=CORP
         CORP_EXT=txt
         ((JSON_MODE==1)) && CORP_EXT=json
         CORP_STAMP=$(date '+%Y%m%d_%H%M%S')
         CORP_HOST=$(hostname -s 2>/dev/null || hostname 2>/dev/null || printf 'ARM')
         CORP_HOST=$(printf '%s' "$CORP_HOST" | tr -c '[:alnum:]_.-' '_')
-        if ((PRIVACY)); then CORP_NAME="ARM_INFO_CORP_PRIVATE_${CORP_STAMP}.${CORP_EXT}"
-        else CORP_NAME="ARM_INFO_CORP_${CORP_HOST}_${CORP_STAMP}.${CORP_EXT}"; fi
+        if ((PRIVACY)); then CORP_NAME="ARM_INFO_${CORP_TAG}_PRIVATE_${CORP_STAMP}.${CORP_EXT}"
+        else CORP_NAME="ARM_INFO_${CORP_TAG}_${CORP_HOST}_${CORP_STAMP}.${CORP_EXT}"; fi
         OUTPUT_PATH="${OUTPUT_PATH%/}/$CORP_NAME"
     fi
     OUTDIR=$(dirname -- "$OUTPUT_PATH")
@@ -185,7 +213,7 @@ recommendation_for() {
     REC_IMPACT="Соответствующая функция АРМ может работать нестабильно либо диагностика по этому пункту остаётся неполной."
     REC_CHECK="Сопоставить текущее значение с рабочим АРМ, проверить системный журнал текущей загрузки и доступность связанных служб."
     REC_ACTION="Устранить первичную причину, затем повторить профильную диагностику arm_info."
-    REC_COMMAND="journalctl -b -p warning..alert --no-pager | tail -100|arm_info --profile $PROFILE"
+    REC_COMMAND="journalctl -b -p warning..alert --no-pager | tail -100|$ARM_INFO_SELF_CMD --profile $PROFILE"
     REC_VERIFY="Повторный запуск должен перевести проверку в OK/INFO и убрать её из раздела рекомендаций."
 
     case "$key" in
@@ -209,14 +237,14 @@ recommendation_for() {
             REC_IMPACT="Kerberos и доменная аутентификация могут периодически или полностью не работать."
             REC_CHECK="Сначала проверить DNS SRV, синхронизацию времени, доступность KDC/LDAP и только затем состояние join."
             REC_ACTION="Не выполнять повторное присоединение вслепую. Зафиксировать вывод adcli/SSSD и восстановить первичную причину."
-            REC_COMMAND="adcli testjoin|timedatectl|dig +short _kerberos._tcp.<DOMAIN> SRV|dig +short _ldap._tcp.<DOMAIN> SRV|journalctl -u sssd -b --no-pager | tail -150"
+            REC_COMMAND="adcli testjoin --verbose|timedatectl|dig +short _kerberos._tcp.DOMAIN_FQDN SRV|dig +short _ldap._tcp.DOMAIN_FQDN SRV|journalctl -u sssd -b --no-pager | tail -150"
             ;;
         kerberos.ticket)
             REC_CAUSE="Действующий Kerberos ticket не найден либо klist недоступен. При запуске от root билет интерактивного пользователя может находиться в другом credential cache."
             REC_IMPACT="SSO к доменным ресурсам, CIFS, LDAP и приложениям с GSSAPI может запрашивать пароль или завершаться ошибкой."
             REC_CHECK="Проверить все доступные cache, срок действия TGT, principal и время на АРМ."
             REC_ACTION="Для нужного пользователя получить/обновить билет штатным способом; не удалять cache до фиксации причины."
-            REC_COMMAND="klist -A|find /tmp -maxdepth 1 -type f -name 'krb5cc_*' -ls 2>/dev/null|timedatectl"
+            REC_COMMAND="klist -l|klist -A|sudo -u 'USER_NAME' klist -A|timedatectl"
             ;;
         kerberos.errors)
             REC_CAUSE="В журнале SSSD текущей загрузки обнаружены записи с признаками ошибок Kerberos. Конкретный код не предполагается заранее — анализируются все Kerberos/krb5 ошибки."
@@ -238,14 +266,14 @@ recommendation_for() {
             REC_IMPACT="Поиск DC/KDC/LDAP, доменная аутентификация, CIFS и другие сетевые сервисы могут работать нестабильно."
             REC_CHECK="Сравнить /etc/resolv.conf, resolvectl и DNS из активного NetworkManager-профиля. Проверить, что доменные DNS действительно доступны."
             REC_ACTION="Восстановить DNS через штатный менеджер сети; не править generated resolv.conf вручную, если он управляется NetworkManager/systemd-resolved."
-            REC_COMMAND="cat /etc/resolv.conf|resolvectl status|nmcli -f GENERAL.CONNECTION,IP4.DNS,IP4.DOMAIN device show|ip route"
+            REC_COMMAND="cat /etc/resolv.conf|resolvectl status|systemd-resolve --status|nmcli -f GENERAL.CONNECTION,IP4.DNS,IP4.DOMAIN device show|ip -4 route"
             ;;
         dns.search)
             REC_CAUSE="DNS search/domain suffix не определён."
             REC_IMPACT="Короткие доменные имена и автоматический поиск доменных сервисов могут разрешаться не так, как ожидается."
             REC_CHECK="Проверить search/domain в resolv.conf и параметры активного сетевого соединения."
             REC_ACTION="Настроить корректный DNS search domain через штатную сетевую конфигурацию организации."
-            REC_COMMAND="grep -E '^(search|domain|nameserver)' /etc/resolv.conf|nmcli -f NAME,IP4.DOMAIN,IP4.DNS connection show --active"
+            REC_COMMAND="grep -E '^(search|domain|nameserver)' /etc/resolv.conf|nmcli -f GENERAL.CONNECTION,IP4.DNS,IP4.DOMAIN device show"
             ;;
         dns.fqdn)
             REC_CAUSE="FQDN хоста не определяется или не разрешается через текущий DNS."
@@ -259,14 +287,14 @@ recommendation_for() {
             REC_IMPACT="Клиент может не находить контроллеры домена, KDC или LDAP автоматически."
             REC_CHECK="Проверить DNS-серверы и SRV-записи для фактического домена с рабочего и проблемного АРМ."
             REC_ACTION="Исправить DNS/зону домена или клиентскую DNS-конфигурацию; не прописывать DC статически как замену корректным SRV без необходимости."
-            REC_COMMAND="dig +short _kerberos._tcp.<DOMAIN> SRV|dig +short _ldap._tcp.<DOMAIN> SRV|host -t SRV _kerberos._tcp.<DOMAIN>|host -t SRV _ldap._tcp.<DOMAIN>"
+            REC_COMMAND="dig +short _kerberos._tcp.DOMAIN_FQDN SRV|dig +short _ldap._tcp.DOMAIN_FQDN SRV|host -t SRV _kerberos._tcp.DOMAIN_FQDN|host -t SRV _ldap._tcp.DOMAIN_FQDN"
             ;;
         domain.dc.ports)
             REC_CAUSE="Не все найденные KDC/LDAP endpoints доступны по проверяемым TCP-портам. Возможны маршрут, firewall, DNS или недоступный DC."
             REC_IMPACT="Аутентификация и LDAP-запросы могут зависеть от случайно выбранного DC и работать непредсказуемо."
             REC_CHECK="Определить все SRV targets, проверить разрешение их имён, маршрут и TCP 88/389 по каждому узлу."
             REC_ACTION="Восстановить сетевую доступность либо вывести неисправный DC из клиентского DNS discovery на стороне инфраструктуры."
-            REC_COMMAND="dig +short _kerberos._tcp.<DOMAIN> SRV|dig +short _ldap._tcp.<DOMAIN> SRV|nc -vz <DC> 88|nc -vz <DC> 389|ip route get <DC_IP>"
+            REC_COMMAND="dig +short _kerberos._tcp.DOMAIN_FQDN SRV|dig +short _ldap._tcp.DOMAIN_FQDN SRV|timeout 5 nc -vz DC_FQDN 88|timeout 5 nc -vz DC_FQDN 389|ip route get DC_IP"
             ;;
         network.gateway)
             REC_CAUSE="Default route не найден."
@@ -285,23 +313,23 @@ recommendation_for() {
         network.8021x)
             REC_CAUSE="802.1X-профиль неполон, срок сертификата мал/истёк либо проверить сертификат невозможно."
             REC_IMPACT="АРМ может потерять сетевой доступ после переподключения или по истечении сертификата."
-            REC_CHECK="Проверить EAP-метод, CA/client certificate, срок действия и ошибки NetworkManager/supplicant."
+            REC_CHECK="Проверить EAP-метод, CA/client certificate, срок действия и ошибки NetworkManager/supplicant. Если сертификат DER, для ручного openssl добавьте -inform DER."
             REC_ACTION="Заранее обновить истекающий сертификат или исправить профиль 802.1X согласно политике организации."
-            REC_COMMAND="nmcli -f NAME,TYPE,802-1x.eap,802-1x.ca-cert,802-1x.client-cert connection show|openssl x509 -in \"<CERT>\" -noout -dates|openssl x509 -in \"<CERT>\" -noout -subject -issuer|journalctl -u NetworkManager -b --no-pager | grep -Ei '802.1x|eap|supplicant|certificate' | tail -120"
+            REC_COMMAND="nmcli -f NAME,UUID,TYPE connection show|nmcli connection show 'PROFILE_NAME' | grep -E '^802-1x\.(eap|identity|ca-cert|client-cert|phase2-ca-cert|phase2-client-cert|private-key|system-ca-certs):'|openssl x509 -in \"CERT_PATH\" -noout -subject -issuer -dates|journalctl -u NetworkManager -b --no-pager | grep -Ei '802.1x|eap|supplicant|certificate' | tail -120"
             ;;
-        network.cifs)
-            REC_CAUSE="Один или несколько CIFS mount не отвечают в короткий timeout. Возможны недоступная шара, сеть, Kerberos/учётные данные или зависший mount."
-            REC_IMPACT="Caja/приложения могут зависать при открытии, сохранении, удалении и обходе каталогов."
-            REC_CHECK="Определить конкретные mount points, проверить stat с timeout, kernel CIFS messages и Kerberos ticket."
-            REC_ACTION="Устранить сетевую/аутентификационную причину; зависший mount размонтировать только после проверки открытых файлов и процессов."
-            REC_COMMAND="findmnt -t cifs -o TARGET,SOURCE,OPTIONS|timeout 5 stat -f <MOUNT>|journalctl -k -b --no-pager | grep -Ei 'cifs|smb' | tail -120|klist -A"
+        network.cifs|network.cifs.mount.*)
+            REC_CAUSE="CIFS смонтирован, но фактическое чтение каталога или metadata lookup завершились ошибкой/тайм-аутом. Для sec=krb5,multiuser результат проверяется в контексте активного локального GUI-пользователя, а не root."
+            REC_IMPACT="Caja/приложения могут зависать либо не открывать конкретную шару, даже если mount формально присутствует."
+            REC_CHECK="Сопоставить SOURCE → TARGET и статус конкретного SMB-ресурса. Проверка выполняет полный readdir каталога под timeout и stat одного элемента, поэтому она не ограничивается первым cached dentry."
+            REC_ACTION="Устранить фактическую сетевую, Kerberos/credential или I/O-причину. Размонтирование выполнять только после проверки открытых файлов и процессов."
+            REC_COMMAND="findmnt -t cifs -o TARGET,SOURCE,OPTIONS|journalctl -k -b --no-pager | grep -Ei 'cifs|smb' | tail -120|sudo -u 'USER_NAME' klist -A"
             ;;
         network.gvfs)
             REC_CAUSE="Один или несколько GVFS mount не отвечают. Возможны недоступный SMB-ресурс или зависшие пользовательские gvfs-процессы."
             REC_IMPACT="Файловый менеджер может долго открывать сетевые папки, зависать при удалении/копировании и удерживать старые подключения."
             REC_CHECK="Проверить gio mounts, процессы gvfs/caja и доступность конкретного каталога с timeout."
             REC_ACTION="После фиксации диагностики перезапустить только проблемные пользовательские gvfs/caja процессы либо переподключить ресурс."
-            REC_COMMAND="gio mount -l|ps -ef | grep -E 'caja|gvfsd' | grep -v grep|find /run/user/*/gvfs -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null"
+            REC_COMMAND="loginctl list-sessions --no-legend|ps -ef | grep -E 'caja|gvfsd' | grep -v grep|find /run/user/*/gvfs -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null"
             ;;
         print.cups.service)
             REC_CAUSE="Служба CUPS не активна либо её состояние не определено."
@@ -322,21 +350,21 @@ recommendation_for() {
             REC_IMPACT="Задания будут накапливаться или не попадут на устройство печати."
             REC_CHECK="Получить состояние каждой очереди, причины остановки, backend URI и незавершённые задания."
             REC_ACTION="Исправить первичную причину. Возобновлять очередь только после проверки backend/устройства."
-            REC_COMMAND="lpstat -p -d -v|lpstat -W not-completed -o|journalctl -u cups -b --no-pager | tail -150|cupsenable <QUEUE>   # после устранения причины|cupsaccept <QUEUE>  # если очередь не принимает задания"
+            REC_COMMAND="lpstat -a -p -d -v|lpstat -W not-completed -o|journalctl -u cups -b --no-pager | tail -150|cupsenable QUEUE_NAME|cupsaccept QUEUE_NAME"
             ;;
         print.jobs)
             REC_CAUSE="В очередях накопилось много незавершённых заданий. Возможны остановленная очередь, недоступный backend или проблемное задание."
             REC_IMPACT="Новые задания задерживаются; spool может расти."
             REC_CHECK="Определить очередь и самое старое/проблемное задание, затем проверить состояние принтера и backend."
             REC_ACTION="Устранить причину очереди. Удалять задания только осознанно после согласования, чтобы не потерять пользовательскую печать."
-            REC_COMMAND="lpstat -W not-completed -o|lpstat -p -v|du -sh /var/spool/cups 2>/dev/null|cancel <JOB_ID>  # только при подтверждённой необходимости"
+            REC_COMMAND="lpstat -W not-completed -o|lpstat -p -v|du -sh /var/spool/cups 2>/dev/null|cancel JOB_ID"
             ;;
         print.lpstat)
             REC_CAUSE="Утилита lpstat отсутствует, поэтому состояние очередей CUPS не проверено."
             REC_IMPACT="Диагностика печати неполная; это не означает неисправность CUPS."
             REC_CHECK="Проверить наличие cups-client/пакета, предоставляющего lpstat."
             REC_ACTION="Установить штатный клиент CUPS из разрешённого репозитория, если диагностика печати нужна на этом АРМ."
-            REC_COMMAND="command -v lpstat|rpm -qf \"$(command -v lpstat 2>/dev/null)\" 2>/dev/null|dnf provides '*/lpstat'"
+            REC_COMMAND="command -v lpstat|rpm -q cups-client|dnf provides '/usr/bin/lpstat'"
             ;;
         print.journal)
             REC_CAUSE="В журнале CUPS много warning/error за текущую загрузку либо журнал недоступен."
@@ -350,14 +378,14 @@ recommendation_for() {
             REC_IMPACT="Сравнение программного состава АРМ будет неполным."
             REC_CHECK="Проверить используемый пакетный менеджер и наличие rpm."
             REC_ACTION="Для РЕД ОС восстановить штатные rpm-инструменты перед инвентаризацией."
-            REC_COMMAND="command -v rpm|rpm --version|dnf --version"
+            REC_COMMAND="command -v rpm|command -v dnf|dnf provides '/usr/bin/rpm'"
             ;;
         software.zombies)
             REC_CAUSE="Обнаружены zombie-процессы. Zombie уже завершён; запись остаётся, пока родительский процесс не заберёт exit status."
             REC_IMPACT="Единичный zombie обычно не критичен, но постоянный рост указывает на проблему родительского процесса/приложения."
             REC_CHECK="Определить PID/PPID zombie, затем исследовать состояние и журнал родителя."
             REC_ACTION="Не пытаться kill zombie напрямую. Исправлять/перезапускать родительский процесс только после определения влияния на пользователя."
-            REC_COMMAND="ps -eo pid,ppid,stat,lstart,comm,args | awk '$3 ~ /^Z/'|ps -fp <PPID>|journalctl _PID=<PPID> -b --no-pager | tail -100"
+            REC_COMMAND="ps -eo pid,ppid,stat,lstart,comm,args | awk '$3 ~ /^Z/'|ps -fp PARENT_PID|journalctl _PID=PARENT_PID -b --no-pager | tail -100"
             ;;
     esac
 
@@ -449,55 +477,74 @@ print_rec_field() {
 }
 
 command_description() {
-    local cmd=$1
+    local cmd=$1 desc
     case "$cmd" in
-        realm\ list*) echo "покажет параметры присоединения к realm/домену" ;;
-        sssctl\ domain-list*) echo "покажет домены, которые видит SSSD" ;;
-        sssctl\ config-check*) echo "проверит конфигурацию SSSD на синтаксические ошибки" ;;
-        hostname\ -f*) echo "покажет полное доменное имя АРМ" ;;
-        *sssd.conf*) echo "покажет доменные секции конфигурации SSSD" ;;
-        systemctl\ status\ sssd*) echo "покажет состояние службы SSSD и последнюю причину отказа" ;;
-        systemctl\ status\ cups*) echo "покажет состояние службы CUPS и последнюю причину отказа" ;;
-        journalctl*-u\ sssd*) echo "покажет события SSSD текущей загрузки для поиска первичной ошибки" ;;
-        journalctl*-u\ NetworkManager*) echo "покажет ошибки NetworkManager/802.1X/EAP текущей загрузки" ;;
-        journalctl*-u\ cups*) echo "покажет ошибки и события CUPS текущей загрузки" ;;
-        journalctl*-k*) echo "покажет сообщения ядра, связанные с устройствами/сетевыми файловыми системами" ;;
-        journalctl*) echo "покажет системные события, относящиеся к диагностируемой проблеме" ;;
-        adcli\ testjoin*) echo "проверит доверительные отношения машинной учётной записи с AD" ;;
-        timedatectl*) echo "покажет системное время, часовой пояс и состояние синхронизации" ;;
-        chronyc\ tracking*) echo "покажет текущий offset и качество синхронизации времени" ;;
-        chronyc\ sources*) echo "покажет доступные и выбранный источники времени" ;;
-        dig*) echo "покажет DNS/SRV-записи, необходимые для поиска доменных служб" ;;
-        host*) echo "выполнит DNS-проверку указанного имени/записи" ;;
-        klist*) echo "покажет Kerberos cache, principal и сроки действия билетов" ;;
-        find\ /tmp*krb5cc*) echo "найдёт файловые Kerberos cache на АРМ" ;;
-        resolvectl*) echo "покажет фактические DNS-серверы и настройки systemd-resolved" ;;
-        nmcli*-f*802-1x*) echo "покажет параметры 802.1X активных/сохранённых профилей NetworkManager" ;;
-        nmcli*) echo "покажет состояние сетевых устройств и профилей NetworkManager" ;;
-        openssl\ x509*-dates*) echo "покажет даты начала и окончания действия сертификата" ;;
-        openssl\ x509*) echo "покажет сведения X.509: субъект, издатель и параметры сертификата" ;;
-        getent*) echo "проверит разрешение имени через системные NSS/DNS-настройки" ;;
-        ip\ -br\ link*) echo "покажет краткое состояние сетевых интерфейсов и link" ;;
-        ip\ -br\ addr*) echo "покажет краткий список адресов сетевых интерфейсов" ;;
-        ip\ -4\ route*) echo "покажет IPv4-маршруты и шлюз по умолчанию" ;;
-        findmnt*) echo "покажет активные точки монтирования и их параметры" ;;
-        timeout*stat*) echo "проверит доступность точки монтирования с ограничением времени ожидания" ;;
-        gio\ mount*) echo "покажет пользовательские GVFS/GIO-подключения" ;;
-        ps*) echo "покажет процессы и позволит определить зависший/родительский процесс" ;;
-        find\ /run/user*) echo "покажет пользовательские GVFS-точки монтирования" ;;
-        lpstat\ -r*) echo "проверит, отвечает ли планировщик CUPS" ;;
-        lpstat*) echo "покажет очереди, задания, принтер по умолчанию и backend CUPS" ;;
-        cupsctl*) echo "покажет текущие параметры сервера CUPS" ;;
-        cupsenable*) echo "возобновит указанную очередь после устранения первичной причины" ;;
-        cupsaccept*) echo "разрешит указанной очереди принимать новые задания" ;;
-        cancel*) echo "отменит указанное задание печати; выполнять только после подтверждения" ;;
-        du\ -sh\ /var/spool/cups*) echo "покажет объём диска, занятый spool CUPS" ;;
-        command\ -v*) echo "проверит наличие требуемой диагностической утилиты" ;;
-        rpm*) echo "покажет сведения RPM или пакет, которому принадлежит файл" ;;
-        dnf*) echo "покажет пакет/провайдера требуемой утилиты в репозиториях" ;;
-        arm_info*) echo "повторно запустит профиль arm_info для контроля после исправления" ;;
-        *) echo "выполнит диагностическую проверку, связанную с указанной рекомендацией" ;;
+        realm\ list*) desc="покажет параметры текущего присоединения к realm/домену" ;;
+        sssctl\ domain-list*) desc="покажет домены, которые видит SSSD" ;;
+        sssctl\ config-check*) desc="проверит конфигурацию SSSD на синтаксические и структурные ошибки" ;;
+        hostname\ -f*) desc="покажет FQDN, который система определяет для этого АРМ" ;;
+        hostnamectl*) desc="покажет статический/текущий hostname и базовые сведения о системе" ;;
+        grep*sssd.conf*) desc="покажет доменные секции из конфигурации SSSD" ;;
+        systemctl\ status\ sssd*) desc="покажет состояние SSSD и последние сообщения systemd о службе" ;;
+        systemctl\ status\ cups*) desc="покажет состояние CUPS и последние сообщения systemd о службе" ;;
+        systemctl\ status*) desc="покажет состояние указанной systemd-службы и последние сообщения о её запуске" ;;
+        systemctl\ --failed*) desc="покажет systemd-службы, находящиеся в failed" ;;
+        journalctl*-u\ sssd*) desc="покажет журнал SSSD текущей загрузки для поиска первичной ошибки" ;;
+        journalctl*-u\ NetworkManager*) desc="покажет события NetworkManager/802.1X/EAP текущей загрузки" ;;
+        journalctl*-u\ cups*) desc="покажет ошибки и события CUPS текущей загрузки" ;;
+        journalctl*-k*) desc="покажет сообщения ядра, связанные с устройствами и сетевыми файловыми системами" ;;
+        journalctl*) desc="покажет системный журнал, относящийся к диагностируемой проблеме" ;;
+        adcli\ testjoin*) desc="проверит машинные Kerberos-учётные данные из keytab и валидность присоединения к AD; --verbose добавит детали discovery/authentication" ;;
+        timedatectl*) desc="покажет системное время, часовой пояс и состояние синхронизации" ;;
+        chronyc\ tracking*) desc="покажет текущий offset и качество синхронизации chrony" ;;
+        chronyc\ sources*) desc="покажет доступные источники времени и выбранный источник chrony" ;;
+        dig*) desc="запросит DNS/SRV-записи, используемые для поиска доменных служб" ;;
+        host*) desc="выполнит DNS-проверку указанного имени или SRV-записи" ;;
+        klist\ -l*) desc="покажет Kerberos credential caches в коллекции текущего пользователя" ;;
+        klist*) desc="покажет Kerberos cache, principal и сроки действия билетов текущего пользователя" ;;
+        sudo\ -u*\ klist*) desc="покажет Kerberos-билеты в контексте указанного пользователя; это важно, если arm_info запущен от root" ;;
+        resolvectl*) desc="покажет фактические DNS-серверы и домены systemd-resolved; на системах без resolvectl команда может отсутствовать" ;;
+        systemd-resolve*) desc="покажет DNS-состояние старых версий systemd-resolved; используется как совместимый fallback" ;;
+        nmcli\ -f\ GENERAL.CONNECTION,IP4.DNS,IP4.DOMAIN\ device\ show*) desc="покажет активное соединение, DNS-серверы и DNS-domain по сетевым устройствам" ;;
+        nmcli\ -f\ NAME,UUID,TYPE\ connection\ show*) desc="покажет сохранённые NetworkManager-профили, чтобы выбрать нужный PROFILE_NAME" ;;
+        nmcli\ connection\ show*) desc="покажет параметры выбранного NetworkManager-профиля; фильтр оставляет только 802.1X-поля" ;;
+        nmcli*) desc="покажет состояние сетевых устройств и профилей NetworkManager" ;;
+        openssl\ x509*) desc="прочитает X.509-сертификат и покажет Subject, Issuer, начало и окончание срока действия; для DER добавьте -inform DER" ;;
+        getent*) desc="проверит разрешение имени через системные NSS/DNS-настройки" ;;
+        ip\ -br\ link*) desc="покажет краткое состояние сетевых интерфейсов и link" ;;
+        ip\ -br\ addr*) desc="покажет краткий список адресов сетевых интерфейсов" ;;
+        ip\ -4\ route*) desc="покажет IPv4-маршруты и маршрут по умолчанию" ;;
+        ip\ route\ get*) desc="покажет, через какой интерфейс и шлюз система пойдёт к указанному IP" ;;
+        timeout*nc*) desc="проверит установление TCP-соединения с указанным DC/портом и ограничит ожидание 5 секундами" ;;
+        findmnt\ -n\ -l\ -t\ cifs\ -o\ TARGET*) desc="покажет локальные TARGET CIFS; arm_info дополнительно выполняет полный readdir и metadata lookup с таймаутом в пользовательском контексте для multiuser" ;;
+        findmnt\ -t\ cifs*) desc="покажет активные CIFS-точки монтирования, источник и параметры mount" ;;
+        timeout*stat*) desc="проверит доступность конкретной точки монтирования без длительного зависания" ;;
+        loginctl\ list-sessions*) desc="покажет активные пользовательские sessions и UID для привязки GVFS к нужному пользователю" ;;
+        ps*) desc="покажет процессы и позволит определить зависший или родительский процесс" ;;
+        find\ /run/user*) desc="покажет пользовательские GVFS-точки монтирования" ;;
+        lpstat\ -r*) desc="проверит, отвечает ли CUPS scheduler" ;;
+        lpstat*) desc="покажет состояние очередей/приёма заданий, задания, default printer и backend CUPS" ;;
+        cupsctl*) desc="покажет текущие параметры сервера CUPS" ;;
+        cupsenable*) desc="возобновит указанную очередь после устранения первичной причины" ;;
+        cupsaccept*) desc="разрешит указанной очереди принимать новые задания" ;;
+        cancel*) desc="отменит указанное задание печати; выполнять только после подтверждения, что задание можно удалить" ;;
+        du\ -sh\ /var/spool/cups*) desc="покажет объём диска, занятый spool CUPS" ;;
+        command\ -v*) desc="проверит наличие указанной утилиты в PATH" ;;
+        rpm\ -q\ cups-client*) desc="проверит, установлен ли пакет cups-client, обычно содержащий lpstat" ;;
+        rpm*) desc="покажет сведения RPM/пакета" ;;
+        dnf\ provides*) desc="найдёт пакет из разрешённых репозиториев, который предоставляет указанный исполняемый файл" ;;
+        dnf\ install*) desc="установит указанный пакет через DNF после подтверждения транзакции" ;;
+        bash*arm_info.sh*|arm_info*) desc="повторно запустит arm_info для контроля результата после исправления" ;;
+        *) desc="выполнит диагностическую проверку, связанную с указанной рекомендацией" ;;
     esac
+
+    if [[ $cmd =~ (DOMAIN_FQDN|DC_FQDN|DC_IP|USER_NAME|PROFILE_NAME|CERT_PATH|QUEUE_NAME|JOB_ID|PARENT_PID|UNIT_NAME|DEVICE_PATH|MD_DEVICE|IFACE_NAME) ]]; then
+        desc="$desc Перед выполнением замените служебный маркер на фактическое значение из отчёта/системы."
+    fi
+    case "$cmd" in
+        cupsenable*|cupsaccept*|cancel*|dnf\ install*) desc="ИЗМЕНЯЕТ СОСТОЯНИЕ: $desc" ;;
+    esac
+    printf '%s' "$desc"
 }
 
 split_rec_commands() {
@@ -697,8 +744,131 @@ check_domain() {
     check_dns_common "DNS / DOMAIN" "$d"
 }
 
+
+_cifs_desktop_user() {
+    local sid uid user active remote stype
+    if have loginctl; then
+        while read -r sid uid user _; do
+            [[ -n ${sid:-} && ${uid:-} =~ ^[0-9]+$ && -n ${user:-} ]] || continue
+            ((uid > 0)) || continue
+            case "$user" in root|gdm|lightdm|sddm) continue ;; esac
+            active=$(loginctl show-session "$sid" -p Active --value 2>/dev/null || true)
+            remote=$(loginctl show-session "$sid" -p Remote --value 2>/dev/null || true)
+            stype=$(loginctl show-session "$sid" -p Type --value 2>/dev/null || true)
+            if [[ $active == yes && $remote != yes && ($stype == x11 || $stype == wayland) ]]; then
+                printf '%s\n' "$user"
+                return 0
+            fi
+        done < <(loginctl list-sessions --no-legend 2>/dev/null)
+    fi
+    if have who; then
+        user=$(who 2>/dev/null | awk '$0 ~ /\(:[0-9]+\)/ {print $1; exit}')
+        if [[ -n ${user:-} ]]; then printf '%s\n' "$user"; return 0; fi
+    fi
+    return 1
+}
+
+_cifs_exec_as() {
+    local as_user=${1:-}; shift
+    if [[ -n $as_user ]]; then
+        if have runuser; then runuser -u "$as_user" -- "$@"
+        elif have sudo; then sudo -n -u "$as_user" -- "$@"
+        else return 125
+        fi
+    else
+        "$@"
+    fi
+}
+
+_cifs_classify() {
+    local rc=$1 err=${2:-}
+    case "$rc" in
+        0) printf 'OK'; return ;;
+        124|137) printf 'TIMEOUT'; return ;;
+        125) printf 'INCONCLUSIVE'; return ;;
+    esac
+    case "$err" in
+        *'Permission denied'*|*'Operation not permitted'*) printf 'DENIED' ;;
+        *'Required key not available'*|*'Key has expired'*|*'No credentials'*) printf 'AUTH' ;;
+        *'Host is down'*|*'Network is unreachable'*|*'No route to host'*|*'Connection timed out'*) printf 'NETWORK' ;;
+        *'Stale file handle'*|*'Input/output error'*) printf 'IO' ;;
+        *'No such file or directory'*) printf 'MISSING' ;;
+        *) printf 'ERROR' ;;
+    esac
+}
+
+CIFS_PROBE_STATE=INCONCLUSIVE
+CIFS_PROBE_RC=125
+CIFS_PROBE_ERR=''
+_cifs_probe() {
+    local mnt=$1 as_user=${2:-} errfile samplefile sample rc
+    CIFS_PROBE_STATE=INCONCLUSIVE; CIFS_PROBE_RC=125; CIFS_PROBE_ERR=''
+    if ! have timeout || ! have ls || ! have find || ! have stat; then
+        CIFS_PROBE_ERR='для надёжной проверки нужны timeout, ls, find и stat'
+        return 0
+    fi
+    errfile=$(mktemp) || { CIFS_PROBE_ERR='не удалось создать временный stderr'; return 0; }
+    samplefile=$(mktemp) || { rm -f -- "$errfile"; CIFS_PROBE_ERR='не удалось создать временный sample'; return 0; }
+
+    # Этап 1: полностью прочитать список имён в каталоге. В отличие от
+    # find -print -quit это не завершается после первого cached dentry.
+    _cifs_exec_as "$as_user" env LC_ALL=C timeout 6 ls -U -A -1 -- "$mnt" >/dev/null 2>"$errfile"
+    rc=$?
+    if ((rc != 0)); then
+        CIFS_PROBE_RC=$rc
+        CIFS_PROBE_ERR=$(tr '\n' ' ' <"$errfile" | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//' | cut -c1-240)
+        CIFS_PROBE_STATE=$(_cifs_classify "$rc" "$CIFS_PROBE_ERR")
+        rm -f -- "$errfile" "$samplefile"
+        return 0
+    fi
+
+    # Этап 2: если каталог не пустой, получить метаданные одного элемента.
+    # Caja/приложения делают metadata lookup, поэтому простой readdir недостаточен.
+    : >"$errfile"
+    _cifs_exec_as "$as_user" env LC_ALL=C timeout 6 find "$mnt" -mindepth 1 -maxdepth 1 -print -quit >"$samplefile" 2>"$errfile"
+    rc=$?
+    if ((rc != 0)); then
+        CIFS_PROBE_RC=$rc
+        CIFS_PROBE_ERR=$(tr '\n' ' ' <"$errfile" | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//' | cut -c1-240)
+        CIFS_PROBE_STATE=$(_cifs_classify "$rc" "$CIFS_PROBE_ERR")
+        rm -f -- "$errfile" "$samplefile"
+        return 0
+    fi
+    IFS= read -r sample <"$samplefile" || sample=''
+    if [[ -n $sample ]]; then
+        : >"$errfile"
+        _cifs_exec_as "$as_user" env LC_ALL=C timeout 6 stat -L -- "$sample" >/dev/null 2>"$errfile"
+        rc=$?
+        if ((rc != 0)); then
+            CIFS_PROBE_RC=$rc
+            CIFS_PROBE_ERR=$(tr '\n' ' ' <"$errfile" | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//' | cut -c1-240)
+            CIFS_PROBE_STATE=$(_cifs_classify "$rc" "$CIFS_PROBE_ERR")
+            rm -f -- "$errfile" "$samplefile"
+            return 0
+        fi
+    fi
+
+    CIFS_PROBE_STATE=OK; CIFS_PROBE_RC=0; CIFS_PROBE_ERR=''
+    rm -f -- "$errfile" "$samplefile"
+}
+
+_cifs_state_text() {
+    case "$1" in
+        OK) printf 'доступен' ;;
+        TIMEOUT) printf 'тайм-аут' ;;
+        DENIED) printf 'нет доступа' ;;
+        AUTH) printf 'ошибка аутентификации' ;;
+        NETWORK) printf 'сеть недоступна' ;;
+        IO) printf 'ошибка I/O' ;;
+        MISSING) printf 'точка недоступна' ;;
+        INCONCLUSIVE) printf 'не проверен' ;;
+        *) printf 'ошибка' ;;
+    esac
+}
+
 check_network() {
-    local gw ifaces idx=0 row iface ip mac speed duplex link dns_domain cifs_count=0 cifs_bad=0 mnt src gvfs_count=0 gvfs_bad=0 g dir
+    local gw ifaces idx=0 row iface ip mac speed duplex link dns_domain cifs_count=0 cifs_ok=0 cifs_bad=0 cifs_unknown=0 mnt gvfs_count=0 gvfs_bad=0 g dir
+    local cifs_source cifs_options cifs_multiuser cifs_user cifs_context cifs_state cifs_text cifs_detail cifs_sev cifs_source_display cifs_target_display
     local eap_count=0 active_eap_count=0 cert_global_min=-1 cert_unknown=0 cert_seen=0 cert_index=0 system_ca_profiles=0 uuid type eap conn_name
     local cert_spec cert_kind cert_field cert_label certref certpath cert_display cert_start cert_end start_fmt end_fmt end_epoch now days cert_cmd_path sev
     local cert_meta cert_subject cert_issuer cert_inform phase2_auth phase2_autheap system_ca ca_path private_key phase2_private_key
@@ -954,14 +1124,61 @@ check_network() {
     fi
 
     if have findmnt; then
-        while IFS='|' read -r mnt src; do
-            [[ -n $mnt ]] || continue; cifs_count=$((cifs_count+1))
-            if run_timeout 4 stat -f "$mnt" >/dev/null 2>&1; then :; else cifs_bad=$((cifs_bad+1)); fi
-        done < <(findmnt -rn -t cifs -o TARGET,SOURCE 2>/dev/null | awk '{print $1"|"$2}')
-        if ((cifs_count==0)); then add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "нет" info
-        elif ((cifs_bad==0)); then add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "$cifs_count, доступны" ok
-        else add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "$cifs_count, недоступны/зависли: $cifs_bad" warn; fi
-    else add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "findmnt отсутствует" unknown; fi
+        cifs_user=$(_cifs_desktop_user 2>/dev/null || true)
+        while IFS= read -r mnt; do
+            [[ -n $mnt ]] || continue
+            cifs_count=$((cifs_count+1))
+            cifs_source=$(findmnt -n -T "$mnt" -o SOURCE 2>/dev/null | head -n1)
+            cifs_options=$(findmnt -n -T "$mnt" -o OPTIONS 2>/dev/null | head -n1)
+            cifs_multiuser=no
+            [[ ,$cifs_options, == *,multiuser,* ]] && cifs_multiuser=yes
+            cifs_context=$(id -un 2>/dev/null || printf 'uid=%s' "$(id -u)")
+
+            if [[ $cifs_multiuser == yes && $(id -u) -eq 0 ]]; then
+                if [[ -n $cifs_user ]]; then
+                    cifs_context=$cifs_user
+                    _cifs_probe "$mnt" "$cifs_user"
+                else
+                    CIFS_PROBE_STATE=INCONCLUSIVE
+                    CIFS_PROBE_RC=125
+                    CIFS_PROBE_ERR='multiuser mount: активный локальный GUI-пользователь не определён'
+                fi
+            else
+                _cifs_probe "$mnt" ''
+            fi
+
+            cifs_state=$CIFS_PROBE_STATE
+            cifs_text=$(_cifs_state_text "$cifs_state")
+            if ((PRIVACY)); then
+                cifs_detail="контекст: скрыто; multiuser: $cifs_multiuser"
+            else
+                cifs_detail="контекст: $cifs_context; multiuser: $cifs_multiuser"
+            fi
+            [[ -n $CIFS_PROBE_ERR ]] && cifs_detail="$cifs_detail; $CIFS_PROBE_ERR"
+            case "$cifs_state" in
+                OK) cifs_ok=$((cifs_ok+1)); cifs_sev=ok ;;
+                INCONCLUSIVE) cifs_unknown=$((cifs_unknown+1)); cifs_sev=unknown ;;
+                *) cifs_bad=$((cifs_bad+1)); cifs_sev=warn ;;
+            esac
+
+            if ((PRIVACY)); then
+                cifs_source_display='источник скрыт'
+                cifs_target_display='TARGET скрыт'
+            else
+                cifs_source_display=${cifs_source:-не определён}
+                cifs_target_display=$mnt
+            fi
+            add_check "SMB / GVFS" "network.cifs.mount.$cifs_count" "SMB-ресурс #$cifs_count" "$cifs_source_display → $cifs_target_display; $cifs_text" "$cifs_sev" "$cifs_detail"
+        done < <(findmnt -n -l -t cifs -o TARGET 2>/dev/null)
+
+        if ((cifs_count==0)); then
+            add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "нет" info
+        else
+            add_check "SMB / GVFS" "network.cifs" "CIFS итого" "$cifs_count; доступны: $cifs_ok; проблемы: $cifs_bad; не проверены: $cifs_unknown" info
+        fi
+    else
+        add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "findmnt отсутствует" unknown
+    fi
 
     for g in /run/user/*/gvfs; do
         [[ -d $g ]] || continue
@@ -1055,7 +1272,7 @@ emit_text() {
     if [[ -n $OUTPUT_PATH ]] && ((SAVE_REPORT==1)); then
         printf 'Отчёт: %s\n' "$OUTPUT_PATH"
     elif [[ $PROFILE == enterprise ]] && ((SAVE_REPORT==0)); then
-        printf 'Сохранение: отключено (--no-save)\n'
+        printf 'Сохранение: отключено ()\n'
     fi
 
     for i in "${!KEYS[@]}"; do
@@ -1221,7 +1438,7 @@ fi
 _arm_enterprise_requested=0
 for _arm_arg in "$@"; do
     case "$_arm_arg" in
-        --corp|--profile|--profile=*|--compare) _arm_enterprise_requested=1; break ;;
+        -c|--corp|--profile|--profile=*|--compare) _arm_enterprise_requested=1; break ;;
     esac
 done
 if ((_arm_enterprise_requested)); then
@@ -1262,7 +1479,7 @@ PRIVACY_DEFAULT=0
 
 CONFIG_FILE="/etc/arm_info.conf"
 PRIVACY_MODE=$PRIVACY_DEFAULT
-SAVE_REPORT=1
+SAVE_REPORT=0
 QUIET_MODE=0
 JSON_MODE=0
 OUTPUT_PATH=""
@@ -1279,12 +1496,12 @@ arm_info — диагностика технического состояния 
   -h, --help              показать справку
   -V, --version           показать версию
   --privacy               обезличить hostname, IP, MAC, DNS и имена интерфейсов
-  --no-save               не сохранять отчёт в файл
+  -s, --save             сохранить отчёт в файл
   -o, --output PATH       сохранить отчёт в указанный файл или каталог
   -q, --quiet             не выводить отчёт в терминал (имеет смысл с сохранением)
   --json                  вывести отчёт в JSON вместо текстового формата
   --config PATH           использовать другой конфигурационный файл
-  --corp                  сокращённый запуск corporate-профиля: domain+network+print
+  -c, --corp              сокращённый запуск corporate-профиля: domain+network+print
   --profile NAME          domain|network|print|software|enterprise
   --compare A.json B.json сравнить два JSON-отчёта АРМ
 
@@ -1302,7 +1519,7 @@ while (($#)); do
         -h|--help) SHOW_HELP=1; shift ;;
         -V|--version) echo "arm_info $ARM_INFO_VERSION"; exit 0 ;;
         --privacy) PRIVACY_MODE=1; shift ;;
-        --no-save) SAVE_REPORT=0; shift ;;
+        -s|--save) SAVE_REPORT=1; shift ;;
         -q|--quiet) QUIET_MODE=1; shift ;;
         --json) JSON_MODE=1; shift ;;
         -o|--output)
@@ -1316,6 +1533,14 @@ while (($#)); do
     esac
 done
 ((SHOW_HELP==1)) && { usage; exit 0; }
+if [[ -n $OUTPUT_PATH && $SAVE_REPORT -ne 1 ]]; then
+    echo "Ошибка: -o/--output используется только вместе с -s/--save" >&2
+    exit 64
+fi
+if ((QUIET_MODE==1 && SAVE_REPORT==0)); then
+    echo "Ошибка: -q/--quiet используется только вместе с -s/--save" >&2
+    exit 64
+fi
 
 # Безопасно читаем только разрешённые ключи KEY=VALUE. Конфиг не source-ится.
 load_config() {
@@ -1348,6 +1573,45 @@ table() {
 }
 min_score() { (( $2 < $1 )) && echo "$2" || echo "$1"; }
 clamp_score() { local v="$1"; ((v<0))&&v=0; ((v>100))&&v=100; echo "$v"; }
+
+
+ru_plural() {
+    local n=$1 one=$2 few=$3 many=$4 n10 n100
+    n10=$((n % 10)); n100=$((n % 100))
+    if ((n100>=11 && n100<=14)); then printf '%s' "$many"
+    elif ((n10==1)); then printf '%s' "$one"
+    elif ((n10>=2 && n10<=4)); then printf '%s' "$few"
+    else printf '%s' "$many"
+    fi
+}
+
+format_uptime_ru() {
+    local seconds total_minutes days hours minutes out=""
+    if [[ -r /proc/uptime ]]; then
+        seconds=$(awk '{print int($1)}' /proc/uptime 2>/dev/null)
+    fi
+    [[ ${seconds:-} =~ ^[0-9]+$ ]] || { printf 'Не определено'; return; }
+    total_minutes=$((seconds / 60))
+    days=$((total_minutes / 1440))
+    hours=$(((total_minutes % 1440) / 60))
+    minutes=$((total_minutes % 60))
+    if ((days>0)); then out="$days $(ru_plural "$days" 'день' 'дня' 'дней')"; fi
+    if ((hours>0)); then [[ -n $out ]] && out+=" "; out+="$hours $(ru_plural "$hours" 'час' 'часа' 'часов')"; fi
+    if ((minutes>0 || (days==0 && hours==0))); then [[ -n $out ]] && out+=" "; out+="$minutes $(ru_plural "$minutes" 'минута' 'минуты' 'минут')"; fi
+    printf '%s' "$out"
+}
+
+format_years_ru_from_months() {
+    local months=$1 tenths whole frac
+    [[ $months =~ ^[0-9]+$ ]] || { printf 'Не определён'; return; }
+    tenths=$(((months * 10 + 6) / 12))
+    whole=$((tenths / 10)); frac=$((tenths % 10))
+    if ((frac==0)); then
+        printf '%d %s' "$whole" "$(ru_plural "$whole" 'год' 'года' 'лет')"
+    else
+        printf '%d,%d года' "$whole" "$frac"
+    fi
+}
 
 REC_LEVELS=(); REC_TITLES=(); REC_CAUSES=(); REC_IMPACTS=(); REC_DIAGNOSTICS=(); REC_ACTIONS=(); REC_CHECKS=(); REC_VERIFICATIONS=()
 add_rec() {
@@ -1434,10 +1698,10 @@ add_rec() {
             diagnostic="Проверить resolv.conf, resolvectl (если используется), NetworkManager IP4.DNS/IP4.DOMAIN и разрешение FQDN/доменных SRV."
             verification="Должны определяться рабочие DNS upstream и стабильно разрешаться FQDN, включая необходимые доменные SRV-записи."
             ;;
-        *сетевых\ ошибок/дропов*)
-            cause="Рост RX/TX errors/dropped возможен из-за физического линка, порта коммутатора, перегрузки, драйвера, очередей NIC или несогласованных параметров."
-            diagnostic="Снять ip -s link несколько раз с интервалом, определить конкретный интерфейс и скорость роста счётчиков; проверить ethtool/драйвер и порт сети при наличии доступа."
-            verification="Счётчики ошибок/дропов не должны заметно расти при нормальной нагрузке; ppm должен вернуться ниже порогов arm_info."
+        *сетевых\ ошибок/учитываемых\ потерь*)
+            cause="В оценке сети учитываются RX/TX errors, rx_missed_errors и tx_dropped. Общий rx_dropped выводится отдельно как диагностический счётчик и сам по себе не считается неисправностью, потому что может включать штатные L2/filter drops."
+            diagnostic="Проверить ip -s -s link и ethtool -S по конкретному интерфейсу. Особое внимание: rx_missed_errors, CRC/frame/FIFO/carrier и tx_dropped; общий rx_dropped сопоставлять с ними, а не трактовать отдельно как потерю полезного трафика."
+            verification="RX/TX errors, rx_missed_errors и tx_dropped не должны систематически расти при нормальной нагрузке; информационный rx_dropped может расти без снижения score, если учитываемые ошибки/потери остаются ниже порогов."
             ;;
         *время\ не\ синхронизировано*)
             cause="NTP/chrony источник недоступен, служба времени остановлена, неверно настроена либо системное время слишком сильно отклонено."
@@ -1509,27 +1773,88 @@ base_print_command_line() {
 }
 
 base_command_description() {
-    local cmd=$1
+    local cmd=$1 desc
     case "$cmd" in
-        journalctl\ -k*) echo "покажет сообщения ядра текущей загрузки для поиска аппаратных, дисковых и драйверных ошибок" ;;
-        journalctl\ -b\ -p\ err..alert*) echo "покажет ошибки уровня error и выше за текущую загрузку" ;;
-        journalctl*) echo "покажет системный журнал, относящийся к диагностируемой проблеме" ;;
-        systemctl\ --failed*) echo "покажет службы systemd, завершившиеся с ошибкой" ;;
-        systemctl\ status*) echo "покажет состояние указанной службы и последние сообщения о её запуске" ;;
-        smartctl\ --scan-open*) echo "покажет накопители и способы доступа к SMART" ;;
-        smartctl*) echo "покажет SMART-состояние и диагностические атрибуты накопителя" ;;
-        dnf\ install\ smartmontools*) echo "установит smartmontools для чтения SMART накопителей" ;;
-        du\ -xhd1*) echo "покажет, какие каталоги занимают место в выбранной файловой системе" ;;
-        df\ -h*) echo "покажет заполнение файловой системы и доступное место" ;;
-        df\ -i*) echo "покажет использование inode файловой системы" ;;
-        ps\ aux*) echo "покажет процессы с сортировкой для поиска основных потребителей ресурсов" ;;
-        free\ -h*) echo "покажет использование ОЗУ и swap" ;;
-        timedatectl*) echo "покажет системное время и состояние синхронизации" ;;
-        mdadm*) echo "покажет состояние программного RAID" ;;
-        ip\ *) echo "покажет сетевые интерфейсы, адреса или маршруты" ;;
-        *) echo "покажет диагностические данные для проверки этой рекомендации" ;;
+        journalctl\ --list-boots*) desc="покажет доступные загрузки в journal и их номера для выбора предыдущей загрузки" ;;
+        journalctl\ -k*) desc="покажет сообщения ядра текущей загрузки для поиска аппаратных, дисковых и драйверных ошибок" ;;
+        journalctl\ -b\ -p\ err..alert*) desc="покажет ошибки уровня error и выше за текущую загрузку" ;;
+        journalctl*) desc="покажет системный журнал, относящийся к диагностируемой проблеме" ;;
+        systemctl\ --failed*) desc="покажет службы systemd, завершившиеся с ошибкой" ;;
+        systemctl\ status*) desc="покажет подробное состояние выбранной службы и последние сообщения о её запуске" ;;
+        smartctl\ --scan-open*) desc="покажет накопители, которые smartctl смог обнаружить и открыть, включая тип доступа" ;;
+        smartctl*) desc="покажет SMART-состояние и диагностические атрибуты указанного накопителя" ;;
+        dnf\ install\ smartmontools*) desc="установит пакет smartmontools после подтверждения транзакции DNF" ;;
+        du\ --inodes*) desc="покажет каталоги верхнего уровня с наибольшим количеством inode; на большой ФС проверка может занять время" ;;
+        du\ -xhd1*) desc="покажет размеры каталогов первого уровня в пределах выбранной файловой системы" ;;
+        df\ -h*) desc="покажет заполнение файловой системы и доступное место" ;;
+        df\ -i*) desc="покажет использование inode файловой системы" ;;
+        findmnt\ -n\ -l\ -t\ cifs\ -o\ TARGET*) desc="автоматически проверит фактическое чтение каждого локального TARGET CIFS через find с таймаутом; SOURCE вида //server/share не используется" ;;
+        findmnt*) desc="покажет источник, тип и параметры монтирования файловой системы" ;;
+        ps\ -eo*|ps\ aux*) desc="покажет процессы с сортировкой для поиска основных потребителей ресурсов" ;;
+        free\ -h*) desc="покажет использование ОЗУ и swap" ;;
+        vmstat*) desc="снимет несколько кратких замеров CPU, run queue, памяти, swap и I/O" ;;
+        top\ -b*) desc="сделает одноразовый неинтерактивный снимок процессов и нагрузки" ;;
+        sensors*) desc="покажет температуры и другие датчики, доступные через lm_sensors" ;;
+        timedatectl*) desc="покажет системное время и состояние синхронизации" ;;
+        chronyc*) desc="покажет состояние/источник синхронизации chrony; если chronyc не установлен, команда будет недоступна" ;;
+        cat\ /proc/mdstat*) desc="покажет обнаруженные Linux software RAID и состояние их членов" ;;
+        mdadm*) desc="покажет подробное состояние выбранного software RAID; замените MD_DEVICE" ;;
+        grep*power_supply*) desc="покажет доступные sysfs-показатели батареи: ёмкость, design/full и циклы" ;;
+        grep*edac*) desc="покажет счётчики corrected/uncorrectable ECC из EDAC" ;;
+        ip\ -s\ link*) desc="покажет RX/TX counters, errors и dropped по сетевым интерфейсам" ;;
+        ip\ -br\ addr*) desc="покажет краткий список интерфейсов и IPv4/IPv6-адресов" ;;
+        ip\ -4\ route*) desc="покажет IPv4-маршруты и default route" ;;
+        ethtool*) desc="покажет link, speed, duplex и параметры интерфейса; если ethtool не установлен, команда будет недоступна" ;;
+        cat\ /etc/resolv.conf*) desc="покажет текущий resolv.conf и источник DNS/search-domain, видимый libc" ;;
+        nmcli*) desc="покажет DNS и параметры активных NetworkManager-соединений" ;;
+        resolvectl*) desc="покажет DNS/upstream по интерфейсам systemd-resolved; команда может отсутствовать на системах без resolved" ;;
+        bash*arm_info.sh*|arm_info*) desc="повторно запустит arm_info для планового контроля" ;;
+        *) desc="покажет диагностические данные для проверки этой рекомендации" ;;
     esac
+    if [[ $cmd =~ (UNIT_NAME|DEVICE_PATH|MD_DEVICE|IFACE_NAME) ]]; then
+        desc="$desc Перед выполнением замените служебный маркер на фактическое значение."
+    fi
+    case "$cmd" in
+        dnf\ install*) desc="ИЗМЕНЯЕТ СОСТОЯНИЕ: $desc" ;;
+    esac
+    printf '%s' "$desc"
 }
+
+base_split_commands() {
+    local s=$1 current="" quote="" i ch len=${#1}
+    for ((i=0; i<len; i++)); do
+        ch=${s:i:1}
+        if [[ -n $quote ]]; then
+            current+=$ch
+            [[ $ch == "$quote" ]] && quote=""
+            continue
+        fi
+        case "$ch" in
+            "'"|'"') quote=$ch; current+=$ch ;;
+            ';')
+                current=$(printf '%s' "$current" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                [[ -n $current ]] && printf '%s
+' "$current"
+                current=""
+                ;;
+            *) current+=$ch ;;
+        esac
+    done
+    current=$(printf '%s' "$current" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    [[ -n $current ]] && printf '%s
+' "$current"
+}
+
+base_print_rec_commands() {
+    local text=$1 cmd desc idx=0
+    while IFS= read -r cmd; do
+        [[ -n $cmd ]] || continue
+        idx=$((idx+1))
+        desc=$(base_command_description "$cmd")
+        base_print_command_line "Команда $idx:" "$cmd" "$desc"
+    done < <(base_split_commands "$text")
+}
+
 run_smart() {
     if command -v timeout >/dev/null 2>&1; then timeout 8 smartctl "$@"; else smartctl "$@"; fi
 }
@@ -1597,7 +1922,7 @@ fi
 # -------------------- СИСТЕМА --------------------
 if [ -r /etc/os-release ]; then . /etc/os-release; OS="${PRETTY_NAME:-$NAME}"; else OS="Не определено"; fi
 KERNEL=$(uname -r 2>/dev/null); ARCH=$(uname -m 2>/dev/null)
-UPTIME=$(LC_ALL=C uptime -p 2>/dev/null | sed 's/^up //'); [ -z "$UPTIME" ] && UPTIME="Не определено"
+UPTIME=$(format_uptime_ru)
 NOW_EPOCH=$(date +%s)
 INSTALL_EPOCH=$(stat -c %W / 2>/dev/null)
 if ! [[ "$INSTALL_EPOCH" =~ ^[0-9]+$ ]] || ((INSTALL_EPOCH<=0 || INSTALL_EPOCH>NOW_EPOCH)); then INSTALL_EPOCH=""; fi
@@ -1671,9 +1996,11 @@ fi
 [ -z "$DNS" ]&&DNS="-"
 ACTIVE_NET=0
 RX_ERRORS_TOTAL=0; TX_ERRORS_TOTAL=0
-RX_DROPS_TOTAL=0; TX_DROPS_TOTAL=0
+# rx_dropped сохраняем как диагностический счётчик, но сам по себе он не
+# доказывает потерю полезного трафика: ядро может учитывать там L2/filter drops.
+RX_DROPS_TOTAL=0; RX_MISSED_TOTAL=0; TX_DROPS_TOTAL=0
 RX_PACKETS_TOTAL=0; TX_PACKETS_TOTAL=0
-RXTX_ERRORS=0; RXTX_DROPS=0; RXTX_PACKETS=0
+RXTX_ERRORS=0; SCORED_LOSSES_TOTAL=0; RXTX_PACKETS=0
 NET_ROWS=(); NET_BAD_IFACES=()
 for P in /sys/class/net/*; do
     IFACE=$(basename "$P"); [ "$IFACE" = lo ]&&continue
@@ -1685,24 +2012,34 @@ for P in /sys/class/net/*; do
     NET_ROWS+=("$IFACE|$IPADDR|$MAC|$LINK"); ACTIVE_NET=$((ACTIVE_NET+1))
     # Для статистики ошибок используем физические устройства; VPN/tun не должны искажать балл.
     [ -e "$P/device" ] || continue
-    RX=$(cat "$P/statistics/rx_errors" 2>/dev/null); TX=$(cat "$P/statistics/tx_errors" 2>/dev/null); RXD=$(cat "$P/statistics/rx_dropped" 2>/dev/null); TXD=$(cat "$P/statistics/tx_dropped" 2>/dev/null)
+    RX=$(cat "$P/statistics/rx_errors" 2>/dev/null); TX=$(cat "$P/statistics/tx_errors" 2>/dev/null); RXD=$(cat "$P/statistics/rx_dropped" 2>/dev/null); RXM=$(cat "$P/statistics/rx_missed_errors" 2>/dev/null); TXD=$(cat "$P/statistics/tx_dropped" 2>/dev/null)
     RXP=$(cat "$P/statistics/rx_packets" 2>/dev/null); TXP=$(cat "$P/statistics/tx_packets" 2>/dev/null)
-    for V in RX TX RXD TXD RXP TXP; do eval 'X=${'"$V"'}'; [[ "$X" =~ ^[0-9]+$ ]]||eval "$V=0"; done
+    for V in RX TX RXD RXM TXD RXP TXP; do eval 'X=${'"$V"'}'; [[ "$X" =~ ^[0-9]+$ ]]||eval "$V=0"; done
     RX_ERRORS_TOTAL=$((RX_ERRORS_TOTAL+RX)); TX_ERRORS_TOTAL=$((TX_ERRORS_TOTAL+TX))
-    RX_DROPS_TOTAL=$((RX_DROPS_TOTAL+RXD)); TX_DROPS_TOTAL=$((TX_DROPS_TOTAL+TXD))
+    RX_DROPS_TOTAL=$((RX_DROPS_TOTAL+RXD)); RX_MISSED_TOTAL=$((RX_MISSED_TOTAL+RXM)); TX_DROPS_TOTAL=$((TX_DROPS_TOTAL+TXD))
     RX_PACKETS_TOTAL=$((RX_PACKETS_TOTAL+RXP)); TX_PACKETS_TOTAL=$((TX_PACKETS_TOTAL+TXP))
-    RXTX_ERRORS=$((RX_ERRORS_TOTAL+TX_ERRORS_TOTAL)); RXTX_DROPS=$((RX_DROPS_TOTAL+TX_DROPS_TOTAL)); RXTX_PACKETS=$((RX_PACKETS_TOTAL+TX_PACKETS_TOTAL))
-    IF_BAD=$((RX+TX+RXD+TXD)); IF_PKT=$((RXP+TXP)); IF_PPM=0; ((IF_PKT>0))&&IF_PPM=$((IF_BAD*1000000/IF_PKT)); ((IF_PPM>=1000))&&NET_BAD_IFACES+=("$IFACE:${IF_PPM}ppm")
+    RXTX_ERRORS=$((RX_ERRORS_TOTAL+TX_ERRORS_TOTAL)); SCORED_LOSSES_TOTAL=$((RX_MISSED_TOTAL+TX_DROPS_TOTAL)); RXTX_PACKETS=$((RX_PACKETS_TOTAL+TX_PACKETS_TOTAL))
+    # В score входят errors + реальные пропуски host/NIC + TX drops. Общий
+    # rx_dropped остаётся информационным и не создаёт WARN самостоятельно.
+    IF_BAD=$((RX+TX+RXM+TXD)); IF_PKT=$((RXP+TXP)); IF_PPM=0; ((IF_PKT>0))&&IF_PPM=$((IF_BAD*1000000/IF_PKT)); ((IF_PPM>=1000))&&NET_BAD_IFACES+=("$IFACE:${IF_PPM}ppm")
 done
 NET_BAD_PPM=0
 NET_ERROR_PPM=0
 NET_DROP_PPM=0
+NET_RX_DROP_PPM_RAW=0
+NET_SCORED_LOSS_PPM=0
 NET_BAD_PERCENT="0.0000"
 if ((RXTX_PACKETS>0)); then
-    NET_BAD_PPM=$(((RXTX_ERRORS+RXTX_DROPS)*1000000/RXTX_PACKETS))
+    NET_BAD_PPM=$(((RXTX_ERRORS+SCORED_LOSSES_TOTAL)*1000000/RXTX_PACKETS))
     NET_ERROR_PPM=$((RXTX_ERRORS*1000000/RXTX_PACKETS))
-    NET_DROP_PPM=$((RXTX_DROPS*1000000/RXTX_PACKETS))
-    NET_BAD_PERCENT=$(awk -v bad="$((RXTX_ERRORS+RXTX_DROPS))" -v pkt="$RXTX_PACKETS" 'BEGIN{if(pkt>0)printf "%.4f",bad*100/pkt;else print "0.0000"}')
+    NET_SCORED_LOSS_PPM=$((SCORED_LOSSES_TOTAL*1000000/RXTX_PACKETS))
+    # drop_ppm сохраняется для совместимости schema v1, но начиная с 1.2.4
+    # означает только учитываемые потери (rx_missed + tx_dropped).
+    NET_DROP_PPM=$NET_SCORED_LOSS_PPM
+    NET_BAD_PERCENT=$(awk -v bad="$((RXTX_ERRORS+SCORED_LOSSES_TOTAL))" -v pkt="$RXTX_PACKETS" 'BEGIN{if(pkt>0)printf "%.4f",bad*100/pkt;else print "0.0000"}')
+fi
+if ((RX_PACKETS_TOTAL>0)); then
+    NET_RX_DROP_PPM_RAW=$((RX_DROPS_TOTAL*1000000/RX_PACKETS_TOTAL))
 fi
 if ((ACTIVE_NET==0)); then
     NET_STATUS="Нет подключения"
@@ -2095,7 +2432,7 @@ OS_AGE_MONTHS=-1; ((AGE_DAYS>=0))&&OS_AGE_MONTHS=$((AGE_DAYS*12/365))
 SYSTEM_AGE_MONTHS=-1; AGE_SOURCE="Не определён"
 if ((DISK_AGE_MONTHS>=0 && OS_AGE_MONTHS>=0)); then if ((DISK_AGE_MONTHS>=OS_AGE_MONTHS)); then SYSTEM_AGE_MONTHS=$DISK_AGE_MONTHS; AGE_SOURCE="$AGE_DISK_SOURCE"; else SYSTEM_AGE_MONTHS=$OS_AGE_MONTHS; AGE_SOURCE="возраст текущей установки ОС"; fi
 elif ((DISK_AGE_MONTHS>=0)); then SYSTEM_AGE_MONTHS=$DISK_AGE_MONTHS; AGE_SOURCE="$AGE_DISK_SOURCE"; elif ((OS_AGE_MONTHS>=0)); then SYSTEM_AGE_MONTHS=$OS_AGE_MONTHS; AGE_SOURCE="возраст текущей установки ОС"; fi
-SYSTEM_AGE_TEXT="Не определён"; ((SYSTEM_AGE_MONTHS>=0))&&SYSTEM_AGE_TEXT=$(awk -v m="$SYSTEM_AGE_MONTHS" 'BEGIN{printf "%.1f",m/12}')
+SYSTEM_AGE_TEXT="Не определён"; ((SYSTEM_AGE_MONTHS>=0))&&SYSTEM_AGE_TEXT=$(format_years_ru_from_months "$SYSTEM_AGE_MONTHS")
 AGE_SCORE=90
 if ((SYSTEM_AGE_MONTHS>=0)); then if ((SYSTEM_AGE_MONTHS<=36)); then AGE_SCORE=100; elif ((SYSTEM_AGE_MONTHS<=48)); then AGE_SCORE=97; elif ((SYSTEM_AGE_MONTHS<=60)); then AGE_SCORE=93; elif ((SYSTEM_AGE_MONTHS<=72)); then AGE_SCORE=88; elif ((SYSTEM_AGE_MONTHS<=84)); then AGE_SCORE=82; elif ((SYSTEM_AGE_MONTHS<=96)); then AGE_SCORE=75; elif ((SYSTEM_AGE_MONTHS<=108)); then AGE_SCORE=68; elif ((SYSTEM_AGE_MONTHS<=120)); then AGE_SCORE=60; else AGE_SCORE=52; fi; fi
 
@@ -2151,34 +2488,36 @@ if ((ROOT_RO==1 || (SYSTEM_DISK_COUNT>0 && SYSTEM_DISK_SCORE<30) || (SYSTEM_DISK
 STATE_DISPLAY="$STATE"; ((CONFIDENCE<80))&&STATE_DISPLAY="ПРЕДВАРИТЕЛЬНО: $STATE"
 
 # -------------------- РЕКОМЕНДАЦИИ --------------------
+printf -v FS_WORST_USE_Q '%q' "$FS_WORST_USE_MOUNT"
+printf -v FS_WORST_INODE_Q '%q' "$FS_WORST_INODE_MOUNT"
 if ! command -v smartctl >/dev/null 2>&1 && ((FIXED_DISKS>0)); then add_rec "ПРОВЕРКА" "SMART внутренних накопителей не проверен" "Без SMART нельзя достоверно оценить системный SSD/NVMe/HDD." "Установить smartmontools и повторить диагностику." "dnf install smartmontools"; elif ((SYSTEM_SMART_UNKNOWN_COUNT>0)); then add_rec "ПРОВЕРКА" "SMART системного накопителя недоступен" "Основной накопитель АРМ оценён не полностью; съёмные носители на этот статус не влияют." "Проверить поддержку SMART системного устройства и повторить диагностику." "smartctl --scan-open"; elif ((SMART_UNKNOWN_COUNT>0)); then add_rec "ПРОВЕРКА" "SMART дополнительных накопителей частично недоступен" "Системный накопитель имеет приоритет; неполные данные относятся к дополнительным внутренним дискам." "При необходимости проверить дополнительные диски отдельно." "smartctl --scan-open"; fi
-if ((FS_WORST_USE>=FS_CRIT)); then add_rec "КРИТИЧНО" "ФС $FS_WORST_USE_MOUNT заполнена на ${FS_WORST_USE}%" "Может прекратиться запись журналов, временных файлов и работа служб." "Срочно освободить минимум 10–15% объёма." "du -xhd1 '$FS_WORST_USE_MOUNT' 2>/dev/null | sort -h"; elif ((FS_WORST_USE>=FS_HIGH)); then add_rec "ВНИМАНИЕ" "ФС $FS_WORST_USE_MOUNT заполнена на ${FS_WORST_USE}%" "Мало места для обновлений, журналов и рабочих файлов." "Освободить место до уровня ниже 80%." "du -xhd1 '$FS_WORST_USE_MOUNT' 2>/dev/null | sort -h"; elif ((FS_WORST_USE>=FS_WARN)); then add_rec "ПЛАНОВО" "ФС $FS_WORST_USE_MOUNT заполнена на ${FS_WORST_USE}%" "Снижается резерв свободного места." "Выполнить плановую очистку и держать заполнение ниже 80%." "df -h '$FS_WORST_USE_MOUNT'"; fi
-((FS_WORST_INODE>=INODE_WARN))&&add_rec "ВНИМАНИЕ" "Inode на $FS_WORST_INODE_MOUNT использованы на ${FS_WORST_INODE}%" "При исчерпании inode новые файлы создать нельзя даже при наличии свободного места." "Найти каталоги с большим количеством мелких файлов и очистить ненужные кэши/временные данные." "df -i '$FS_WORST_INODE_MOUNT'"
-((ROOT_RO==1))&&add_rec "КРИТИЧНО" "Корневая ФС смонтирована read-only" "Запись данных, обновления и часть служб могут не работать." "Проверить журнал ядра; fsck выполнять только на размонтированной ФС из rescue/live." "journalctl -k -b -p warning..alert"
-if ((MEM_AVAIL_PCT<15)); then add_rec "ВНИМАНИЕ" "Мало доступной ОЗУ — ${MEM_AVAIL_PCT}%" "Возможны торможения, swap и OOM." "Определить крупнейшие процессы; при постоянном дефиците увеличить RAM." "ps aux --sort=-%mem | head -15"; elif ((MEM_AVAIL_PCT<25)); then add_rec "ПЛАНОВО" "Небольшой запас ОЗУ — ${MEM_AVAIL_PCT}%" "При росте нагрузки система может активнее использовать swap." "Проверить крупнейшие процессы и наблюдать динамику." "free -h"; fi
+if ((FS_WORST_USE>=FS_CRIT)); then add_rec "КРИТИЧНО" "ФС $FS_WORST_USE_MOUNT заполнена на ${FS_WORST_USE}%" "Может прекратиться запись журналов, временных файлов и работа служб." "Срочно освободить минимум 10–15% объёма." "du -xhd1 $FS_WORST_USE_Q 2>/dev/null | sort -h | tail -20"; elif ((FS_WORST_USE>=FS_HIGH)); then add_rec "ВНИМАНИЕ" "ФС $FS_WORST_USE_MOUNT заполнена на ${FS_WORST_USE}%" "Мало места для обновлений, журналов и рабочих файлов." "Освободить место до уровня ниже 80%." "du -xhd1 $FS_WORST_USE_Q 2>/dev/null | sort -h | tail -20"; elif ((FS_WORST_USE>=FS_WARN)); then add_rec "ПЛАНОВО" "ФС $FS_WORST_USE_MOUNT заполнена на ${FS_WORST_USE}%" "Снижается резерв свободного места." "Выполнить плановую очистку и держать заполнение ниже 80%." "df -h $FS_WORST_USE_Q"; fi
+((FS_WORST_INODE>=INODE_WARN))&&add_rec "ВНИМАНИЕ" "Inode на $FS_WORST_INODE_MOUNT использованы на ${FS_WORST_INODE}%" "При исчерпании inode новые файлы создать нельзя даже при наличии свободного места." "Найти каталоги с большим количеством мелких файлов и очистить ненужные кэши/временные данные." "df -i $FS_WORST_INODE_Q; du --inodes -x -d1 $FS_WORST_INODE_Q 2>/dev/null | sort -n | tail -20"
+((ROOT_RO==1))&&add_rec "КРИТИЧНО" "Корневая ФС смонтирована read-only" "Запись данных, обновления и часть служб могут не работать." "Проверить журнал ядра; fsck выполнять только на размонтированной ФС из rescue/live." "findmnt -no SOURCE,FSTYPE,OPTIONS /; journalctl -k -b -p warning..alert --no-pager"
+if ((MEM_AVAIL_PCT<15)); then add_rec "ВНИМАНИЕ" "Мало доступной ОЗУ — ${MEM_AVAIL_PCT}%" "Возможны торможения, swap и OOM." "Определить крупнейшие процессы; при постоянном дефиците увеличить RAM." "free -h; ps -eo pid,ppid,user,stat,%mem,%cpu,comm --sort=-%mem | head -20; vmstat 1 5"; elif ((MEM_AVAIL_PCT<25)); then add_rec "ПЛАНОВО" "Небольшой запас ОЗУ — ${MEM_AVAIL_PCT}%" "При росте нагрузки система может активнее использовать swap." "Проверить крупнейшие процессы и наблюдать динамику." "free -h"; fi
 ((OOM_DETECTED==1))&&add_rec "КРИТИЧНО" "За текущую загрузку срабатывал OOM-killer" "Ядро принудительно завершало процесс из-за нехватки памяти." "Определить процесс-виновник и устранить дефицит/утечку; при необходимости увеличить RAM или swap." "journalctl -k -b | grep -Ei 'oom-kill|out of memory'"
-((FAILED_COUNT>0))&&add_rec "ВНИМАНИЕ" "Есть failed-службы: $FAILED_NAMES" "Функции этих служб могут быть недоступны или работать частично." "Проверить каждую службу, устранить первичную ошибку и перезапустить." "systemctl --failed"
-((HW_ERR_COUNT>0))&&add_rec "КРИТИЧНО" "В ядре обнаружены аппаратные/дисковые ошибки — $HW_ERR_COUNT" "Возможны I/O-сбои, зависания и повреждение данных." "Сопоставить сообщение с устройством, проверить SMART, кабели и питание." "journalctl -k -b -p warning..alert --no-pager"
+((FAILED_COUNT>0))&&add_rec "ВНИМАНИЕ" "Есть failed-службы: $FAILED_NAMES" "Функции этих служб могут быть недоступны или работать частично." "Проверить каждую службу, устранить первичную ошибку и перезапустить." "systemctl --failed; systemctl status UNIT_NAME --no-pager -l; journalctl -u UNIT_NAME -b --no-pager | tail -120"
+((HW_ERR_COUNT>0))&&add_rec "КРИТИЧНО" "В ядре обнаружены аппаратные/дисковые ошибки — $HW_ERR_COUNT" "Возможны I/O-сбои, зависания и повреждение данных." "Сопоставить сообщение с устройством, проверить SMART, кабели и питание." "journalctl -k -b -p warning..alert --no-pager; smartctl -a DEVICE_PATH"
 if ((JOURNAL_AVAILABLE==1 && JOURNAL_ERR_COUNT>30)); then add_rec "ВНИМАНИЕ" "Много уникальных ошибок journal — $JOURNAL_ERR_COUNT" "Возможна нестабильная служба, драйвер или повторяющаяся системная проблема." "Сгруппировать ошибки по источнику и устранить первичную причину." "journalctl -b -p err..alert -o short-iso --no-pager"; elif ((JOURNAL_AVAILABLE==1 && JOURNAL_ERR_COUNT>=6)); then add_rec "ПРОВЕРКА" "В journal есть уникальные ошибки — $JOURNAL_ERR_COUNT" "Не все error-сообщения критичны, но их нужно сопоставить с используемыми службами." "Просмотреть ошибки и проверить повторяемость." "journalctl -b -p err..alert -o short-iso --no-pager"; fi
 if [[ "$CPU_TEMP" =~ ^[0-9]+$ ]]&&((CPU_TEMP>=CPU_TEMP_VHIGH)); then add_rec "КРИТИЧНО" "Высокая температура CPU — ${CPU_TEMP}°C" "Возможен троттлинг и аварийное выключение." "Очистить охлаждение, проверить вентилятор/радиатор и термоинтерфейс." "sensors"; elif [[ "$CPU_TEMP" =~ ^[0-9]+$ ]]&&((CPU_TEMP>=CPU_TEMP_WARN)); then add_rec "ВНИМАНИЕ" "Повышенная температура CPU — ${CPU_TEMP}°C" "Тепловой запас снижен; под нагрузкой возможен троттлинг." "Проверить пыль, вентилятор и температуру при типовой нагрузке." "sensors"; fi
-if ((LOAD_STATE==2)); then add_rec "ВНИМАНИЕ" "Высокая системная нагрузка: Load1=$LOAD1" "Очередь задач/ожидания I/O велика, возможны задержки." "Найти процесс или I/O-источник постоянной нагрузки." "top"; elif ((LOAD_STATE==1)); then add_rec "ПРОВЕРКА" "Повышенная системная нагрузка: Load1=$LOAD1" "Система близка к полной загрузке CPU или имеет очередь I/O." "Если нагрузка не кратковременная — найти источник." "top"; fi
-if ((SYSTEM_AGE_MONTHS>=96)); then add_rec "ПЛАНОВО" "Эксплуатационный ориентир — около ${SYSTEM_AGE_TEXT} лет" "Возраст сам по себе не означает неисправность, но повышает риск отказа вентиляторов, БП и контактов." "Обеспечить резервное копирование, профилактику и план обновления по фактическому состоянию." "Повторять диагностику планово"; elif ((SYSTEM_AGE_MONTHS>=72)); then add_rec "ПЛАНОВО" "Эксплуатационный ориентир — около ${SYSTEM_AGE_TEXT} лет" "Возрастной риск постепенно растёт." "Усилить контроль SMART, охлаждения и резервного копирования." "Повторять диагностику планово"; fi
-((ACTIVE_NET==0))&&add_rec "КРИТИЧНО" "Не найден активный IPv4-интерфейс" "Сетевые ресурсы, домен и обновления могут быть недоступны." "Проверить линк, кабель и сетевой профиль." "ip -br a"
-[ "$GW" = - ]&&add_rec "ВНИМАНИЕ" "Не найден маршрут по умолчанию" "Доступ за пределы локальной подсети может отсутствовать." "Проверить маршрут и шлюз активного профиля." "ip route"
-[ "$DNS" = - ]&&add_rec "ВНИМАНИЕ" "DNS-серверы не определены" "Имена узлов и доменные сервисы могут не разрешаться." "Проверить /etc/resolv.conf и DNS в NetworkManager/systemd-resolved." "nmcli dev show 2>/dev/null | grep -i DNS"
+if ((LOAD_STATE==2)); then add_rec "ВНИМАНИЕ" "Высокая системная нагрузка: Load1=$LOAD1" "Очередь задач/ожидания I/O велика, возможны задержки." "Найти процесс или I/O-источник постоянной нагрузки." "top -b -n1 | head -30"; elif ((LOAD_STATE==1)); then add_rec "ПРОВЕРКА" "Повышенная системная нагрузка: Load1=$LOAD1" "Система близка к полной загрузке CPU или имеет очередь I/O." "Если нагрузка не кратковременная — найти источник." "top -b -n1 | head -30"; fi
+if ((SYSTEM_AGE_MONTHS>=96)); then add_rec "ПЛАНОВО" "Эксплуатационный ориентир — около ${SYSTEM_AGE_TEXT}" "Возраст сам по себе не означает неисправность, но повышает риск отказа вентиляторов, БП и контактов." "Обеспечить резервное копирование, профилактику и план обновления по фактическому состоянию." "$ARM_INFO_SELF_CMD"; elif ((SYSTEM_AGE_MONTHS>=72)); then add_rec "ПЛАНОВО" "Эксплуатационный ориентир — около ${SYSTEM_AGE_TEXT}" "Возрастной риск постепенно растёт." "Усилить контроль SMART, охлаждения и резервного копирования." "$ARM_INFO_SELF_CMD"; fi
+((ACTIVE_NET==0))&&add_rec "КРИТИЧНО" "Не найден активный IPv4-интерфейс" "Сетевые ресурсы, домен и обновления могут быть недоступны." "Проверить линк, кабель и сетевой профиль." "ip -br addr; nmcli device status"
+[ "$GW" = - ]&&add_rec "ВНИМАНИЕ" "Не найден маршрут по умолчанию" "Доступ за пределы локальной подсети может отсутствовать." "Проверить маршрут и шлюз активного профиля." "ip -4 route"
+[ "$DNS" = - ]&&add_rec "ВНИМАНИЕ" "DNS-серверы не определены" "Имена узлов и доменные сервисы могут не разрешаться." "Проверить /etc/resolv.conf и DNS в NetworkManager/systemd-resolved." "cat /etc/resolv.conf; nmcli -f GENERAL.CONNECTION,IP4.DNS,IP4.DOMAIN device show; resolvectl status 2>/dev/null"
 if ((NET_ERROR_PPM>=NET_ERROR_WARN_PPM || NET_DROP_PPM>=NET_DROP_WARN_PPM)); then
     BAD_IF_TEXT=$(IFS=,;echo "${NET_BAD_IFACES[*]}")
-    add_rec "ВНИМАНИЕ" "Повышенная доля сетевых ошибок/дропов" "Ошибки: ${NET_ERROR_PPM} ppm; дропы: ${NET_DROP_PPM} ppm. Возможны потери пакетов, медленная сеть и разрывы соединений." "Проверить кабель, порт коммутатора, согласование скорости/duplex и драйвер. ${BAD_IF_TEXT}" "ip -s link"
+    add_rec "ВНИМАНИЕ" "Повышенная доля сетевых ошибок/учитываемых потерь" "Ошибки: ${NET_ERROR_PPM} ppm; учитываемые потери: ${NET_SCORED_LOSS_PPM} ppm. RX dropped: ${NET_RX_DROP_PPM_RAW} ppm (информационно, сам по себе не снижает оценку)." "Проверить кабель/порт, драйвер и детальные счётчики NIC: rx_missed_errors, CRC/frame/FIFO/carrier и tx_dropped. ${BAD_IF_TEXT}" "ip -s -s link; ethtool -S IFACE_NAME 2>/dev/null"
 fi
 
-[ "$TIME_SYNC" = "Нет" ] && add_rec "ВНИМАНИЕ" "Системное время не синхронизировано" "Ошибки времени нарушают TLS и особенно Kerberos/AD-аутентификацию." "Проверить chronyd/systemd-timesyncd, NTP-серверы и сетевую доступность." "timedatectl; chronyc tracking 2>/dev/null"
-((UNCLEAN_BOOT_SIGNS>0)) && add_rec "ПРОВЕРКА" "Есть признаки аварийного завершения предыдущей загрузки" "Нештатное выключение может указывать на питание, зависание ядра или аппаратный сбой." "Изучить журнал предыдущей загрузки и сопоставить со временем инцидента." "journalctl -b -1 -p warning..alert"
-((RAID_DEGRADED==1)) && add_rec "КРИТИЧНО" "Software RAID находится в DEGRADED" "Отказ ещё одного диска может привести к потере массива и данных." "Срочно проверить /proc/mdstat, определить неисправный член массива и восстановить резервирование." "cat /proc/mdstat; mdadm --detail /dev/md0 2>/dev/null"
+[ "$TIME_SYNC" = "Нет" ] && add_rec "ВНИМАНИЕ" "Системное время не синхронизировано" "Ошибки времени нарушают TLS и особенно Kerberos/AD-аутентификацию." "Проверить chronyd/systemd-timesyncd, NTP-серверы и сетевую доступность." "timedatectl; chronyc tracking 2>/dev/null; chronyc sources -v 2>/dev/null"
+((UNCLEAN_BOOT_SIGNS>0)) && add_rec "ПРОВЕРКА" "Есть признаки аварийного завершения предыдущей загрузки" "Нештатное выключение может указывать на питание, зависание ядра или аппаратный сбой." "Изучить журнал предыдущей загрузки и сопоставить со временем инцидента." "journalctl --list-boots; journalctl -b -1 -p warning..alert --no-pager"
+((RAID_DEGRADED==1)) && add_rec "КРИТИЧНО" "Software RAID находится в DEGRADED" "Отказ ещё одного диска может привести к потере массива и данных." "Срочно проверить /proc/mdstat, определить неисправный член массива и восстановить резервирование." "cat /proc/mdstat; mdadm --detail MD_DEVICE"
 ((ECC_UE>0)) && add_rec "КРИТИЧНО" "ECC: обнаружены неисправимые ошибки памяти ($ECC_UE)" "Неисправимые ошибки памяти могут приводить к повреждению данных и аварийному завершению процессов." "Провести аппаратный тест ОЗУ и заменить неисправный модуль/слот." "grep -R . /sys/devices/system/edac/mc/mc*/ue_count 2>/dev/null"
 ((ECC_UE==0 && ECC_CE>0)) && add_rec "ПРОВЕРКА" "ECC: исправленных ошибок памяти — $ECC_CE" "ECC исправил ошибки, но рост счётчика может указывать на деградацию памяти." "Зафиксировать значения и проверить их рост при повторной диагностике." "grep -R . /sys/devices/system/edac/mc/mc*/ce_count 2>/dev/null"
-if [[ "$BATTERY_HEALTH" =~ ^([0-9]+)%$ ]] && ((BASH_REMATCH[1]<60)); then add_rec "ПЛАНОВО" "Износ батареи: остаточная ёмкость около ${BATTERY_HEALTH}" "Снижается автономность; при дальнейшем износе возможны внезапные отключения без питания." "Проверить батарею и запланировать замену при неудовлетворительной автономности." "upower -i $(upower -e 2>/dev/null | grep BAT | head -1) 2>/dev/null"; fi
-if [ "$SSSD_STATUS" != "Не установлен" ] && [ "$SSSD_STATUS" != "active" ]; then add_rec "ВНИМАНИЕ" "SSSD установлен, но состояние: $SSSD_STATUS" "Может не работать доменная аутентификация, разрешение пользователей и групп." "Проверить службу SSSD, конфигурацию и журнал." "systemctl status sssd --no-pager; journalctl -u sssd -b"; fi
-if [ "$CUPS_STATUS" != "Не установлен" ] && [ "$CUPS_STATUS" != "active" ] && ((CUPS_QUEUES>0)); then add_rec "ВНИМАНИЕ" "CUPS не активен при наличии очередей печати" "Локальная печать через CUPS недоступна." "Запустить CUPS и проверить причину остановки." "systemctl status cups --no-pager; journalctl -u cups -b"; fi
+if [[ "$BATTERY_HEALTH" =~ ^([0-9]+)%$ ]] && ((BASH_REMATCH[1]<60)); then add_rec "ПЛАНОВО" "Износ батареи: остаточная ёмкость около ${BATTERY_HEALTH}" "Снижается автономность; при дальнейшем износе возможны внезапные отключения без питания." "Проверить батарею и запланировать замену при неудовлетворительной автономности." "grep -H . /sys/class/power_supply/BAT*/{capacity,energy_full,energy_full_design,charge_full,charge_full_design,cycle_count} 2>/dev/null"; fi
+if [ "$SSSD_STATUS" != "Не установлен" ] && [ "$SSSD_STATUS" != "active" ]; then add_rec "ВНИМАНИЕ" "SSSD установлен, но состояние: $SSSD_STATUS" "Может не работать доменная аутентификация, разрешение пользователей и групп." "Проверить службу SSSD, конфигурацию и журнал." "systemctl status sssd --no-pager -l; journalctl -u sssd -b --no-pager | tail -150; sssctl config-check"; fi
+if [ "$CUPS_STATUS" != "Не установлен" ] && [ "$CUPS_STATUS" != "active" ] && ((CUPS_QUEUES>0)); then add_rec "ВНИМАНИЕ" "CUPS не активен при наличии очередей печати" "Локальная печать через CUPS недоступна." "Запустить CUPS и проверить причину остановки." "systemctl status cups --no-pager -l; journalctl -u cups -b --no-pager | tail -150; lpstat -r"; fi
 
 # -------------------- ЗАКЛЮЧЕНИЕ --------------------
 if ((TOTAL_SCORE>=80))&&[[ "$STATE" != КРИТИЧЕСКОЕ ]]; then if ((CONFIDENCE>=80)); then CONCLUSION="По результатам диагностики техническое состояние АРМ соответствует требованиям, предъявляемым к выполнению текущих задач."; else CONCLUSION="По доступным данным техническое состояние АРМ соответствует требованиям текущих задач, однако полнота проверки составляет ${CONFIDENCE}%; требуется устранить ограничения диагностики."; fi
@@ -2216,11 +2555,11 @@ fi
 if ((JSON_MODE==0)); then
 echo "ДИАГНОСТИЧЕСКИЙ ОТЧЁТ АРМ"
 echo "Дата: $(date '+%d.%m.%Y %H:%M:%S')"
-if ((SAVE_REPORT==1)); then echo "Отчёт: $REPORT_FILE"; else echo "Сохранение: отключено (--no-save)"; fi
+if ((SAVE_REPORT==1)); then echo "Отчёт: $REPORT_FILE"; fi
 
 section "СИСТЕМА"
 {
- echo "Хост|$HOST_DISPLAY"; echo "ОС|$OS"; echo "Модель системы|$SYSTEM_VENDOR $SYSTEM_PRODUCT"; echo "Ядро|$KERNEL"; echo "Архитектура|$ARCH"; echo "Установка ОС|$INSTALL_DATE"; ((AGE_YEARS>=0))&&echo "Возраст установки|≈ ${AGE_YEARS} лет"; echo "BIOS|$BIOS_VERSION; дата $BIOS_DATE (справочно)"; ((MAX_DISK_HOURS>0))&&echo "Макс. наработка диска|${MAX_DISK_HOURS} ч"; ((SYSTEM_AGE_MONTHS>=0))&&echo "Эксплуатационный ориентир|≈ ${SYSTEM_AGE_TEXT} лет ($AGE_SOURCE)"; echo "Время работы|$UPTIME"
+ echo "Хост|$HOST_DISPLAY"; echo "ОС|$OS"; echo "Модель системы|$SYSTEM_VENDOR $SYSTEM_PRODUCT"; echo "Ядро|$KERNEL"; echo "Архитектура|$ARCH"; echo "Установка ОС|$INSTALL_DATE"; echo "BIOS|$BIOS_VERSION; дата $BIOS_DATE (справочно)"; ((MAX_DISK_HOURS>0))&&echo "Макс. наработка диска|${MAX_DISK_HOURS} ч"; ((SYSTEM_AGE_MONTHS>=0))&&echo "Эксплуатационный ориентир|≈ ${SYSTEM_AGE_TEXT} ($AGE_SOURCE)"; echo "Время работы|$UPTIME"
 } | table
 
 section "ПРОЦЕССОР"
@@ -2336,12 +2675,14 @@ echo
 {
  echo "RX ошибки|$RX_ERRORS_TOTAL"
  echo "TX ошибки|$TX_ERRORS_TOTAL"
- echo "RX дропы|$RX_DROPS_TOTAL"
- echo "TX дропы|$TX_DROPS_TOTAL"
+ echo "RX dropped (информационно)|$RX_DROPS_TOTAL"
+ echo "RX missed (учитывается)|$RX_MISSED_TOTAL"
+ echo "TX dropped (учитывается)|$TX_DROPS_TOTAL"
  echo "Пакетов RX / TX|$RX_PACKETS_TOTAL / $TX_PACKETS_TOTAL"
  echo "Доля ошибок|${NET_ERROR_PPM} ppm"
- echo "Доля дропов|${NET_DROP_PPM} ppm"
- echo "Общая доля ошибок/дропов|${NET_BAD_PPM} ppm (${NET_BAD_PERCENT}%)"
+ echo "RX dropped (информационно)|${NET_RX_DROP_PPM_RAW} ppm"
+ echo "Учитываемые потери|${NET_SCORED_LOSS_PPM} ppm"
+ echo "Общая учитываемая доля|${NET_BAD_PPM} ppm (${NET_BAD_PERCENT}%)"
  echo "Состояние|$NET_STATUS"
 } | table
 
@@ -2377,7 +2718,7 @@ section "СВОДКА СОСТОЯНИЯ"
 echo
 STORAGE_SCORE_TEXT="$STORAGE_SCORE / 100"; ((STORAGE_KNOWN==0))&&STORAGE_SCORE_TEXT="Н/Д"
 AGE_SCORE_TEXT="$AGE_SCORE / 100"; ((AGE_KNOWN==0))&&AGE_SCORE_TEXT="Н/Д"
-{ echo "Показатель|Состояние|Вес в индексе"; echo "Накопители / износ|$STORAGE_SCORE_TEXT|40%"; echo "Файловая система|$FS_SCORE / 100|15%"; echo "Стабильность ОС|$STAB_SCORE / 100|15%"; echo "Оперативная память|$MEM_SCORE / 100|10%"; echo "Процессор / температура|$CPU_SCORE / 100|10%"; echo "Возраст / наработка|$AGE_SCORE_TEXT|5%"; echo "Сеть|$NET_SCORE / 100|5%"; } | table
+{ echo "Показатель|Состояние|Вес в индексе"; echo "Накопители / износ|$STORAGE_SCORE_TEXT|40%"; echo "Файловая система|$FS_SCORE / 100|15%"; echo "Стабильность системы|$STAB_SCORE / 100|15%"; echo "Оперативная память|$MEM_SCORE / 100|10%"; echo "Процессор / температура|$CPU_SCORE / 100|10%"; echo "Возраст / наработка|$AGE_SCORE_TEXT|5%"; echo "Сеть|$NET_SCORE / 100|5%"; } | table
 
 section "КЛЮЧЕВЫЕ ПОКАЗАТЕЛИ"
 SMART_SUMMARY=OK; if ((FIXED_DISKS==0)); then SMART_SUMMARY="Н/Д"; elif ! command -v smartctl >/dev/null 2>&1; then SMART_SUMMARY="Н/Д (smartctl отсутствует)"; elif ((SYSTEM_DISK_COUNT>0 && SYSTEM_DISK_SCORE==0)); then SMART_SUMMARY=FAIL; elif ((SYSTEM_DISK_COUNT>0 && SYSTEM_SMART_UNKNOWN_COUNT>0)); then SMART_SUMMARY="Н/Д (системный)"; elif ((SYSTEM_DISK_COUNT==0 && SMART_UNKNOWN_COUNT>0)); then SMART_SUMMARY="Частично / Н/Д"; fi
@@ -2400,8 +2741,7 @@ else
    print_wrapped "Что проверить:" "${REC_DIAGNOSTICS[$i]}"
    print_wrapped "Действие:" "${REC_ACTIONS[$i]}"
    if [ -n "${REC_CHECKS[$i]}" ]; then
-       _rec_cmd_desc=$(base_command_description "${REC_CHECKS[$i]}")
-       base_print_command_line "Команда 1:" "${REC_CHECKS[$i]}" "$_rec_cmd_desc"
+       base_print_rec_commands "${REC_CHECKS[$i]}"
    fi
    print_wrapped "Контроль результата:" "${REC_VERIFICATIONS[$i]}"
   done
@@ -2415,7 +2755,7 @@ echo; line
 echo "Индекс отражает текущее техническое состояние, износ накопителей, заполненность,"
 echo "стабильность, ресурсную нагрузку и эксплуатационный ориентир. Вес — вклад показателя"
 echo "в общий балл, а не процент износа. Индекс не прогнозирует срок службы."
-if ((SAVE_REPORT==1)); then echo "Отчёт сохранён: $REPORT_FILE"; else echo "Отчёт не сохранялся (--no-save)."; fi
+if ((SAVE_REPORT==1)); then echo "Отчёт сохранён: $REPORT_FILE"; fi
 else
     # JSON предназначен для автоматизации. В privacy-режиме сетевые идентификаторы обезличены.
     printf '{\n'
@@ -2434,8 +2774,8 @@ else
         "$STORAGE_SCORE" "$([ "$STORAGE_KNOWN" -eq 1 ] && echo true || echo false)" "$SYSTEM_DISK_COUNT" "$FIXED_DISKS" "$SECONDARY_FIXED_DISKS" "$REMOVABLE_DISKS" "$SMART_UNKNOWN_COUNT" "$SYSTEM_SMART_UNKNOWN_COUNT"
     printf '  "filesystem": {"root_use_percent":%s,"max_use_percent":%s,"max_use_mount":"%s","max_inode_percent":%s,"score":%s},\n' \
         "$ROOT_USE" "$FS_WORST_USE" "$(json_escape "$FS_WORST_USE_MOUNT")" "$FS_WORST_INODE" "$FS_SCORE"
-    printf '  "network": {"active_interfaces":%s,"gateway":"%s","dns":"%s","error_ppm":%s,"drop_ppm":%s,"score":%s},\n' \
-        "$ACTIVE_NET" "$(json_escape "$GW_DISPLAY")" "$(json_escape "$DNS_DISPLAY")" "$NET_ERROR_PPM" "$NET_DROP_PPM" "$NET_SCORE"
+    printf '  "network": {"active_interfaces":%s,"gateway":"%s","dns":"%s","rx_dropped":%s,"rx_missed":%s,"tx_dropped":%s,"error_ppm":%s,"rx_drop_ppm_raw":%s,"scored_loss_ppm":%s,"drop_ppm":%s,"score":%s},\n' \
+        "$ACTIVE_NET" "$(json_escape "$GW_DISPLAY")" "$(json_escape "$DNS_DISPLAY")" "$RX_DROPS_TOTAL" "$RX_MISSED_TOTAL" "$TX_DROPS_TOTAL" "$NET_ERROR_PPM" "$NET_RX_DROP_PPM_RAW" "$NET_SCORED_LOSS_PPM" "$NET_DROP_PPM" "$NET_SCORE"
     printf '  "stability": {"failed_units":%s,"hardware_errors":%s,"journal_errors":%s,"oom_detected":%s,"time_sync":"%s","unclean_boot_signs":%s,"ecc_ce":%s,"ecc_ue":%s,"penalty_failed_units":%s,"penalty_hardware":%s,"penalty_journal":%s,"penalty_oom":%s,"penalty_time":%s,"penalty_unclean_boot":%s,"penalty_ecc_ce":%s,"ecc_ue_score_cap":%s,"score":%s},\n' \
         "$FAILED_COUNT" "$HW_ERR_COUNT" "$JOURNAL_ERR_COUNT" "$([ "$OOM_DETECTED" -eq 1 ] && echo true || echo false)" "$(json_escape "$TIME_SYNC")" "$UNCLEAN_BOOT_SIGNS" "$ECC_CE" "$ECC_UE" \
         "$STAB_PENALTY_FAILED" "$STAB_PENALTY_HW" "$STAB_PENALTY_JOURNAL" "$STAB_PENALTY_OOM" "$STAB_PENALTY_TIME" "$STAB_PENALTY_UNCLEAN" "$STAB_PENALTY_ECC_CE" "$STAB_ECC_UE_CAP" "$STAB_SCORE"

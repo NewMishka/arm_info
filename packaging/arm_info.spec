@@ -1,5 +1,5 @@
 Name:           arm-info
-Version:        1.2.3
+Version:        1.2.4
 Release:        1%{?dist}
 Summary:        Diagnostic utility for RED OS and compatible Linux workstations
 License:        MIT
@@ -39,6 +39,11 @@ install -Dm0644 %{SOURCE3} %{buildroot}%{_docdir}/%{name}/README.md
 %config(noreplace) %{_sysconfdir}/arm_info.conf
 
 %changelog
+* Wed Sep 16 2026 NewMishka - 1.2.4-1
+- Audit and correct all administrator recommendation commands
+- Add per-command descriptions, explicit state-change warnings and safe placeholders
+- Fix NetworkManager 802.1X/DNS, CUPS package, Kerberos user-context and RAID diagnostics
+
 * Wed Sep 16 2026 NewMishka - 1.2.3-1
 - Prioritize the physical system disk and exclude removable/optical media from health scoring
 - Fix LVM/device-mapper system-disk detection by using raw lsblk names

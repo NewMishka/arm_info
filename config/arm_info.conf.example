@@ -29,7 +29,7 @@ SSD_LIFE_PLAN=30
 SSD_LIFE_WARN=20
 SSD_LIFE_CRIT=10
 
-# Сетевые ошибки/дропы на миллион пакетов.
+# Сетевые ошибки/учитываемые потери на миллион пакетов. NET_DROP_* применяется к rx_missed_errors + tx_dropped; raw rx_dropped только информационный.
 NET_ERROR_NOTICE_PPM=10
 NET_ERROR_WARN_PPM=100
 NET_ERROR_CRIT_PPM=1000
