@@ -1547,6 +1547,45 @@ table() {
 min_score() { (( $2 < $1 )) && echo "$2" || echo "$1"; }
 clamp_score() { local v="$1"; ((v<0))&&v=0; ((v>100))&&v=100; echo "$v"; }
 
+
+ru_plural() {
+    local n=$1 one=$2 few=$3 many=$4 n10 n100
+    n10=$((n % 10)); n100=$((n % 100))
+    if ((n100>=11 && n100<=14)); then printf '%s' "$many"
+    elif ((n10==1)); then printf '%s' "$one"
+    elif ((n10>=2 && n10<=4)); then printf '%s' "$few"
+    else printf '%s' "$many"
+    fi
+}
+
+format_uptime_ru() {
+    local seconds total_minutes days hours minutes out=""
+    if [[ -r /proc/uptime ]]; then
+        seconds=$(awk '{print int($1)}' /proc/uptime 2>/dev/null)
+    fi
+    [[ ${seconds:-} =~ ^[0-9]+$ ]] || { printf 'Не определено'; return; }
+    total_minutes=$((seconds / 60))
+    days=$((total_minutes / 1440))
+    hours=$(((total_minutes % 1440) / 60))
+    minutes=$((total_minutes % 60))
+    if ((days>0)); then out="$days $(ru_plural "$days" 'день' 'дня' 'дней')"; fi
+    if ((hours>0)); then [[ -n $out ]] && out+=" "; out+="$hours $(ru_plural "$hours" 'час' 'часа' 'часов')"; fi
+    if ((minutes>0 || (days==0 && hours==0))); then [[ -n $out ]] && out+=" "; out+="$minutes $(ru_plural "$minutes" 'минута' 'минуты' 'минут')"; fi
+    printf '%s' "$out"
+}
+
+format_years_ru_from_months() {
+    local months=$1 tenths whole frac
+    [[ $months =~ ^[0-9]+$ ]] || { printf 'Не определён'; return; }
+    tenths=$(((months * 10 + 6) / 12))
+    whole=$((tenths / 10)); frac=$((tenths % 10))
+    if ((frac==0)); then
+        printf '%d %s' "$whole" "$(ru_plural "$whole" 'год' 'года' 'лет')"
+    else
+        printf '%d,%d года' "$whole" "$frac"
+    fi
+}
+
 REC_LEVELS=(); REC_TITLES=(); REC_CAUSES=(); REC_IMPACTS=(); REC_DIAGNOSTICS=(); REC_ACTIONS=(); REC_CHECKS=(); REC_VERIFICATIONS=()
 add_rec() {
     local level=$1 title=$2 impact=$3 action=$4 command=${5:-}
@@ -1856,7 +1895,7 @@ fi
 # -------------------- СИСТЕМА --------------------
 if [ -r /etc/os-release ]; then . /etc/os-release; OS="${PRETTY_NAME:-$NAME}"; else OS="Не определено"; fi
 KERNEL=$(uname -r 2>/dev/null); ARCH=$(uname -m 2>/dev/null)
-UPTIME=$(LC_ALL=C uptime -p 2>/dev/null | sed 's/^up //'); [ -z "$UPTIME" ] && UPTIME="Не определено"
+UPTIME=$(format_uptime_ru)
 NOW_EPOCH=$(date +%s)
 INSTALL_EPOCH=$(stat -c %W / 2>/dev/null)
 if ! [[ "$INSTALL_EPOCH" =~ ^[0-9]+$ ]] || ((INSTALL_EPOCH<=0 || INSTALL_EPOCH>NOW_EPOCH)); then INSTALL_EPOCH=""; fi
@@ -2366,7 +2405,7 @@ OS_AGE_MONTHS=-1; ((AGE_DAYS>=0))&&OS_AGE_MONTHS=$((AGE_DAYS*12/365))
 SYSTEM_AGE_MONTHS=-1; AGE_SOURCE="Не определён"
 if ((DISK_AGE_MONTHS>=0 && OS_AGE_MONTHS>=0)); then if ((DISK_AGE_MONTHS>=OS_AGE_MONTHS)); then SYSTEM_AGE_MONTHS=$DISK_AGE_MONTHS; AGE_SOURCE="$AGE_DISK_SOURCE"; else SYSTEM_AGE_MONTHS=$OS_AGE_MONTHS; AGE_SOURCE="возраст текущей установки ОС"; fi
 elif ((DISK_AGE_MONTHS>=0)); then SYSTEM_AGE_MONTHS=$DISK_AGE_MONTHS; AGE_SOURCE="$AGE_DISK_SOURCE"; elif ((OS_AGE_MONTHS>=0)); then SYSTEM_AGE_MONTHS=$OS_AGE_MONTHS; AGE_SOURCE="возраст текущей установки ОС"; fi
-SYSTEM_AGE_TEXT="Не определён"; ((SYSTEM_AGE_MONTHS>=0))&&SYSTEM_AGE_TEXT=$(awk -v m="$SYSTEM_AGE_MONTHS" 'BEGIN{printf "%.1f",m/12}')
+SYSTEM_AGE_TEXT="Не определён"; ((SYSTEM_AGE_MONTHS>=0))&&SYSTEM_AGE_TEXT=$(format_years_ru_from_months "$SYSTEM_AGE_MONTHS")
 AGE_SCORE=90
 if ((SYSTEM_AGE_MONTHS>=0)); then if ((SYSTEM_AGE_MONTHS<=36)); then AGE_SCORE=100; elif ((SYSTEM_AGE_MONTHS<=48)); then AGE_SCORE=97; elif ((SYSTEM_AGE_MONTHS<=60)); then AGE_SCORE=93; elif ((SYSTEM_AGE_MONTHS<=72)); then AGE_SCORE=88; elif ((SYSTEM_AGE_MONTHS<=84)); then AGE_SCORE=82; elif ((SYSTEM_AGE_MONTHS<=96)); then AGE_SCORE=75; elif ((SYSTEM_AGE_MONTHS<=108)); then AGE_SCORE=68; elif ((SYSTEM_AGE_MONTHS<=120)); then AGE_SCORE=60; else AGE_SCORE=52; fi; fi
 
@@ -2435,7 +2474,7 @@ if ((MEM_AVAIL_PCT<15)); then add_rec "ВНИМАНИЕ" "Мало доступ�
 if ((JOURNAL_AVAILABLE==1 && JOURNAL_ERR_COUNT>30)); then add_rec "ВНИМАНИЕ" "Много уникальных ошибок journal — $JOURNAL_ERR_COUNT" "Возможна нестабильная служба, драйвер или повторяющаяся системная проблема." "Сгруппировать ошибки по источнику и устранить первичную причину." "journalctl -b -p err..alert -o short-iso --no-pager"; elif ((JOURNAL_AVAILABLE==1 && JOURNAL_ERR_COUNT>=6)); then add_rec "ПРОВЕРКА" "В journal есть уникальные ошибки — $JOURNAL_ERR_COUNT" "Не все error-сообщения критичны, но их нужно сопоставить с используемыми службами." "Просмотреть ошибки и проверить повторяемость." "journalctl -b -p err..alert -o short-iso --no-pager"; fi
 if [[ "$CPU_TEMP" =~ ^[0-9]+$ ]]&&((CPU_TEMP>=CPU_TEMP_VHIGH)); then add_rec "КРИТИЧНО" "Высокая температура CPU — ${CPU_TEMP}°C" "Возможен троттлинг и аварийное выключение." "Очистить охлаждение, проверить вентилятор/радиатор и термоинтерфейс." "sensors"; elif [[ "$CPU_TEMP" =~ ^[0-9]+$ ]]&&((CPU_TEMP>=CPU_TEMP_WARN)); then add_rec "ВНИМАНИЕ" "Повышенная температура CPU — ${CPU_TEMP}°C" "Тепловой запас снижен; под нагрузкой возможен троттлинг." "Проверить пыль, вентилятор и температуру при типовой нагрузке." "sensors"; fi
 if ((LOAD_STATE==2)); then add_rec "ВНИМАНИЕ" "Высокая системная нагрузка: Load1=$LOAD1" "Очередь задач/ожидания I/O велика, возможны задержки." "Найти процесс или I/O-источник постоянной нагрузки." "top -b -n1 | head -30"; elif ((LOAD_STATE==1)); then add_rec "ПРОВЕРКА" "Повышенная системная нагрузка: Load1=$LOAD1" "Система близка к полной загрузке CPU или имеет очередь I/O." "Если нагрузка не кратковременная — найти источник." "top -b -n1 | head -30"; fi
-if ((SYSTEM_AGE_MONTHS>=96)); then add_rec "ПЛАНОВО" "Эксплуатационный ориентир — около ${SYSTEM_AGE_TEXT} лет" "Возраст сам по себе не означает неисправность, но повышает риск отказа вентиляторов, БП и контактов." "Обеспечить резервное копирование, профилактику и план обновления по фактическому состоянию." "$ARM_INFO_SELF_CMD --no-save"; elif ((SYSTEM_AGE_MONTHS>=72)); then add_rec "ПЛАНОВО" "Эксплуатационный ориентир — около ${SYSTEM_AGE_TEXT} лет" "Возрастной риск постепенно растёт." "Усилить контроль SMART, охлаждения и резервного копирования." "$ARM_INFO_SELF_CMD --no-save"; fi
+if ((SYSTEM_AGE_MONTHS>=96)); then add_rec "ПЛАНОВО" "Эксплуатационный ориентир — около ${SYSTEM_AGE_TEXT}" "Возраст сам по себе не означает неисправность, но повышает риск отказа вентиляторов, БП и контактов." "Обеспечить резервное копирование, профилактику и план обновления по фактическому состоянию." "$ARM_INFO_SELF_CMD --no-save"; elif ((SYSTEM_AGE_MONTHS>=72)); then add_rec "ПЛАНОВО" "Эксплуатационный ориентир — около ${SYSTEM_AGE_TEXT}" "Возрастной риск постепенно растёт." "Усилить контроль SMART, охлаждения и резервного копирования." "$ARM_INFO_SELF_CMD --no-save"; fi
 ((ACTIVE_NET==0))&&add_rec "КРИТИЧНО" "Не найден активный IPv4-интерфейс" "Сетевые ресурсы, домен и обновления могут быть недоступны." "Проверить линк, кабель и сетевой профиль." "ip -br addr; nmcli device status"
 [ "$GW" = - ]&&add_rec "ВНИМАНИЕ" "Не найден маршрут по умолчанию" "Доступ за пределы локальной подсети может отсутствовать." "Проверить маршрут и шлюз активного профиля." "ip -4 route"
 [ "$DNS" = - ]&&add_rec "ВНИМАНИЕ" "DNS-серверы не определены" "Имена узлов и доменные сервисы могут не разрешаться." "Проверить /etc/resolv.conf и DNS в NetworkManager/systemd-resolved." "cat /etc/resolv.conf; nmcli -f GENERAL.CONNECTION,IP4.DNS,IP4.DOMAIN device show; resolvectl status 2>/dev/null"
@@ -2493,7 +2532,7 @@ if ((SAVE_REPORT==1)); then echo "Отчёт: $REPORT_FILE"; else echo "Сохр
 
 section "СИСТЕМА"
 {
- echo "Хост|$HOST_DISPLAY"; echo "ОС|$OS"; echo "Модель системы|$SYSTEM_VENDOR $SYSTEM_PRODUCT"; echo "Ядро|$KERNEL"; echo "Архитектура|$ARCH"; echo "Установка ОС|$INSTALL_DATE"; ((AGE_YEARS>=0))&&echo "Возраст установки|≈ ${AGE_YEARS} лет"; echo "BIOS|$BIOS_VERSION; дата $BIOS_DATE (справочно)"; ((MAX_DISK_HOURS>0))&&echo "Макс. наработка диска|${MAX_DISK_HOURS} ч"; ((SYSTEM_AGE_MONTHS>=0))&&echo "Эксплуатационный ориентир|≈ ${SYSTEM_AGE_TEXT} лет ($AGE_SOURCE)"; echo "Время работы|$UPTIME"
+ echo "Хост|$HOST_DISPLAY"; echo "ОС|$OS"; echo "Модель системы|$SYSTEM_VENDOR $SYSTEM_PRODUCT"; echo "Ядро|$KERNEL"; echo "Архитектура|$ARCH"; echo "Установка ОС|$INSTALL_DATE"; echo "BIOS|$BIOS_VERSION; дата $BIOS_DATE (справочно)"; ((MAX_DISK_HOURS>0))&&echo "Макс. наработка диска|${MAX_DISK_HOURS} ч"; ((SYSTEM_AGE_MONTHS>=0))&&echo "Эксплуатационный ориентир|≈ ${SYSTEM_AGE_TEXT} ($AGE_SOURCE)"; echo "Время работы|$UPTIME"
 } | table
 
 section "ПРОЦЕССОР"
