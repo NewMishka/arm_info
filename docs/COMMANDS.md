@@ -21,7 +21,7 @@
 - сеть/DNS: `ip`, `nmcli`, `resolvectl`/`systemd-resolve`, `dig`, `host`, `getent`, `nc` под `timeout`, `ethtool`;
 - AD/SSSD/Kerberos: `realm list`, `sssctl domain-list/config-check`, `adcli testjoin --verbose`, `klist -l/-A`;
 - 802.1X/X.509: `nmcli connection show PROFILE_NAME`, `openssl x509 ... -subject -issuer -dates`;
-- CIFS/GVFS: `findmnt -t cifs`, автоматический обход локальных `TARGET` через `timeout 5 stat -f`, `loginctl`, `/run/user/*/gvfs`;
+- CIFS/GVFS: `findmnt -t cifs`, автоматический обход локальных `TARGET` через readdir + metadata с таймаутом, `loginctl`, `/run/user/*/gvfs`, `gio mount -l` / `gio list` в пользовательской D-Bus сессии;
 - CUPS: `lpstat`, `cupsctl`, `cupsenable`, `cupsaccept`, `cancel`;
 - packages: `command -v`, `rpm -q`, `dnf provides`, `dnf install`.
 
@@ -36,3 +36,5 @@
 `mdadm --detail MD_DEVICE` требует реальное имя массива из `/proc/mdstat`; скрипт больше не предполагает, что это всегда `/dev/md0`.
 
 `cupsenable`, `cupsaccept` и `cancel` меняют состояние CUPS. До их запуска сначала изучите `lpstat` и `journalctl -u cups`.
+
+`cancel -a` в рекомендациях CUPS отменяет все задания во всех очередях выбранного сервера; это явное действие администратора, а не автоматическая часть диагностики.

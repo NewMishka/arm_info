@@ -356,14 +356,14 @@ recommendation_for() {
             REC_IMPACT="Задания будут накапливаться или не попадут на устройство печати."
             REC_CHECK="Получить состояние каждой очереди, причины остановки, backend URI и незавершённые задания."
             REC_ACTION="Исправить первичную причину. Возобновлять очередь только после проверки backend/устройства."
-            REC_COMMAND="lpstat -a -p -d -v|lpstat -W not-completed -o|journalctl -u cups -b --no-pager | tail -150|cupsenable QUEUE_NAME|cupsaccept QUEUE_NAME"
+            REC_COMMAND="lpstat -a -p -d -v|lpstat -W not-completed -o|journalctl -u cups -b --no-pager | tail -150|cupsenable QUEUE_NAME|cupsaccept QUEUE_NAME|cancel -a"
             ;;
         print.jobs)
             REC_CAUSE="В очередях накопилось много незавершённых заданий. Возможны остановленная очередь, недоступный backend или проблемное задание."
             REC_IMPACT="Новые задания задерживаются; spool может расти."
             REC_CHECK="Определить очередь и самое старое/проблемное задание, затем проверить состояние принтера и backend."
             REC_ACTION="Устранить причину очереди. Удалять задания только осознанно после согласования, чтобы не потерять пользовательскую печать."
-            REC_COMMAND="lpstat -W not-completed -o|lpstat -p -v|du -sh /var/spool/cups 2>/dev/null|cancel JOB_ID"
+            REC_COMMAND="lpstat -W not-completed -o|lpstat -p -v|du -sh /var/spool/cups 2>/dev/null|cancel JOB_ID|cancel -a"
             ;;
         print.lpstat)
             REC_CAUSE="Утилита lpstat отсутствует, поэтому состояние очередей CUPS не проверено."
@@ -373,11 +373,11 @@ recommendation_for() {
             REC_COMMAND="command -v lpstat|rpm -q cups-client|dnf provides '/usr/bin/lpstat'"
             ;;
         print.journal)
-            REC_CAUSE="В журнале CUPS много warning/error за текущую загрузку либо журнал недоступен."
+            REC_CAUSE="В журнале CUPS есть warning/error за текущую загрузку либо журнал недоступен."
             REC_IMPACT="Могут присутствовать повторяющиеся ошибки backend, фильтра, аутентификации или устройства."
             REC_CHECK="Посмотреть не только количество, но и уникальные последние сообщения с Job/Printer context."
-            REC_ACTION="Устранять наиболее раннюю повторяющуюся первичную ошибку; не ориентироваться только на число записей."
-            REC_COMMAND="journalctl -u cups -b -p warning..alert --no-pager | tail -150|journalctl -u cups -b --no-pager | grep -Ei 'job|printer|backend|filter|auth|error|failed' | tail -150"
+            REC_ACTION="Устранять причину по тексту журнала: backend/связь, аутентификация или фильтр печати. Если нужно намеренно удалить все задания, использовать cancel -a; очистка не исправляет причину ошибки и не очищает очередь Windows print-server."
+            REC_COMMAND="journalctl -u cups -b -p warning..alert --no-pager | tail -150|journalctl -u cups -b --no-pager | grep -Ei 'job|printer|backend|filter|auth|error|failed' | tail -150|lpstat -W not-completed -o|cancel -a"
             ;;
         software.rpm)
             REC_CAUSE="RPM inventory недоступна, потому что rpm не найден."
@@ -533,6 +533,7 @@ command_description() {
         cupsctl*) desc="покажет текущие параметры сервера CUPS" ;;
         cupsenable*) desc="возобновит указанную очередь после устранения первичной причины" ;;
         cupsaccept*) desc="разрешит указанной очереди принимать новые задания" ;;
+        cancel\ -a) desc="удалит все доступные для отмены задания во всех очередях выбранного CUPS-сервера; для чужих заданий нужны права администратора; очередь Windows не очищает" ;;
         cancel*) desc="отменит указанное задание печати; выполнять только после подтверждения, что задание можно удалить" ;;
         du\ -sh\ /var/spool/cups*) desc="покажет объём диска, занятый spool CUPS" ;;
         command\ -v*) desc="проверит наличие указанной утилиты в PATH" ;;
@@ -905,13 +906,68 @@ _cifs_state_text() {
 
 _gvfs_runtime_dirs() {
     # Сначала перечисляем runtime-каталоги, не обращаясь к FUSE от root.
-    printf '%s\n' /run/user/[0-9]*
+    {
+        printf '%s\n' /run/user/[0-9]*
+        ps -eo uid=,comm= 2>/dev/null | awk '$2 == "caja" || $2 == "gvfsd" || $2 == "gvfsd-smb" {print "/run/user/" $1}'
+    } | sort -u
+}
+
+_gvfs_session_bus() {
+    local uid=$1 runtime=$2 pid address
+    # Старые desktop-сессии могут использовать отдельный abstract socket.
+    # Читается только адрес D-Bus, остальные переменные процесса не выводятся.
+    for pid in $(pgrep -u "$uid" -x 'gvfsd|caja|mate-session|gnome-session' 2>/dev/null); do
+        [[ -r /proc/$pid/environ ]] || continue
+        address=$(tr '\0' '\n' <"/proc/$pid/environ" | sed -n 's/^DBUS_SESSION_BUS_ADDRESS=//p' | head -n1)
+        if [[ $address == unix:* ]]; then printf '%s\n' "$address"; return; fi
+    done
+    if [[ -S $runtime/bus ]]; then printf 'unix:path=%s/bus\n' "$runtime"; return; fi
+    return 1
+}
+
+_smb_resource_key() {
+    local value=$1 host share part decoded='' hex
+    if [[ $value == smb://* ]]; then
+        value=${value#smb://}; host=${value%%/*}; host=${host##*@}
+        share=${value#*/}; share=${share%%/*}
+    elif [[ $value == smb-share:* ]]; then
+        value=${value#smb-share:}; host=''; share=''
+        local -a parts
+        IFS=, read -ra parts <<<"$value"
+        for part in "${parts[@]}"; do
+            case $part in server=*) host=${part#server=};; share=*) share=${part#share=};; esac
+        done
+    else printf '%s' "$value"; return; fi
+    # Decode URI percent escapes without evaluating backslashes or shell text.
+    value=$share
+    while [[ -n $value ]]; do
+        if [[ $value =~ ^%([[:xdigit:]]{2}) ]]; then
+            hex=${BASH_REMATCH[1]}; printf -v part '%b' "\\x$hex"
+            decoded+=$part; value=${value:3}
+        else decoded+=${value:0:1}; value=${value:1}; fi
+    done
+    printf '%s/%s' "${host,,}" "$decoded"
+}
+
+_gio_probe() {
+    local uri=$1 user=$2 runtime=$3 bus=$4 err rc
+    CIFS_PROBE_STATE=INCONCLUSIVE; CIFS_PROBE_RC=125; CIFS_PROBE_ERR=''
+    err=$(mktemp) || return 0
+    _cifs_exec_as "$user" env LC_ALL=C XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="$bus" \
+      timeout -k 1 6 gio list -a standard::name,standard::type "$uri" >/dev/null 2>"$err"
+    rc=$?
+    CIFS_PROBE_RC=$rc
+    CIFS_PROBE_ERR=$(tr '\n' ' ' <"$err" | cut -c1-240)
+    CIFS_PROBE_STATE=$(_cifs_classify "$rc" "$CIFS_PROBE_ERR")
+    rm -f -- "$err"
 }
 
 check_gvfs() {
     local smb_index=${1:-0} runtime g uid gvfs_user dir name dirs_file errfile rc
     local count=0 good=0 bad=0 unknown=0 discovery_unknown=0 session=0
     local state sev label display detail
+    local bus gio_mounts uri resource_key gio_rc gio_sessions=0
+    local -A seen=()
     while IFS= read -r runtime; do
         uid=${runtime##*/}
         [[ $uid =~ ^[0-9]+$ ]] || continue
@@ -946,6 +1002,8 @@ check_gvfs() {
         while IFS= read -r name || [[ -n $name ]]; do
             [[ -n $name ]] || continue
             dir=$g/$name
+            resource_key="$uid/$(_smb_resource_key "$name")"
+            seen["$resource_key"]=1
             count=$((count+1))
             _cifs_probe "$dir" "$gvfs_user"
             state=$CIFS_PROBE_STATE
@@ -968,8 +1026,48 @@ check_gvfs() {
             add_check "SMB / GVFS" "network.gvfs.mount.$count" "$label" \
               "$display; $(_cifs_state_text "$state")" "$sev" "$detail"
         done <"$dirs_file"
+
+        bus=$(_gvfs_session_bus "$uid" "$runtime" || true)
+        if [[ -n $bus && -n $gvfs_user ]] && have gio && have timeout; then
+            gio_sessions=$((gio_sessions+1))
+            _cifs_exec_as "$gvfs_user" env LC_ALL=C XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="$bus" \
+              timeout -k 1 6 gio mount -l >"$dirs_file" 2>"$errfile"
+            gio_rc=$?
+            if ((gio_rc!=0)) || [[ -s $errfile ]]; then
+                discovery_unknown=$((discovery_unknown+1))
+                add_check "SMB / GVFS" "network.gvfs.gio.discovery.$session" "Подключения GIO" \
+                  "список сессии не получен (rc=$gio_rc)" unknown
+            fi
+            gio_mounts=$(sed -nE 's/^[[:space:]]*Mount\([0-9]+\):.* -> (smb:\/\/.*)$/\1/p' "$dirs_file")
+            while IFS= read -r uri; do
+                [[ -n $uri ]] || continue
+                resource_key="$uid/$(_smb_resource_key "$uri")"
+                [[ ${seen[$resource_key]:-} == 1 ]] && continue
+                seen["$resource_key"]=1
+                count=$((count+1)); smb_index=$((smb_index+1))
+                _gio_probe "$uri" "$gvfs_user" "$runtime" "$bus"
+                case $CIFS_PROBE_STATE in
+                    OK) good=$((good+1)); sev=ok;;
+                    INCONCLUSIVE) unknown=$((unknown+1)); sev=unknown;;
+                    *) bad=$((bad+1)); sev=warn;;
+                esac
+                if ((PRIVACY)); then display='ресурс скрыт'; detail="GIO; контекст: скрыто; rc=$CIFS_PROBE_RC"
+                else display=$(sanitize_uri "$uri"); detail="GIO; контекст: $gvfs_user; rc=$CIFS_PROBE_RC"; fi
+                add_check "SMB / GVFS" "network.gvfs.mount.$count" "SMB-ресурс #$smb_index" \
+                  "$display; $(_cifs_state_text "$CIFS_PROBE_STATE")" "$sev" "$detail"
+            done <<<"$gio_mounts"
+        elif pgrep -u "$uid" -x 'gvfsd|gvfsd-smb|caja' >/dev/null 2>&1; then
+            discovery_unknown=$((discovery_unknown+1))
+            add_check "SMB / GVFS" "network.gvfs.gio.discovery.$session" "Подключения GIO" \
+              "не проверены: gio или адрес пользовательской D-Bus сессии недоступен" unknown
+        fi
         rm -f -- "$dirs_file" "$errfile"
     done < <(_gvfs_runtime_dirs)
+    if ((gio_sessions==0 && discovery_unknown==0)) && pgrep -x 'gvfsd|gvfsd-smb|caja' >/dev/null 2>&1; then
+        discovery_unknown=$((discovery_unknown+1))
+        add_check "SMB / GVFS" "network.gvfs.gio.discovery" "Подключения GIO" \
+          "не проверены: gio или адрес пользовательской D-Bus сессии недоступен" unknown
+    fi
     if ((count==0 && discovery_unknown==0)); then
         add_check "SMB / GVFS" "network.gvfs" "GVFS mounts" "нет" info
     else
@@ -1302,7 +1400,7 @@ check_network() {
 }
 
 check_print() {
-    local state sev default qcount=0 disabled=0 jobs=0 uris errcount
+    local state sev default qcount=0 disabled=0 jobs=0 uris errcount journal_data journal_err journal_rc
     if have systemctl; then
         state=$(systemctl is-active cups 2>/dev/null || systemctl is-active cups.service 2>/dev/null || true)
         case "$state" in active) sev=ok;; inactive|failed) sev=crit;; *) sev=unknown;; esac
@@ -1312,7 +1410,7 @@ check_print() {
     if have lpstat; then
         if LC_ALL=C lpstat -r 2>/dev/null | grep -qi 'scheduler is running'; then add_check "ПЕЧАТЬ / CUPS" "print.scheduler" "CUPS scheduler" "работает" ok
         else add_check "ПЕЧАТЬ / CUPS" "print.scheduler" "CUPS scheduler" "не отвечает" crit; fi
-        default=$(LC_ALL=C lpstat -d 2>/dev/null | sed -E 's/^system default destination:[[:space:]]*//' | head -n1)
+        default=$(LC_ALL=C lpstat -d 2>/dev/null | sed -nE 's/^system default destination:[[:space:]]*//p' | head -n1)
         [[ -n $default ]] && add_check "ПЕЧАТЬ / CUPS" "print.default" "Принтер по умолчанию" "$default" ok || add_check "ПЕЧАТЬ / CUPS" "print.default" "Принтер по умолчанию" "не задан" info
         qcount=$(LC_ALL=C lpstat -p 2>/dev/null | grep -c '^printer ' || true)
         disabled=$(LC_ALL=C lpstat -p 2>/dev/null | grep -Eci 'disabled|paused|stopped' || true)
@@ -1331,9 +1429,22 @@ check_print() {
     else add_check "ПЕЧАТЬ / CUPS" "print.lpstat" "Очереди CUPS" "lpstat отсутствует" unknown; fi
 
     if have journalctl; then
-        errcount=$(journalctl -u cups -b -p warning..alert --no-pager 2>/dev/null | grep -c . || true)
-        if ((errcount>20)); then sev=warn; else sev=ok; fi
-        add_check "ПЕЧАТЬ / CUPS" "print.journal" "CUPS warning/error" "$errcount за текущую загрузку" "$sev"
+        journal_err=$(mktemp)
+        if [[ -n $journal_err ]]; then
+            journal_data=$(LC_ALL=C journalctl -q -u cups -b -p 0..4 -o json --no-pager 2>"$journal_err")
+            journal_rc=$?
+            if ((journal_rc!=0)) || [[ -s $journal_err ]]; then
+                add_check "ПЕЧАТЬ / CUPS" "print.journal" "CUPS warning/error" "журнал не прочитан полностью" unknown
+            else
+                errcount=$(grep -c '^[[:space:]]*{' <<<"$journal_data" || true)
+                if ((errcount>0)); then sev=warn; else sev=ok; fi
+                add_check "ПЕЧАТЬ / CUPS" "print.journal" "CUPS warning/error" "$errcount за текущую загрузку" "$sev" \
+                  "Исторические записи текущей загрузки; наличие записи не доказывает продолжающийся сбой."
+            fi
+            rm -f -- "$journal_err"
+        else
+            add_check "ПЕЧАТЬ / CUPS" "print.journal" "CUPS warning/error" "не удалось подготовить чтение журнала" unknown
+        fi
     else add_check "ПЕЧАТЬ / CUPS" "print.journal" "CUPS journal" "journalctl отсутствует" unknown; fi
 }
 

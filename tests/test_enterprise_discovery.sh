@@ -5,7 +5,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TMP=$(mktemp -d)
 trap 'rm -rf -- "$TMP"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
-awk '/^have\(\)/{copy=1} /^check_print\(\)/{copy=0} copy' "$ROOT/arm_info.sh" >"$TMP/functions.sh"
+awk '/^have\(\)/{copy=1} /^check_software\(\)/{copy=0} copy' "$ROOT/arm_info.sh" >"$TMP/functions.sh"
 # shellcheck disable=SC1091
 source "$TMP/functions.sh"
 PRIVACY=0
@@ -97,4 +97,89 @@ lines = open(sys.argv[1], encoding='utf-8').read().splitlines()
 columns = [re.search('[а-яё]', line).start() for line in lines if re.match(r'  -(?:p|s|h|V|o|q),', line)]
 assert len(columns) == 6 and len(set(columns)) == 1, columns
 PY
+
+# GIO-only mounts plus a duplicate FUSE view: enumerate all, probe each once.
+source "$TMP/functions.sh"
+PRIVACY=1
+RUNTIME="$TMP/gio/$(id -u)"
+mkdir -p "$RUNTIME/gvfs/smb-share:server=files.example.test,share=Sales Space"
+_gvfs_runtime_dirs() { printf '%s\n' "$RUNTIME"; }
+_gvfs_session_bus() { printf 'unix:path=/fixture/bus'; }
+gio() {
+    case "$1" in
+        mount)
+            printf '%s\n' '  Mount(0): Sales -> smb://files.example.test/Sales%20Space/' \
+                '  Mount(1): Archive -> smb://files.example.test/Archive/' \
+                '  Mount(2): Broken -> smb://files.example.test/Broken/'
+            ;;
+        list)
+            printf '%s\n' "${@: -1}" >>"$TMP/gio-calls"
+            if [[ ${@: -1} == */Broken/ ]]; then echo 'Host is down' >&2; return 1; fi
+            printf 'data.txt\n'
+            ;;
+    esac
+}
+mkdir -p "$TMP/bin"
+{ printf '#!/bin/bash\n'; declare -f gio; printf 'gio "$@"\n'; } >"$TMP/bin/gio"
+chmod +x "$TMP/bin/gio"
+export PATH="$TMP/bin:$PATH"
+export TMP
+reset_checks
+check_gvfs 1
+[[ ${VALUES[*]} == *'3; доступны: 2; проблемы: 1'* ]] || fail 'GIO/FUSE union or deduplication'
+[[ $(wc -l <"$TMP/gio-calls") == 2 ]] || fail 'GIO should probe only resources absent from FUSE'
+[[ ${LABELS[*]} == *'SMB-ресурс #4'* && $WARN_COUNT == 1 ]] || fail 'GIO report rows'
+[[ ${VALUES[*]} != *example.test* && ${DETAILS[*]} != *example.test* ]] || fail 'GIO privacy'
+
+# No FUSE directory at all: the session registry must still be consulted.
+RUNTIME="$TMP/gio-only/$(id -u)"
+mkdir -p "$RUNTIME"
+reset_checks
+check_gvfs 0
+[[ ${VALUES[*]} == *'3; доступны: 2; проблемы: 1'* ]] || fail 'GIO without FUSE'
+unset -f gio
+
+# CUPS: count records, not journal headers; any real warning needs a recommendation.
+source "$TMP/functions.sh"
+PRIVACY=1
+PROFILE=print
+ARM_INFO_SELF_CMD=arm_info
+have() { case "$1" in journalctl|lpstat) return 0;; *) return 1;; esac; }
+lpstat() {
+    case "$1" in
+        -r) echo 'scheduler is running';;
+        -d) echo 'no system default destination'; return 1;;
+        -p) echo 'printer fixture is idle. enabled';;
+    esac
+}
+journalctl() {
+    case $JOURNAL_CASE in
+        two) printf '%s\n' '{"MESSAGE":"backend error"}' '{"MESSAGE":"warning"}';;
+        empty) : ;;
+        banner) echo '-- No entries --';;
+        denied) echo 'Permission denied' >&2; return 1;;
+    esac
+}
+for JOURNAL_CASE in two empty banner denied; do
+    reset_checks
+    check_print
+    for i in "${!KEYS[@]}"; do
+        if [[ ${KEYS[i]} == print.journal ]]; then
+            case $JOURNAL_CASE in
+                two) [[ ${SEVERITIES[i]} == warn && ${VALUES[i]} == '2 за текущую загрузку' ]] || fail 'two CUPS errors must warn';;
+                empty|banner) [[ ${SEVERITIES[i]} == ok && ${VALUES[i]} == '0 за текущую загрузку' ]] || fail 'journal noise counted';;
+                denied) [[ ${SEVERITIES[i]} == unknown ]] || fail 'unreadable journal reported OK';;
+            esac
+        fi
+        if [[ ${KEYS[i]} == print.default ]]; then
+            [[ ${SEVERITIES[i]} == info && ${VALUES[i]} == 'не задан' ]] || fail 'missing default printer reported OK'
+        fi
+    done
+    build_recommendations
+    if [[ $JOURNAL_CASE == two ]]; then
+        [[ ${REC_KEYS[*]} == *print.journal* && ${REC_COMMANDS[*]} == *'cancel -a'* ]] || fail 'CUPS recommendation missing'
+    fi
+done
+[[ $(command_description 'cancel -a') == *'ИЗМЕНЯЕТ СОСТОЯНИЕ'* ]] || fail 'cancel -a needs destructive-action description'
+
 echo 'Enterprise discovery regression tests: OK'
