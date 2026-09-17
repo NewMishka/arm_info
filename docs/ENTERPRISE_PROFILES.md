@@ -12,7 +12,7 @@
 
 В **1.2.4** команды рекомендаций прошли отдельную ревизию: исправлены формы `nmcli` для DNS/802.1X, Kerberos-проверки учитывают контекст рабочего пользователя, сетевые проверки DC получили timeout, CUPS/RPM/RAID-команды уточнены. Служебные значения задаются именованными токенами (`DOMAIN_FQDN`, `DC_FQDN`, `USER_NAME`, `PROFILE_NAME`, `CERT_PATH`, `QUEUE_NAME` и др.), которые нужно заменить фактическими значениями. Команды, меняющие состояние, явно помечаются `ИЗМЕНЯЕТ СОСТОЯНИЕ`.
 
-`--corp` и полная форма `--profile enterprise` **сохраняют отчёт по умолчанию**. Без `-o` файл создаётся в текущем доступном для записи каталоге, при необходимости используется `/tmp`. Для TXT имя имеет вид `ARM_INFO_CORP_<HOST>_<DATE>.txt`, для JSON — то же имя с расширением `.json`, а в privacy-режиме hostname из автоматического имени исключается. Ключ `--no-save` отключает сохранение. Через `-o FILE` можно задать точный путь, а через `-o DIR` — каталог для автоматически сформированного имени.
+`--corp` и остальные профили **по умолчанию ничего не сохраняют**: результат выводится только в терминал. Файл создаётся только при явном `-s` / `--save`. Без `-o` имя формируется автоматически в текущем доступном для записи каталоге (при необходимости используется `/tmp`); для `--corp` сохраняется префикс `ARM_INFO_CORP_`. Через `-o FILE` можно задать точный путь, а через `-o DIR` — каталог; `-o/--output` без `-s/--save` считается ошибкой CLI.
 
 ## Профили
 
@@ -33,7 +33,7 @@
 
 ```bash
 sudo arm_info --profile domain
-sudo arm_info --profile domain --privacy --json -o /tmp/domain.json
+sudo arm_info --profile domain --privacy --json --save -o /tmp/domain.json
 ```
 
 ### `network`
@@ -87,16 +87,10 @@ sudo arm_info --profile print
 
 ```bash
 sudo arm_info --corp
-sudo arm_info --corp --privacy --json -o /tmp/arm-corp.json
+sudo arm_info --corp --privacy --json --save -o /tmp/arm-corp.json
 ```
 
-Первый вариант одновременно выводит корпоративный TXT-отчёт и автоматически сохраняет его. JSON при запуске `--corp --json` также автоматически сохраняется, если не задан `--no-save`; `-o` используется для фиксированного имени/расположения.
-
-Для запуска только на экран:
-
-```bash
-sudo arm_info --corp --no-save
-```
+Первый вариант выводит корпоративный TXT-отчёт только в терминал. Чтобы сохранить его, используйте `sudo arm_info --corp --save`; для фиксированного имени/расположения добавьте `-o PATH`. JSON работает по тому же правилу: без `--save` файл не создаётся.
 
 Полная форма `--profile enterprise` сохранена для совместимости.
 
@@ -127,8 +121,8 @@ sudo arm_info --corp --no-save
 Снимите JSON на двух рабочих станциях:
 
 ```bash
-sudo arm_info --corp --privacy --json -o arm-a.json
-sudo arm_info --corp --privacy --json -o arm-b.json
+sudo arm_info --corp --privacy --json --save -o arm-a.json
+sudo arm_info --corp --privacy --json --save -o arm-b.json
 ```
 
 Затем:

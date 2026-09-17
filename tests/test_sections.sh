@@ -36,7 +36,7 @@ assert_contains() {
 
 # -------------------- Standard TXT report: every user-visible section --------------------
 BASE_TXT="$TMPDIR/base.txt"
-run_diag "$BASE_TXT" --privacy --no-save
+run_diag "$BASE_TXT" --privacy
 
 BASE_SECTIONS=(
     "СИСТЕМА"
@@ -79,7 +79,7 @@ assert_contains "$BASE_TXT" "Полнота проверки"
 
 # -------------------- Standard JSON: machine-readable counterpart of all groups --------------------
 BASE_JSON="$TMPDIR/base.json"
-run_diag "$BASE_JSON" --json --privacy --no-save
+run_diag "$BASE_JSON" --json --privacy
 python3 - "$BASE_JSON" <<'PY' || exit 1
 import json,sys
 p=sys.argv[1]
@@ -110,7 +110,7 @@ check_profile_json() {
     profile=$1
     expected_csv=$2
     out="$TMPDIR/${profile}.json"
-    run_diag "$out" --profile "$profile" --json --privacy --no-save
+    run_diag "$out" --profile "$profile" --json --privacy
     python3 - "$out" "$profile" "$expected_csv" <<'PY' || exit 1
 import json,sys
 path,profile,expected_csv=sys.argv[1:]
@@ -134,7 +134,7 @@ check_profile_json software "ИНВЕНТАРИЗАЦИЯ ПО|ПРОЦЕССЫ"
 check_profile_json enterprise "ДОМЕН / KERBEROS|DNS / DOMAIN|СЕТЬ|DNS|802.1X|SMB / GVFS|ПЕЧАТЬ / CUPS"
 
 CORP_TXT="$TMPDIR/corp.txt"
-run_diag "$CORP_TXT" --corp --privacy --no-save
+run_diag "$CORP_TXT" --corp --privacy
 assert_contains "$CORP_TXT" "ARM_INFO КОРПОРАТИВНЫЙ"
 assert_contains "$CORP_TXT" "Профиль: корпоративный"
 for section in "ДОМЕН / KERBEROS" "DNS / DOMAIN" "СЕТЬ" "DNS" "802.1X" "SMB / GVFS" "ПЕЧАТЬ / CUPS" "СВОДКА" "РЕКОМЕНДАЦИИ"; do

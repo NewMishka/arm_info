@@ -4,7 +4,7 @@
 # ============================================================
 # arm_info 1.2.4 — диагностика АРМ для РЕД ОС 7 / 8
 # Запуск: исполняемый Bash-файл; base и enterprise находятся в одном файле.
-# Результат одновременно выводится на экран и сохраняется в TXT.
+# Результат выводится на экран; сохранение выполняется только по -s/--save.
 # ============================================================
 
 if [ -z "${BASH_VERSION:-}" ]; then
@@ -36,7 +36,7 @@ VERSION="1.2.4"
 PROFILE=""
 PRIVACY=0
 JSON_MODE=0
-SAVE_REPORT=1
+SAVE_REPORT=0
 OUTPUT_PATH=""
 COMPARE_A=""
 COMPARE_B=""
@@ -46,13 +46,13 @@ usage() {
 arm_info enterprise profiles 1.2.4
 
 Использование:
-  arm_info --profile domain [--privacy] [--json] [-o FILE]
-  arm_info --profile network [--privacy] [--json] [-o FILE]
-  arm_info --profile print [--privacy] [--json] [-o FILE]
-  arm_info --profile software [--privacy] [--json] [-o FILE]
-  arm_info --corp [--privacy] [--json] [--no-save] [-o FILE]
-  arm_info --profile enterprise [--privacy] [--json] [--no-save] [-o FILE]
-  arm_info --compare REPORT_A.json REPORT_B.json [--json] [-o FILE]
+  arm_info --profile domain [--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --profile network [--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --profile print [--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --profile software [--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --corp [--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --profile enterprise [--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --compare REPORT_A.json REPORT_B.json [--json] [-s|--save] [-o FILE]
 
 Профили:
   domain       AD/SSSD/Kerberos, DNS SRV, KDC/LDAP, синхронизация времени
@@ -82,7 +82,7 @@ while (($#)); do
             COMPARE_A=$2; COMPARE_B=$3; shift 3 ;;
         --privacy) PRIVACY=1; shift ;;
         --json) JSON_MODE=1; shift ;;
-        --no-save) SAVE_REPORT=0; shift ;;
+        -s|--save) SAVE_REPORT=1; shift ;;
         -o|--output)
             [[ $# -ge 2 ]] || { echo "Ошибка: $1 требует путь" >&2; exit 64; }
             OUTPUT_PATH=$2; shift 2 ;;
@@ -92,6 +92,11 @@ while (($#)); do
         *) echo "Ошибка: неизвестный параметр: $1" >&2; usage >&2; exit 64 ;;
     esac
 done
+
+if [[ -n $OUTPUT_PATH && $SAVE_REPORT -ne 1 ]]; then
+    echo "Ошибка: -o/--output используется только вместе с -s/--save" >&2
+    exit 64
+fi
 
 if [[ -n $COMPARE_A || -n $COMPARE_B ]]; then
     [[ -n $COMPARE_A && -n $COMPARE_B ]] || { echo "Ошибка: укажите два файла для сравнения" >&2; exit 64; }
@@ -113,34 +118,47 @@ if ((JSON_MODE==0)) && [[ -z $COMPARE_A ]] && [[ -t 1 ]]; then
     fi
 fi
 
-# Корпоративный профиль (--corp / --profile enterprise) по умолчанию сохраняет
-# отчёт так же, как стандартный анализ. Явный -o имеет приоритет; --no-save отключает запись.
-if [[ -z $COMPARE_A && $PROFILE == enterprise && -z $OUTPUT_PATH ]] && ((SAVE_REPORT==1)); then
+# Файл создаётся только по явному -s/--save. Без -o имя формируется автоматически.
+# Для профилей используются отдельные теги; enterprise/--corp сохраняет CORP-префикс.
+if [[ -z $COMPARE_A && -z $OUTPUT_PATH ]] && ((SAVE_REPORT==1)); then
+    CORP_TAG=${PROFILE^^}
+    [[ $PROFILE == enterprise ]] && CORP_TAG=CORP
     CORP_EXT=txt
     ((JSON_MODE==1)) && CORP_EXT=json
     CORP_STAMP=$(date '+%Y%m%d_%H%M%S')
     CORP_HOST=$(hostname -s 2>/dev/null || hostname 2>/dev/null || printf 'ARM')
     CORP_HOST=$(printf '%s' "$CORP_HOST" | tr -c '[:alnum:]_.-' '_')
     if ((PRIVACY)); then
-        CORP_NAME="ARM_INFO_CORP_PRIVATE_${CORP_STAMP}.${CORP_EXT}"
+        CORP_NAME="ARM_INFO_${CORP_TAG}_PRIVATE_${CORP_STAMP}.${CORP_EXT}"
     else
-        CORP_NAME="ARM_INFO_CORP_${CORP_HOST}_${CORP_STAMP}.${CORP_EXT}"
+        CORP_NAME="ARM_INFO_${CORP_TAG}_${CORP_HOST}_${CORP_STAMP}.${CORP_EXT}"
     fi
     CORP_DIR=$(pwd -P 2>/dev/null || printf '/tmp')
     [[ -d $CORP_DIR && -w $CORP_DIR ]] || CORP_DIR=/tmp
     OUTPUT_PATH="$CORP_DIR/$CORP_NAME"
 fi
 
+if [[ -n $COMPARE_A && -z $OUTPUT_PATH ]] && ((SAVE_REPORT==1)); then
+    CORP_EXT=txt
+    ((JSON_MODE==1)) && CORP_EXT=json
+    CORP_STAMP=$(date '+%Y%m%d_%H%M%S')
+    CORP_DIR=$(pwd -P 2>/dev/null || printf '/tmp')
+    [[ -d $CORP_DIR && -w $CORP_DIR ]] || CORP_DIR=/tmp
+    OUTPUT_PATH="$CORP_DIR/ARM_INFO_COMPARE_${CORP_STAMP}.${CORP_EXT}"
+fi
+
 if [[ -n $OUTPUT_PATH ]] && ((SAVE_REPORT==1)); then
     if [[ -d $OUTPUT_PATH ]]; then
         # Для -o DIR используем то же имя, что и при автоматическом сохранении.
+        CORP_TAG=${PROFILE^^}
+        [[ $PROFILE == enterprise ]] && CORP_TAG=CORP
         CORP_EXT=txt
         ((JSON_MODE==1)) && CORP_EXT=json
         CORP_STAMP=$(date '+%Y%m%d_%H%M%S')
         CORP_HOST=$(hostname -s 2>/dev/null || hostname 2>/dev/null || printf 'ARM')
         CORP_HOST=$(printf '%s' "$CORP_HOST" | tr -c '[:alnum:]_.-' '_')
-        if ((PRIVACY)); then CORP_NAME="ARM_INFO_CORP_PRIVATE_${CORP_STAMP}.${CORP_EXT}"
-        else CORP_NAME="ARM_INFO_CORP_${CORP_HOST}_${CORP_STAMP}.${CORP_EXT}"; fi
+        if ((PRIVACY)); then CORP_NAME="ARM_INFO_${CORP_TAG}_PRIVATE_${CORP_STAMP}.${CORP_EXT}"
+        else CORP_NAME="ARM_INFO_${CORP_TAG}_${CORP_HOST}_${CORP_STAMP}.${CORP_EXT}"; fi
         OUTPUT_PATH="${OUTPUT_PATH%/}/$CORP_NAME"
     fi
     OUTDIR=$(dirname -- "$OUTPUT_PATH")
@@ -1253,7 +1271,7 @@ emit_text() {
     if [[ -n $OUTPUT_PATH ]] && ((SAVE_REPORT==1)); then
         printf 'Отчёт: %s\n' "$OUTPUT_PATH"
     elif [[ $PROFILE == enterprise ]] && ((SAVE_REPORT==0)); then
-        printf 'Сохранение: отключено (--no-save)\n'
+        printf 'Сохранение: отключено ()\n'
     fi
 
     for i in "${!KEYS[@]}"; do
@@ -1460,7 +1478,7 @@ PRIVACY_DEFAULT=0
 
 CONFIG_FILE="/etc/arm_info.conf"
 PRIVACY_MODE=$PRIVACY_DEFAULT
-SAVE_REPORT=1
+SAVE_REPORT=0
 QUIET_MODE=0
 JSON_MODE=0
 OUTPUT_PATH=""
@@ -1477,7 +1495,7 @@ arm_info — диагностика технического состояния 
   -h, --help              показать справку
   -V, --version           показать версию
   --privacy               обезличить hostname, IP, MAC, DNS и имена интерфейсов
-  --no-save               не сохранять отчёт в файл
+  -s, --save             сохранить отчёт в файл
   -o, --output PATH       сохранить отчёт в указанный файл или каталог
   -q, --quiet             не выводить отчёт в терминал (имеет смысл с сохранением)
   --json                  вывести отчёт в JSON вместо текстового формата
@@ -1500,7 +1518,7 @@ while (($#)); do
         -h|--help) SHOW_HELP=1; shift ;;
         -V|--version) echo "arm_info $ARM_INFO_VERSION"; exit 0 ;;
         --privacy) PRIVACY_MODE=1; shift ;;
-        --no-save) SAVE_REPORT=0; shift ;;
+        -s|--save) SAVE_REPORT=1; shift ;;
         -q|--quiet) QUIET_MODE=1; shift ;;
         --json) JSON_MODE=1; shift ;;
         -o|--output)
@@ -1514,6 +1532,14 @@ while (($#)); do
     esac
 done
 ((SHOW_HELP==1)) && { usage; exit 0; }
+if [[ -n $OUTPUT_PATH && $SAVE_REPORT -ne 1 ]]; then
+    echo "Ошибка: -o/--output используется только вместе с -s/--save" >&2
+    exit 64
+fi
+if ((QUIET_MODE==1 && SAVE_REPORT==0)); then
+    echo "Ошибка: -q/--quiet используется только вместе с -s/--save" >&2
+    exit 64
+fi
 
 # Безопасно читаем только разрешённые ключи KEY=VALUE. Конфиг не source-ится.
 load_config() {
@@ -2474,7 +2500,7 @@ if ((MEM_AVAIL_PCT<15)); then add_rec "ВНИМАНИЕ" "Мало доступ�
 if ((JOURNAL_AVAILABLE==1 && JOURNAL_ERR_COUNT>30)); then add_rec "ВНИМАНИЕ" "Много уникальных ошибок journal — $JOURNAL_ERR_COUNT" "Возможна нестабильная служба, драйвер или повторяющаяся системная проблема." "Сгруппировать ошибки по источнику и устранить первичную причину." "journalctl -b -p err..alert -o short-iso --no-pager"; elif ((JOURNAL_AVAILABLE==1 && JOURNAL_ERR_COUNT>=6)); then add_rec "ПРОВЕРКА" "В journal есть уникальные ошибки — $JOURNAL_ERR_COUNT" "Не все error-сообщения критичны, но их нужно сопоставить с используемыми службами." "Просмотреть ошибки и проверить повторяемость." "journalctl -b -p err..alert -o short-iso --no-pager"; fi
 if [[ "$CPU_TEMP" =~ ^[0-9]+$ ]]&&((CPU_TEMP>=CPU_TEMP_VHIGH)); then add_rec "КРИТИЧНО" "Высокая температура CPU — ${CPU_TEMP}°C" "Возможен троттлинг и аварийное выключение." "Очистить охлаждение, проверить вентилятор/радиатор и термоинтерфейс." "sensors"; elif [[ "$CPU_TEMP" =~ ^[0-9]+$ ]]&&((CPU_TEMP>=CPU_TEMP_WARN)); then add_rec "ВНИМАНИЕ" "Повышенная температура CPU — ${CPU_TEMP}°C" "Тепловой запас снижен; под нагрузкой возможен троттлинг." "Проверить пыль, вентилятор и температуру при типовой нагрузке." "sensors"; fi
 if ((LOAD_STATE==2)); then add_rec "ВНИМАНИЕ" "Высокая системная нагрузка: Load1=$LOAD1" "Очередь задач/ожидания I/O велика, возможны задержки." "Найти процесс или I/O-источник постоянной нагрузки." "top -b -n1 | head -30"; elif ((LOAD_STATE==1)); then add_rec "ПРОВЕРКА" "Повышенная системная нагрузка: Load1=$LOAD1" "Система близка к полной загрузке CPU или имеет очередь I/O." "Если нагрузка не кратковременная — найти источник." "top -b -n1 | head -30"; fi
-if ((SYSTEM_AGE_MONTHS>=96)); then add_rec "ПЛАНОВО" "Эксплуатационный ориентир — около ${SYSTEM_AGE_TEXT}" "Возраст сам по себе не означает неисправность, но повышает риск отказа вентиляторов, БП и контактов." "Обеспечить резервное копирование, профилактику и план обновления по фактическому состоянию." "$ARM_INFO_SELF_CMD --no-save"; elif ((SYSTEM_AGE_MONTHS>=72)); then add_rec "ПЛАНОВО" "Эксплуатационный ориентир — около ${SYSTEM_AGE_TEXT}" "Возрастной риск постепенно растёт." "Усилить контроль SMART, охлаждения и резервного копирования." "$ARM_INFO_SELF_CMD --no-save"; fi
+if ((SYSTEM_AGE_MONTHS>=96)); then add_rec "ПЛАНОВО" "Эксплуатационный ориентир — около ${SYSTEM_AGE_TEXT}" "Возраст сам по себе не означает неисправность, но повышает риск отказа вентиляторов, БП и контактов." "Обеспечить резервное копирование, профилактику и план обновления по фактическому состоянию." "$ARM_INFO_SELF_CMD"; elif ((SYSTEM_AGE_MONTHS>=72)); then add_rec "ПЛАНОВО" "Эксплуатационный ориентир — около ${SYSTEM_AGE_TEXT}" "Возрастной риск постепенно растёт." "Усилить контроль SMART, охлаждения и резервного копирования." "$ARM_INFO_SELF_CMD"; fi
 ((ACTIVE_NET==0))&&add_rec "КРИТИЧНО" "Не найден активный IPv4-интерфейс" "Сетевые ресурсы, домен и обновления могут быть недоступны." "Проверить линк, кабель и сетевой профиль." "ip -br addr; nmcli device status"
 [ "$GW" = - ]&&add_rec "ВНИМАНИЕ" "Не найден маршрут по умолчанию" "Доступ за пределы локальной подсети может отсутствовать." "Проверить маршрут и шлюз активного профиля." "ip -4 route"
 [ "$DNS" = - ]&&add_rec "ВНИМАНИЕ" "DNS-серверы не определены" "Имена узлов и доменные сервисы могут не разрешаться." "Проверить /etc/resolv.conf и DNS в NetworkManager/systemd-resolved." "cat /etc/resolv.conf; nmcli -f GENERAL.CONNECTION,IP4.DNS,IP4.DOMAIN device show; resolvectl status 2>/dev/null"
@@ -2528,7 +2554,7 @@ fi
 if ((JSON_MODE==0)); then
 echo "ДИАГНОСТИЧЕСКИЙ ОТЧЁТ АРМ"
 echo "Дата: $(date '+%d.%m.%Y %H:%M:%S')"
-if ((SAVE_REPORT==1)); then echo "Отчёт: $REPORT_FILE"; else echo "Сохранение: отключено (--no-save)"; fi
+if ((SAVE_REPORT==1)); then echo "Отчёт: $REPORT_FILE"; fi
 
 section "СИСТЕМА"
 {
@@ -2728,7 +2754,7 @@ echo; line
 echo "Индекс отражает текущее техническое состояние, износ накопителей, заполненность,"
 echo "стабильность, ресурсную нагрузку и эксплуатационный ориентир. Вес — вклад показателя"
 echo "в общий балл, а не процент износа. Индекс не прогнозирует срок службы."
-if ((SAVE_REPORT==1)); then echo "Отчёт сохранён: $REPORT_FILE"; else echo "Отчёт не сохранялся (--no-save)."; fi
+if ((SAVE_REPORT==1)); then echo "Отчёт сохранён: $REPORT_FILE"; fi
 else
     # JSON предназначен для автоматизации. В privacy-режиме сетевые идентификаторы обезличены.
     printf '{\n'

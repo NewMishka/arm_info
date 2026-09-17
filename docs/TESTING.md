@@ -57,13 +57,13 @@ CI проверяет:
 ```bash
 sudo bash arm_info.sh
 sudo bash arm_info.sh --privacy
-sudo bash arm_info.sh --json --privacy --no-save
+sudo bash arm_info.sh --json --privacy
 sudo bash arm_info.sh --corp
-sudo bash arm_info.sh --corp --privacy --json --no-save
+sudo bash arm_info.sh --corp --privacy --json
 sudo bash arm_info.sh --profile software
 ```
 
-Проверяются не только exit code, но и отсутствие зависания, корректное сохранение отчёта, читаемость таблиц/рекомендаций, privacy и валидность JSON. Наличие `smartmontools`, `dmidecode` и `lm_sensors` повышает полноту базовой диагностики.
+Проверяются не только exit code, но и отсутствие зависания, отсутствие файла при обычном запуске, сохранение только по `-s/--save`, читаемость таблиц/рекомендаций, privacy и валидность JSON. Наличие `smartmontools`, `dmidecode` и `lm_sensors` повышает полноту базовой диагностики.
 
 ## Полевые проверки 1.2.3
 

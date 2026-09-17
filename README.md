@@ -50,7 +50,7 @@ ssh admin@HOST
 sudo bash /tmp/arm_info.sh --corp
 ```
 
-Корпоративный TXT-отчёт при таком запуске сохраняется автоматически в текущий каталог. Чтобы только вывести результат без сохранения, используйте `--no-save`.
+По умолчанию корпоративный отчёт выводится только в терминал и файл не создаётся. Для сохранения добавьте `-s` или `--save`; при необходимости путь задаётся через `-o/--output`.
 
 `--corp` запускает `domain + network + print` и **не выполняет глобальную инвентаризацию ПО**, поэтому отчёт не раздувается сотнями строк.
 
@@ -69,7 +69,7 @@ sudo bash /tmp/arm_info.sh --corp
 Если отчёт нужно передать вне внутреннего контура или использовать для сравнения АРМ:
 
 ```bash
-sudo bash /tmp/arm_info.sh --corp --privacy --json -o /tmp/arm-corp.json
+sudo bash /tmp/arm_info.sh --corp --privacy --json --save -o /tmp/arm-corp.json
 ```
 
 Полная инвентаризация всех RPM-пакетов запускается только отдельно и явно:
@@ -92,7 +92,7 @@ sha256sum -c SHA256SUMS
 -h, --help
 -V, --version
 --privacy
---no-save
+-s, --save
 -o, --output PATH
 -q, --quiet
 --json
@@ -106,11 +106,11 @@ sha256sum -c SHA256SUMS
 
 ```bash
 sudo arm_info --privacy
-sudo arm_info --json --privacy --no-save | jq '.summary'
-sudo arm_info --output /var/tmp/arm-reports/
+sudo arm_info --json --privacy | jq '.summary'
+sudo arm_info --save --output /var/tmp/arm-reports/
 sudo arm_info --config /etc/arm_info.conf
 sudo arm_info --profile domain --privacy
-sudo arm_info --corp --privacy --json -o /tmp/arm-corp.json
+sudo arm_info --corp --privacy --json --save -o /tmp/arm-corp.json
 arm_info --compare arm-a.json arm-b.json
 ```
 
@@ -133,8 +133,8 @@ arm_info --compare arm-a.json arm-b.json
 Для ситуации «на рабочем АРМ всё работает, на проблемном нет» можно получить два обезличенных JSON и сравнить их:
 
 ```bash
-sudo arm_info --corp --privacy --json -o arm-a.json
-sudo arm_info --corp --privacy --json -o arm-b.json
+sudo arm_info --corp --privacy --json --save -o arm-a.json
+sudo arm_info --corp --privacy --json --save -o arm-b.json
 arm_info --compare arm-a.json arm-b.json
 ```
 
@@ -148,7 +148,7 @@ arm_info --compare arm-a.json arm-b.json
 sudo arm_info --privacy
 ```
 
-Privacy-режим скрывает hostname, MAC, DNS, SSSD-домены, маскирует IP и заменяет имена интерфейсов. В корпоративных профилях дополнительно скрываются доменные значения; printer URI всегда очищается от встроенных учётных данных. Автоматическое имя privacy-отчёта не содержит hostname. Подробно: [docs/PRIVACY.md](docs/PRIVACY.md).
+Privacy-режим скрывает hostname, MAC, DNS, SSSD-домены, маскирует IP и заменяет имена интерфейсов. В корпоративных профилях дополнительно скрываются доменные значения; printer URI всегда очищается от встроенных учётных данных. При явном сохранении автоматическое имя privacy-отчёта не содержит hostname. Подробно: [docs/PRIVACY.md](docs/PRIVACY.md).
 
 ## Технический индекс
 

@@ -17,7 +17,7 @@
 ## Стандартный JSON — schema v1
 
 ```bash
-sudo arm_info --json --privacy --no-save
+sudo arm_info --json --privacy
 ```
 
 Стандартный JSON содержит `schema_version`, системные показатели, scores, confidence, diagnostics и массив `recommendations[]`.
@@ -29,24 +29,24 @@ sudo arm_info --json --privacy --no-save
 Пример:
 
 ```bash
-sudo arm_info --json --privacy --no-save | jq '.summary'
-sudo arm_info --json --privacy --no-save | jq '.storage'
-sudo arm_info --json --privacy --no-save | jq '.stability'
+sudo arm_info --json --privacy | jq '.summary'
+sudo arm_info --json --privacy | jq '.storage'
+sudo arm_info --json --privacy | jq '.stability'
 ```
 
 ## Корпоративный JSON — schema v2
 
 ```bash
-sudo arm_info --corp --privacy --json --no-save
+sudo arm_info --corp --privacy --json
 ```
 
 Корпоративная schema v2 содержит стабильные ключи в `checks[]`, сводку и расширенные `recommendations[]`. Это основной формат для helpdesk, сравнения АРМ и последующей машинной обработки корпоративной диагностики.
 
-`--corp` по умолчанию сохраняет TXT/JSON. Для pipeline в автоматизации обычно удобнее явно добавлять `--no-save`, либо задавать файл через `-o`:
+По умолчанию ни стандартный, ни корпоративный запуск файл не создаёт, поэтому JSON безопасно использовать в pipeline. Для явного сохранения добавьте `--save`; `-o` используется только вместе с `--save`:
 
 ```bash
-sudo arm_info --corp --privacy --json --no-save | jq '.summary'
-sudo arm_info --corp --privacy --json -o /var/tmp/arm-corp.json
+sudo arm_info --corp --privacy --json | jq '.summary'
+sudo arm_info --corp --privacy --json --save -o /var/tmp/arm-corp.json
 ```
 
 ## Сравнение двух АРМ

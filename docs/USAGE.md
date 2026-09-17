@@ -77,49 +77,51 @@ ARM_INFO_CORP_PRIVATE_YYYYMMDD_HHMMSS.txt   # --privacy
 Стандартный отчёт:
 
 ```bash
-sudo arm_info --output /var/tmp/
-sudo arm_info --output /var/tmp/report.txt
+sudo arm_info --save --output /var/tmp/
+sudo arm_info --save --output /var/tmp/report.txt
 ```
 
 Корпоративный отчёт:
 
 ```bash
-sudo arm_info --corp -o /var/tmp/
-sudo arm_info --corp -o /var/tmp/arm-corp.txt
+sudo arm_info --corp --save -o /var/tmp/
+sudo arm_info --corp --save -o /var/tmp/arm-corp.txt
 ```
 
-Если стандартный каталог недоступен для записи, стандартный анализ использует `/tmp`. Для явного `-o/--output` корпоративный профиль завершится ошибкой, если каталог недоступен.
+По умолчанию файл не создаётся. `-o/--output` допустим только вместе с `-s/--save`. Если каталог автоматического сохранения недоступен, используется `/tmp`; для явного `-o/--output` недоступный путь завершает запуск ошибкой.
 
 ## Без сохранения
 
+Никакой отдельный ключ не требуется — это поведение по умолчанию:
+
 ```bash
-sudo arm_info --no-save
-sudo arm_info --corp --no-save
+sudo arm_info
+sudo arm_info --corp
 ```
 
 ## Только файл
 
-Опция `--quiet` относится к стандартному анализу:
+Опция `--quiet` относится к стандартному анализу и используется вместе с сохранением:
 
 ```bash
-sudo arm_info --quiet
+sudo arm_info --save --quiet
 ```
 
-Для корпоративного профиля используйте перенаправление shell либо `-o`; профиль всё равно печатает результат в терминал.
+Для корпоративного профиля используйте `--save -o PATH` и при необходимости перенаправление shell; профиль печатает результат в терминал.
 
 ## JSON
 
 Стандартная schema v1:
 
 ```bash
-sudo arm_info --json --privacy --no-save
+sudo arm_info --json --privacy
 ```
 
 Корпоративная schema v2:
 
 ```bash
-sudo arm_info --corp --privacy --json --no-save
-sudo arm_info --corp --privacy --json -o /tmp/arm-corp.json
+sudo arm_info --corp --privacy --json
+sudo arm_info --corp --privacy --json --save -o /tmp/arm-corp.json
 ```
 
 ## Публичный отчёт
