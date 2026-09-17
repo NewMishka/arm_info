@@ -50,6 +50,7 @@ arm_info enterprise profiles 1.2.4
   arm_info --profile network [--privacy] [--json] [-s|--save] [-o FILE]
   arm_info --profile print [--privacy] [--json] [-s|--save] [-o FILE]
   arm_info --profile software [--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info -c [--privacy] [--json] [-s|--save] [-o FILE]
   arm_info --corp [--privacy] [--json] [-s|--save] [-o FILE]
   arm_info --profile enterprise [--privacy] [--json] [-s|--save] [-o FILE]
   arm_info --compare REPORT_A.json REPORT_B.json [--json] [-s|--save] [-o FILE]
@@ -72,7 +73,7 @@ USAGE
 
 while (($#)); do
     case "$1" in
-        --corp) PROFILE=enterprise; shift ;;
+        -c|--corp) PROFILE=enterprise; shift ;;
         --profile)
             [[ $# -ge 2 ]] || { echo "Ошибка: --profile требует значение" >&2; exit 64; }
             PROFILE=$2; shift 2 ;;
@@ -1437,7 +1438,7 @@ fi
 _arm_enterprise_requested=0
 for _arm_arg in "$@"; do
     case "$_arm_arg" in
-        --corp|--profile|--profile=*|--compare) _arm_enterprise_requested=1; break ;;
+        -c|--corp|--profile|--profile=*|--compare) _arm_enterprise_requested=1; break ;;
     esac
 done
 if ((_arm_enterprise_requested)); then
@@ -1500,7 +1501,7 @@ arm_info — диагностика технического состояния 
   -q, --quiet             не выводить отчёт в терминал (имеет смысл с сохранением)
   --json                  вывести отчёт в JSON вместо текстового формата
   --config PATH           использовать другой конфигурационный файл
-  --corp                  сокращённый запуск corporate-профиля: domain+network+print
+  -c, --corp              сокращённый запуск corporate-профиля: domain+network+print
   --profile NAME          domain|network|print|software|enterprise
   --compare A.json B.json сравнить два JSON-отчёта АРМ
 

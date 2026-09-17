@@ -47,8 +47,10 @@ sudo arm_info
 ```bash
 scp arm_info.sh admin@HOST:/tmp/
 ssh admin@HOST
-sudo bash /tmp/arm_info.sh --corp
+sudo bash /tmp/arm_info.sh -c
 ```
+
+`-c` — короткий алиас `--corp`; оба варианта запускают один и тот же корпоративный профиль.
 
 По умолчанию корпоративный отчёт выводится только в терминал и файл не создаётся. Для сохранения добавьте `-s` или `--save`; при необходимости путь задаётся через `-o/--output`.
 
@@ -97,7 +99,7 @@ sha256sum -c SHA256SUMS
 -q, --quiet
 --json
 --config PATH
---corp
+-c, --corp
 --profile domain|network|print|software|enterprise
 --compare REPORT_A.json REPORT_B.json
 ```
@@ -124,7 +126,7 @@ arm_info --compare arm-a.json arm-b.json
 - `network` — DNS/upstream, FQDN, интерфейсы, 802.1X и сроки сертификатов, CIFS/GVFS/Caja;
 - `print` — CUPS service/scheduler, default printer, paused queues, jobs, backend URI и журнал;
 - `software` — глобальная инвентаризация всех установленных RPM-пакетов, общее число процессов и zombie-процессы;
-- `enterprise` / `--corp` — объединяет `domain + network + print`; глобальная инвентаризация ПО **не запускается автоматически** и доступна только отдельно через `--profile software`.
+- `enterprise` / `-c` / `--corp` — объединяет `domain + network + print`; глобальная инвентаризация ПО **не запускается автоматически** и доступна только отдельно через `--profile software`.
 
 Подробно: [docs/ENTERPRISE_PROFILES.md](docs/ENTERPRISE_PROFILES.md).
 

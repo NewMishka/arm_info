@@ -8,8 +8,12 @@ die() { echo "TEST FAIL: $*" >&2; exit 1; }
 bash -n "$SCRIPT" || die "bash -n enterprise"
 [[ $(bash "$SCRIPT" --profile domain --version) == "arm_info enterprise $EXPECTED_VERSION" ]] || die "--version"
 [[ $(bash "$SCRIPT" --corp --version) == "arm_info enterprise $EXPECTED_VERSION" ]] || die "--corp version"
+[[ $(bash "$SCRIPT" -c --version) == "arm_info enterprise $EXPECTED_VERSION" ]] || die "-c version"
 bash "$SCRIPT" --profile domain --help | grep -q -- '--profile enterprise' || die "--help profiles"
 bash "$SCRIPT" --corp --help | grep -q -- '--corp' || die "--corp help"
+bash "$SCRIPT" -c --help | grep -q -- '--corp' || die "-c help"
+grep -Fq -- '-c|--corp) PROFILE=enterprise' "$SCRIPT" || die "-c parser"
+grep -Fq -- '-c|--corp|--profile' "$SCRIPT" || die "-c dispatcher"
 bash "$SCRIPT" --corp --help | grep -q -- '--save' || die "--corp save help"
 grep -q 'enterprise) check_domain; check_network; check_print ;;' "$SCRIPT" || die "enterprise profile must exclude software inventory"
 
