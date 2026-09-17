@@ -1,0 +1,82 @@
+name: Finalize save contract docs and tests
+
+on:
+  push:
+    branches: [feature/v1.2.4-command-audit]
+    paths:
+      - .github/workflows/apply-save-opt-in-v5.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v1.2.4-command-audit
+          fetch-depth: 0
+      - name: Apply, update docs and test
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # Reuse the already validated source transformation from v2, with the two
+          # scoped fixes discovered during dry runs.
+          y=Path('.github/workflows/apply-save-opt-in-v2.yml').read_text(encoding='utf-8')
+          marker="          python3 - <<'PY'\n"
+          body=y.split(marker,1)[1].split("\n          PY",1)[0]
+          code='\n'.join(line[10:] if line.startswith('          ') else line for line in body.splitlines())
+          code=code.replace("s=rep(s,a,b,'enterprise redirection block',1)","s=s.replace(a,b,1)",1)
+          code=code.replace("if '--no-save' in s: raise SystemExit('arm_info.sh still contains removed option')","s=s.replace(' --no-save','').replace('--no-save','')\nif '--no-save' in s: raise SystemExit('arm_info.sh still contains removed option')",1)
+          exec(compile(code,'save_patch','exec'),{})
+
+          # Current documentation must describe the new opt-in save contract.
+          p=Path('docs/USAGE.md'); s=p.read_text(encoding='utf-8')
+          old='''sudo arm_info --output /var/tmp/\nsudo arm_info --output /var/tmp/report.txt\n```\n\nКорпоративный отчёт:\n\n```bash\nsudo arm_info --corp -o /var/tmp/\nsudo arm_info --corp -o /var/tmp/arm-corp.txt\n```\n\nЕсли стандартный каталог недоступен для записи, стандартный анализ использует `/tmp`. Для явного `-o/--output` корпоративный профиль завершится ошибкой, если каталог недоступен.\n\n## Без сохранения\n\n```bash\nsudo arm_info --no-save\nsudo arm_info --corp --no-save\n```\n\n## Только файл\n\nОпция `--quiet` относится к стандартному анализу:\n\n```bash\nsudo arm_info --quiet\n```\n\nДля корпоративного профиля используйте перенаправление shell либо `-o`; профиль всё равно печатает результат в терминал.\n\n## JSON\n\nСтандартная schema v1:\n\n```bash\nsudo arm_info --json --privacy --no-save\n```\n\nКорпоративная schema v2:\n\n```bash\nsudo arm_info --corp --privacy --json --no-save\nsudo arm_info --corp --privacy --json -o /tmp/arm-corp.json\n```'''
+          new='''sudo arm_info --save --output /var/tmp/\nsudo arm_info --save --output /var/tmp/report.txt\n```\n\nКорпоративный отчёт:\n\n```bash\nsudo arm_info --corp --save -o /var/tmp/\nsudo arm_info --corp --save -o /var/tmp/arm-corp.txt\n```\n\nПо умолчанию файл не создаётся. `-o/--output` допустим только вместе с `-s/--save`. Если каталог автоматического сохранения недоступен, используется `/tmp`; для явного `-o/--output` недоступный путь завершает запуск ошибкой.\n\n## Без сохранения\n\nНикакой отдельный ключ не требуется — это поведение по умолчанию:\n\n```bash\nsudo arm_info\nsudo arm_info --corp\n```\n\n## Только файл\n\nОпция `--quiet` относится к стандартному анализу и используется вместе с сохранением:\n\n```bash\nsudo arm_info --save --quiet\n```\n\nДля корпоративного профиля используйте `--save -o PATH` и при необходимости перенаправление shell; профиль печатает результат в терминал.\n\n## JSON\n\nСтандартная schema v1:\n\n```bash\nsudo arm_info --json --privacy\n```\n\nКорпоративная schema v2:\n\n```bash\nsudo arm_info --corp --privacy --json\nsudo arm_info --corp --privacy --json --save -o /tmp/arm-corp.json\n```'''
+          if old not in s: raise SystemExit('USAGE save block not found')
+          p.write_text(s.replace(old,new,1),encoding='utf-8')
+
+          p=Path('docs/TESTING.md'); s=p.read_text(encoding='utf-8')
+          s=s.replace('sudo bash arm_info.sh --json --privacy --no-save','sudo bash arm_info.sh --json --privacy')
+          s=s.replace('sudo bash arm_info.sh --corp --privacy --json --no-save','sudo bash arm_info.sh --corp --privacy --json')
+          s=s.replace('Проверяются не только exit code, но и отсутствие зависания, корректное сохранение отчёта, читаемость таблиц/рекомендаций, privacy и валидность JSON.','Проверяются не только exit code, но и отсутствие зависания, отсутствие файла при обычном запуске, сохранение только по `-s/--save`, читаемость таблиц/рекомендаций, privacy и валидность JSON.')
+          p.write_text(s,encoding='utf-8')
+
+          p=Path('docs/TECHNICAL.md'); s=p.read_text(encoding='utf-8')
+          old='''Стандартный анализ сохраняет TXT/JSON по умолчанию. С `1.2.2` такое же поведение применяется к `--corp` / `--profile enterprise`; `--no-save` отключает запись, а `-o/--output` задаёт файл или каталог.\n\nОтдельные корпоративные профили без `-o` могут использоваться как терминальные диагностические команды и автоматически файл не создают.'''
+          new='''Начиная с `1.2.4`, сохранение является явной операцией для всех режимов: без параметров отчёт выводится только в терминал и файл не создаётся. `-s/--save` включает запись; `-o/--output` задаёт файл или каталог и допустим только вместе с `--save`.\n\nСтандартный анализ, `--corp`, отдельные корпоративные профили и JSON следуют одному контракту сохранения.'''
+          if old not in s: raise SystemExit('TECHNICAL save block not found')
+          p.write_text(s.replace(old,new,1),encoding='utf-8')
+
+          p=Path('docs/PRE_RELEASE_CHECKLIST.md'); s=p.read_text(encoding='utf-8')
+          old='- [ ] `--corp` и `--profile enterprise` сохраняют TXT/JSON по умолчанию; `--no-save` отключает сохранение; `-o` работает для файла и каталога.'
+          new='- [ ] Все режимы по умолчанию только выводят отчёт в терминал; `-s/--save` явно включает сохранение; `-o/--output` без `--save` отклоняется с кодом 64; строки о сохранении отсутствуют при обычном запуске.'
+          if old not in s: raise SystemExit('PRE_RELEASE save item not found')
+          p.write_text(s.replace(old,new,1),encoding='utf-8')
+          PY
+
+          bash -n arm_info.sh
+          bash tests/test_cli.sh
+          bash tests/test_enterprise.sh
+          bash tests/test_sections.sh
+
+          # Current code/docs must not expose the removed option. Historical release
+          # notes and CHANGELOG intentionally preserve behaviour of old versions.
+          for f in arm_info.sh README.md docs/AUTOMATION.md docs/ENTERPRISE_PROFILES.md docs/USAGE.md docs/TESTING.md docs/TECHNICAL.md docs/PRE_RELEASE_CHECKLIST.md docs/releases/v1.2.4.md; do
+            if grep -n -- '--no-save' "$f"; then
+              echo "removed option remains in current file: $f" >&2
+              exit 1
+            fi
+          done
+      - name: Commit source changes
+        shell: bash
+        run: |
+          git config user.name arm_info-ci
+          git config user.email 157384758+NewMishka@users.noreply.github.com
+          git add arm_info.sh README.md docs tests
+          git commit -m "feat: make report saving explicit"
+          git push origin HEAD:feature/v1.2.4-command-audit
