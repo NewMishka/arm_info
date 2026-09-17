@@ -64,7 +64,7 @@ assert_contains "$BASE_TXT" "Ядер / потоков"
 assert_contains "$BASE_TXT" "Всего / занято / доступно"
 assert_contains "$BASE_TXT" "Failed-службы"
 assert_contains "$BASE_TXT" "Ошибки ядра HW/storage"
-assert_contains "$BASE_TXT" "Общая доля ошибок/дропов"
+assert_contains "$BASE_TXT" "Общая учитываемая доля"
 assert_contains "$BASE_TXT" "Software RAID"
 assert_contains "$BASE_TXT" "Kerberos"
 assert_contains "$BASE_TXT" "Системный накопитель:"
@@ -97,7 +97,7 @@ assert isinstance(d['cpu'],dict) and {'model','cores','threads','load1','tempera
 assert isinstance(d['memory'],dict) and {'available_percent','swap_used_percent','oom_detected','score'} <= set(d['memory'])
 assert isinstance(d['storage'],dict) and {'score','known','system_disks','fixed_disks','removable_disks','system_smart_unknown'} <= set(d['storage'])
 assert isinstance(d['filesystem'],dict) and {'root_use_percent','max_use_percent','max_inode_percent','score'} <= set(d['filesystem'])
-assert isinstance(d['network'],dict) and {'active_interfaces','gateway','dns','error_ppm','drop_ppm','score'} <= set(d['network'])
+assert isinstance(d['network'],dict) and {'active_interfaces','gateway','dns','rx_dropped','rx_missed','tx_dropped','error_ppm','rx_drop_ppm_raw','scored_loss_ppm','drop_ppm','score'} <= set(d['network'])
 assert isinstance(d['stability'],dict) and {'failed_units','hardware_errors','journal_errors','oom_detected','time_sync','ecc_ce','ecc_ue','score'} <= set(d['stability'])
 assert isinstance(d['diagnostics'],dict) and {'time_sync','raid','ecc','battery_health','sssd','kerberos','cups','support_tier'} <= set(d['diagnostics'])
 assert isinstance(d['summary'],dict) and {'state','score','confidence','conclusion'} <= set(d['summary'])

@@ -41,6 +41,10 @@ grep -Fq 'SMART_ALL=$(run_smart -a "$DEV"' "$SCRIPT" || die "SMART collection mu
 ! grep -Fq '(медиана; максимум ${CPU_TEMP_MAX}°C)' "$SCRIPT" || die "CPU maximum must not be shown with median"
 grep -q '"possible_causes"' "$SCRIPT" || die "base recommendation JSON causes"
 grep -q '"verification"' "$SCRIPT" || die "base recommendation JSON verification"
+grep -Fq 'RX_MISSED_TOTAL=$((RX_MISSED_TOTAL+RXM))' "$SCRIPT" || die "network: rx_missed must be collected"
+grep -Fq 'SCORED_LOSSES_TOTAL=$((RX_MISSED_TOTAL+TX_DROPS_TOTAL))' "$SCRIPT" || die "network: scored losses must use rx_missed + tx_dropped"
+grep -Fq 'NET_RX_DROP_PPM_RAW=$((RX_DROPS_TOTAL*1000000/RX_PACKETS_TOTAL))' "$SCRIPT" || die "network: raw rx_dropped ppm missing"
+! grep -Fq 'RXTX_DROPS=$((RX_DROPS_TOTAL+TX_DROPS_TOTAL))' "$SCRIPT" || die "network: rx_dropped returned to scored loss aggregate"
 
 TMP=$(mktemp)
 trap 'rm -f "$TMP"' EXIT

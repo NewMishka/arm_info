@@ -1632,10 +1632,10 @@ add_rec() {
             diagnostic="Проверить resolv.conf, resolvectl (если используется), NetworkManager IP4.DNS/IP4.DOMAIN и разрешение FQDN/доменных SRV."
             verification="Должны определяться рабочие DNS upstream и стабильно разрешаться FQDN, включая необходимые доменные SRV-записи."
             ;;
-        *сетевых\ ошибок/дропов*)
-            cause="Рост RX/TX errors/dropped возможен из-за физического линка, порта коммутатора, перегрузки, драйвера, очередей NIC или несогласованных параметров."
-            diagnostic="Снять ip -s link несколько раз с интервалом, определить конкретный интерфейс и скорость роста счётчиков; проверить ethtool/драйвер и порт сети при наличии доступа."
-            verification="Счётчики ошибок/дропов не должны заметно расти при нормальной нагрузке; ppm должен вернуться ниже порогов arm_info."
+        *сетевых\ ошибок/учитываемых\ потерь*)
+            cause="В оценке сети учитываются RX/TX errors, rx_missed_errors и tx_dropped. Общий rx_dropped выводится отдельно как диагностический счётчик и сам по себе не считается неисправностью, потому что может включать штатные L2/filter drops."
+            diagnostic="Проверить ip -s -s link и ethtool -S по конкретному интерфейсу. Особое внимание: rx_missed_errors, CRC/frame/FIFO/carrier и tx_dropped; общий rx_dropped сопоставлять с ними, а не трактовать отдельно как потерю полезного трафика."
+            verification="RX/TX errors, rx_missed_errors и tx_dropped не должны систематически расти при нормальной нагрузке; информационный rx_dropped может расти без снижения score, если учитываемые ошибки/потери остаются ниже порогов."
             ;;
         *время\ не\ синхронизировано*)
             cause="NTP/chrony источник недоступен, служба времени остановлена, неверно настроена либо системное время слишком сильно отклонено."
@@ -1930,9 +1930,11 @@ fi
 [ -z "$DNS" ]&&DNS="-"
 ACTIVE_NET=0
 RX_ERRORS_TOTAL=0; TX_ERRORS_TOTAL=0
-RX_DROPS_TOTAL=0; TX_DROPS_TOTAL=0
+# rx_dropped сохраняем как диагностический счётчик, но сам по себе он не
+# доказывает потерю полезного трафика: ядро может учитывать там L2/filter drops.
+RX_DROPS_TOTAL=0; RX_MISSED_TOTAL=0; TX_DROPS_TOTAL=0
 RX_PACKETS_TOTAL=0; TX_PACKETS_TOTAL=0
-RXTX_ERRORS=0; RXTX_DROPS=0; RXTX_PACKETS=0
+RXTX_ERRORS=0; SCORED_LOSSES_TOTAL=0; RXTX_PACKETS=0
 NET_ROWS=(); NET_BAD_IFACES=()
 for P in /sys/class/net/*; do
     IFACE=$(basename "$P"); [ "$IFACE" = lo ]&&continue
@@ -1944,24 +1946,34 @@ for P in /sys/class/net/*; do
     NET_ROWS+=("$IFACE|$IPADDR|$MAC|$LINK"); ACTIVE_NET=$((ACTIVE_NET+1))
     # Для статистики ошибок используем физические устройства; VPN/tun не должны искажать балл.
     [ -e "$P/device" ] || continue
-    RX=$(cat "$P/statistics/rx_errors" 2>/dev/null); TX=$(cat "$P/statistics/tx_errors" 2>/dev/null); RXD=$(cat "$P/statistics/rx_dropped" 2>/dev/null); TXD=$(cat "$P/statistics/tx_dropped" 2>/dev/null)
+    RX=$(cat "$P/statistics/rx_errors" 2>/dev/null); TX=$(cat "$P/statistics/tx_errors" 2>/dev/null); RXD=$(cat "$P/statistics/rx_dropped" 2>/dev/null); RXM=$(cat "$P/statistics/rx_missed_errors" 2>/dev/null); TXD=$(cat "$P/statistics/tx_dropped" 2>/dev/null)
     RXP=$(cat "$P/statistics/rx_packets" 2>/dev/null); TXP=$(cat "$P/statistics/tx_packets" 2>/dev/null)
-    for V in RX TX RXD TXD RXP TXP; do eval 'X=${'"$V"'}'; [[ "$X" =~ ^[0-9]+$ ]]||eval "$V=0"; done
+    for V in RX TX RXD RXM TXD RXP TXP; do eval 'X=${'"$V"'}'; [[ "$X" =~ ^[0-9]+$ ]]||eval "$V=0"; done
     RX_ERRORS_TOTAL=$((RX_ERRORS_TOTAL+RX)); TX_ERRORS_TOTAL=$((TX_ERRORS_TOTAL+TX))
-    RX_DROPS_TOTAL=$((RX_DROPS_TOTAL+RXD)); TX_DROPS_TOTAL=$((TX_DROPS_TOTAL+TXD))
+    RX_DROPS_TOTAL=$((RX_DROPS_TOTAL+RXD)); RX_MISSED_TOTAL=$((RX_MISSED_TOTAL+RXM)); TX_DROPS_TOTAL=$((TX_DROPS_TOTAL+TXD))
     RX_PACKETS_TOTAL=$((RX_PACKETS_TOTAL+RXP)); TX_PACKETS_TOTAL=$((TX_PACKETS_TOTAL+TXP))
-    RXTX_ERRORS=$((RX_ERRORS_TOTAL+TX_ERRORS_TOTAL)); RXTX_DROPS=$((RX_DROPS_TOTAL+TX_DROPS_TOTAL)); RXTX_PACKETS=$((RX_PACKETS_TOTAL+TX_PACKETS_TOTAL))
-    IF_BAD=$((RX+TX+RXD+TXD)); IF_PKT=$((RXP+TXP)); IF_PPM=0; ((IF_PKT>0))&&IF_PPM=$((IF_BAD*1000000/IF_PKT)); ((IF_PPM>=1000))&&NET_BAD_IFACES+=("$IFACE:${IF_PPM}ppm")
+    RXTX_ERRORS=$((RX_ERRORS_TOTAL+TX_ERRORS_TOTAL)); SCORED_LOSSES_TOTAL=$((RX_MISSED_TOTAL+TX_DROPS_TOTAL)); RXTX_PACKETS=$((RX_PACKETS_TOTAL+TX_PACKETS_TOTAL))
+    # В score входят errors + реальные пропуски host/NIC + TX drops. Общий
+    # rx_dropped остаётся информационным и не создаёт WARN самостоятельно.
+    IF_BAD=$((RX+TX+RXM+TXD)); IF_PKT=$((RXP+TXP)); IF_PPM=0; ((IF_PKT>0))&&IF_PPM=$((IF_BAD*1000000/IF_PKT)); ((IF_PPM>=1000))&&NET_BAD_IFACES+=("$IFACE:${IF_PPM}ppm")
 done
 NET_BAD_PPM=0
 NET_ERROR_PPM=0
 NET_DROP_PPM=0
+NET_RX_DROP_PPM_RAW=0
+NET_SCORED_LOSS_PPM=0
 NET_BAD_PERCENT="0.0000"
 if ((RXTX_PACKETS>0)); then
-    NET_BAD_PPM=$(((RXTX_ERRORS+RXTX_DROPS)*1000000/RXTX_PACKETS))
+    NET_BAD_PPM=$(((RXTX_ERRORS+SCORED_LOSSES_TOTAL)*1000000/RXTX_PACKETS))
     NET_ERROR_PPM=$((RXTX_ERRORS*1000000/RXTX_PACKETS))
-    NET_DROP_PPM=$((RXTX_DROPS*1000000/RXTX_PACKETS))
-    NET_BAD_PERCENT=$(awk -v bad="$((RXTX_ERRORS+RXTX_DROPS))" -v pkt="$RXTX_PACKETS" 'BEGIN{if(pkt>0)printf "%.4f",bad*100/pkt;else print "0.0000"}')
+    NET_SCORED_LOSS_PPM=$((SCORED_LOSSES_TOTAL*1000000/RXTX_PACKETS))
+    # drop_ppm сохраняется для совместимости schema v1, но начиная с 1.2.4
+    # означает только учитываемые потери (rx_missed + tx_dropped).
+    NET_DROP_PPM=$NET_SCORED_LOSS_PPM
+    NET_BAD_PERCENT=$(awk -v bad="$((RXTX_ERRORS+SCORED_LOSSES_TOTAL))" -v pkt="$RXTX_PACKETS" 'BEGIN{if(pkt>0)printf "%.4f",bad*100/pkt;else print "0.0000"}')
+fi
+if ((RX_PACKETS_TOTAL>0)); then
+    NET_RX_DROP_PPM_RAW=$((RX_DROPS_TOTAL*1000000/RX_PACKETS_TOTAL))
 fi
 if ((ACTIVE_NET==0)); then
     NET_STATUS="Нет подключения"
@@ -2429,7 +2441,7 @@ if ((SYSTEM_AGE_MONTHS>=96)); then add_rec "ПЛАНОВО" "Эксплуата�
 [ "$DNS" = - ]&&add_rec "ВНИМАНИЕ" "DNS-серверы не определены" "Имена узлов и доменные сервисы могут не разрешаться." "Проверить /etc/resolv.conf и DNS в NetworkManager/systemd-resolved." "cat /etc/resolv.conf; nmcli -f GENERAL.CONNECTION,IP4.DNS,IP4.DOMAIN device show; resolvectl status 2>/dev/null"
 if ((NET_ERROR_PPM>=NET_ERROR_WARN_PPM || NET_DROP_PPM>=NET_DROP_WARN_PPM)); then
     BAD_IF_TEXT=$(IFS=,;echo "${NET_BAD_IFACES[*]}")
-    add_rec "ВНИМАНИЕ" "Повышенная доля сетевых ошибок/дропов" "Ошибки: ${NET_ERROR_PPM} ppm; дропы: ${NET_DROP_PPM} ppm. Возможны потери пакетов, медленная сеть и разрывы соединений." "Проверить кабель, порт коммутатора, согласование скорости/duplex и драйвер. ${BAD_IF_TEXT}" "ip -s link; ethtool IFACE_NAME 2>/dev/null"
+    add_rec "ВНИМАНИЕ" "Повышенная доля сетевых ошибок/учитываемых потерь" "Ошибки: ${NET_ERROR_PPM} ppm; учитываемые потери: ${NET_SCORED_LOSS_PPM} ppm. RX dropped: ${NET_RX_DROP_PPM_RAW} ppm (информационно, сам по себе не снижает оценку)." "Проверить кабель/порт, драйвер и детальные счётчики NIC: rx_missed_errors, CRC/frame/FIFO/carrier и tx_dropped. ${BAD_IF_TEXT}" "ip -s -s link; ethtool -S IFACE_NAME 2>/dev/null"
 fi
 
 [ "$TIME_SYNC" = "Нет" ] && add_rec "ВНИМАНИЕ" "Системное время не синхронизировано" "Ошибки времени нарушают TLS и особенно Kerberos/AD-аутентификацию." "Проверить chronyd/systemd-timesyncd, NTP-серверы и сетевую доступность." "timedatectl; chronyc tracking 2>/dev/null; chronyc sources -v 2>/dev/null"
@@ -2597,12 +2609,14 @@ echo
 {
  echo "RX ошибки|$RX_ERRORS_TOTAL"
  echo "TX ошибки|$TX_ERRORS_TOTAL"
- echo "RX дропы|$RX_DROPS_TOTAL"
- echo "TX дропы|$TX_DROPS_TOTAL"
+ echo "RX dropped (информационно)|$RX_DROPS_TOTAL"
+ echo "RX missed (учитывается)|$RX_MISSED_TOTAL"
+ echo "TX dropped (учитывается)|$TX_DROPS_TOTAL"
  echo "Пакетов RX / TX|$RX_PACKETS_TOTAL / $TX_PACKETS_TOTAL"
  echo "Доля ошибок|${NET_ERROR_PPM} ppm"
- echo "Доля дропов|${NET_DROP_PPM} ppm"
- echo "Общая доля ошибок/дропов|${NET_BAD_PPM} ppm (${NET_BAD_PERCENT}%)"
+ echo "RX dropped (информационно)|${NET_RX_DROP_PPM_RAW} ppm"
+ echo "Учитываемые потери|${NET_SCORED_LOSS_PPM} ppm"
+ echo "Общая учитываемая доля|${NET_BAD_PPM} ppm (${NET_BAD_PERCENT}%)"
  echo "Состояние|$NET_STATUS"
 } | table
 
@@ -2694,8 +2708,8 @@ else
         "$STORAGE_SCORE" "$([ "$STORAGE_KNOWN" -eq 1 ] && echo true || echo false)" "$SYSTEM_DISK_COUNT" "$FIXED_DISKS" "$SECONDARY_FIXED_DISKS" "$REMOVABLE_DISKS" "$SMART_UNKNOWN_COUNT" "$SYSTEM_SMART_UNKNOWN_COUNT"
     printf '  "filesystem": {"root_use_percent":%s,"max_use_percent":%s,"max_use_mount":"%s","max_inode_percent":%s,"score":%s},\n' \
         "$ROOT_USE" "$FS_WORST_USE" "$(json_escape "$FS_WORST_USE_MOUNT")" "$FS_WORST_INODE" "$FS_SCORE"
-    printf '  "network": {"active_interfaces":%s,"gateway":"%s","dns":"%s","error_ppm":%s,"drop_ppm":%s,"score":%s},\n' \
-        "$ACTIVE_NET" "$(json_escape "$GW_DISPLAY")" "$(json_escape "$DNS_DISPLAY")" "$NET_ERROR_PPM" "$NET_DROP_PPM" "$NET_SCORE"
+    printf '  "network": {"active_interfaces":%s,"gateway":"%s","dns":"%s","rx_dropped":%s,"rx_missed":%s,"tx_dropped":%s,"error_ppm":%s,"rx_drop_ppm_raw":%s,"scored_loss_ppm":%s,"drop_ppm":%s,"score":%s},\n' \
+        "$ACTIVE_NET" "$(json_escape "$GW_DISPLAY")" "$(json_escape "$DNS_DISPLAY")" "$RX_DROPS_TOTAL" "$RX_MISSED_TOTAL" "$TX_DROPS_TOTAL" "$NET_ERROR_PPM" "$NET_RX_DROP_PPM_RAW" "$NET_SCORED_LOSS_PPM" "$NET_DROP_PPM" "$NET_SCORE"
     printf '  "stability": {"failed_units":%s,"hardware_errors":%s,"journal_errors":%s,"oom_detected":%s,"time_sync":"%s","unclean_boot_signs":%s,"ecc_ce":%s,"ecc_ue":%s,"penalty_failed_units":%s,"penalty_hardware":%s,"penalty_journal":%s,"penalty_oom":%s,"penalty_time":%s,"penalty_unclean_boot":%s,"penalty_ecc_ce":%s,"ecc_ue_score_cap":%s,"score":%s},\n' \
         "$FAILED_COUNT" "$HW_ERR_COUNT" "$JOURNAL_ERR_COUNT" "$([ "$OOM_DETECTED" -eq 1 ] && echo true || echo false)" "$(json_escape "$TIME_SYNC")" "$UNCLEAN_BOOT_SIGNS" "$ECC_CE" "$ECC_UE" \
         "$STAB_PENALTY_FAILED" "$STAB_PENALTY_HW" "$STAB_PENALTY_JOURNAL" "$STAB_PENALTY_OOM" "$STAB_PENALTY_TIME" "$STAB_PENALTY_UNCLEAN" "$STAB_PENALTY_ECC_CE" "$STAB_ECC_UE_CAP" "$STAB_SCORE"

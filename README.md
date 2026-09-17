@@ -11,7 +11,7 @@
 - ОС, ядро, архитектура, модель системы, BIOS, uptime и ориентир возраста установки;
 - CPU: модель, физические ядра/потоки, load, температура по нескольким замерам с выводом медианы;
 - ОЗУ: объём, доступность, модули, тип/частота, swap, OOM;
-- сеть: IP/MAC, gateway, DNS, link, RX/TX errors и dropped, ppm;
+- сеть: IP/MAC, gateway, DNS, link, RX/TX errors, `rx_missed_errors`, TX dropped и информационный RX dropped; score учитывает только диагностически значимые ошибки/потери;
 - HDD/SSD/NVMe: SMART, ресурс, температура, Power-On Hours, bad/pending/uncorrectable, NVMe critical/media errors;
 - файловые системы: заполнение, inode, read-only;
 - стабильность системы: failed units, аппаратные/дисковые ошибки ядра, journal `err..alert`, OOM, time sync, признаки аварийной загрузки и ECC/EDAC;
