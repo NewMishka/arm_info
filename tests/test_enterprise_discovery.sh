@@ -106,6 +106,7 @@ mkdir -p "$RUNTIME/gvfs/smb-share:server=files.example.test,share=Sales Space"
 _gvfs_runtime_dirs() { printf '%s\n' "$RUNTIME"; }
 _gvfs_session_bus() { printf 'unix:path=/fixture/bus'; }
 gio() {
+    local uri=${!#}
     case "$1" in
         mount)
             printf '%s\n' '  Mount(0): Sales -> smb://files.example.test/Sales%20Space/' \
@@ -113,8 +114,8 @@ gio() {
                 '  Mount(2): Broken -> smb://files.example.test/Broken/'
             ;;
         list)
-            printf '%s\n' "${@: -1}" >>"$TMP/gio-calls"
-            if [[ ${@: -1} == */Broken/ ]]; then echo 'Host is down' >&2; return 1; fi
+            printf '%s\n' "$uri" >>"$TMP/gio-calls"
+            if [[ $uri == */Broken/ ]]; then echo 'Host is down' >&2; return 1; fi
             printf 'data.txt\n'
             ;;
     esac
