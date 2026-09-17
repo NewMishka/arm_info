@@ -1,0 +1,50 @@
+name: Apply explicit save contract v3
+
+on:
+  push:
+    branches: [feature/v1.2.4-command-audit]
+    paths:
+      - .github/workflows/apply-save-opt-in-v3.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v1.2.4-command-audit
+          fetch-depth: 0
+      - name: Apply corrected patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          y=Path('.github/workflows/apply-save-opt-in-v2.yml').read_text(encoding='utf-8')
+          marker="          python3 - <<'PY'\n"
+          body=y.split(marker,1)[1].split("\n          PY",1)[0]
+          lines=[]
+          for line in body.splitlines():
+              lines.append(line[10:] if line.startswith('          ') else line)
+          code='\n'.join(lines)
+          code=code.replace("s=rep(s,a,b,'enterprise redirection block',1)","s=s.replace(a,b,1)",1)
+          exec(compile(code,'save_patch','exec'),{})
+          PY
+          bash -n arm_info.sh
+          bash tests/test_cli.sh
+          bash tests/test_enterprise.sh
+          bash tests/test_sections.sh
+          if git grep -n -- '--no-save' -- ':!.github/workflows/*'; then
+            echo 'removed option references remain outside temporary workflows' >&2
+            exit 1
+          fi
+      - name: Commit source changes
+        shell: bash
+        run: |
+          git config user.name arm_info-ci
+          git config user.email 157384758+NewMishka@users.noreply.github.com
+          git add arm_info.sh README.md docs tests
+          git commit -m "feat: make report saving explicit"
+          git push origin HEAD:feature/v1.2.4-command-audit
