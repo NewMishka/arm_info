@@ -78,12 +78,15 @@ jobs:
         run: |
           grep -Fq 'Температура CPU|${CPU_TEMP}°C (медиана)' arm_info.sh
           ! grep -Fq '(медиана; максимум ${CPU_TEMP_MAX}°C)' arm_info.sh
-          grep -q 'ARM_INFO_CORP_PRIVATE_' arm_info.sh
+          grep -Fq 'ARM_INFO_${CORP_TAG}_PRIVATE_' arm_info.sh
+          grep -Fq 'SAVE_REPORT=0' arm_info.sh
+          grep -Fq -- '-s|--save) SAVE_REPORT=1' arm_info.sh
           grep -q 'split_rec_commands' arm_info.sh
           grep -q 'СТАБИЛЬНОСТЬ СИСТЕМЫ' arm_info.sh
           grep -q 'для оценки и пользовательского отчёта используется медиана' docs/SCORING.md
           grep -q 'Стабильность системы' docs/SCORING.md
-          grep -q -- '--corp --no-save' docs/USAGE.md
+          grep -q -- '--corp --save' docs/USAGE.md
+          ! grep -q -- '--no-save' docs/USAGE.md
           grep -q 'schema v2' docs/AUTOMATION.md
           grep -q 'COMMANDS.md' README.md
           grep -q 'ИЗМЕНЯЕТ СОСТОЯНИЕ' docs/COMMANDS.md
