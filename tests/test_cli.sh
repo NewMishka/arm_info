@@ -96,7 +96,7 @@ RC=$?
 set -e
 [[ $RC -eq 64 ]] || die "removed save option must exit 64, got $RC"
 set +e
-bash "$SCRIPT" --json --privacy >"$TMP"
+bash "$SCRIPT" --json -p >"$TMP"
 RC=$?
 set -e
 ((RC>=0 && RC<=3)) || die "unexpected diagnostic exit code: $RC"

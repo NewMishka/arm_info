@@ -33,7 +33,7 @@ TMP1=$(mktemp); TMP2=$(mktemp); DIFF=$(mktemp)
 trap 'rm -f "$TMP1" "$TMP2" "$DIFF"' EXIT
 
 set +e
-bash "$SCRIPT" --profile domain --json --privacy >"$TMP1"
+bash "$SCRIPT" --profile domain --json -p >"$TMP1"
 RC=$?
 set -e
 ((RC>=0 && RC<=3)) || die "domain exit code $RC"

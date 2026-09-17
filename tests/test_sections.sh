@@ -121,7 +121,10 @@ assert d['profile']==profile
 assert isinstance(d.get('checks'),list) and d['checks'], profile
 assert isinstance(d.get('recommendations'),list), profile
 sections={x.get('section') for x in d['checks'] if isinstance(x,dict)}
+keys=[x['key'] for x in d['checks']]
+assert len(keys)==len(set(keys)), f'{profile}: duplicate check keys'
 expected=set(expected_csv.split('|'))
+if profile=='enterprise': assert 'DNS' not in sections
 missing=sorted(expected-sections)
 assert not missing, f"{profile}: missing sections {missing}; got {sorted(sections)}"
 PY
@@ -131,13 +134,13 @@ check_profile_json domain "ДОМЕН / KERBEROS|DNS / DOMAIN"
 check_profile_json network "СЕТЬ|DNS|802.1X|SMB / GVFS"
 check_profile_json print "ПЕЧАТЬ / CUPS"
 check_profile_json software "ИНВЕНТАРИЗАЦИЯ ПО|ПРОЦЕССЫ"
-check_profile_json enterprise "ДОМЕН / KERBEROS|DNS / DOMAIN|СЕТЬ|DNS|802.1X|SMB / GVFS|ПЕЧАТЬ / CUPS"
+check_profile_json enterprise "ДОМЕН / KERBEROS|DNS / DOMAIN|СЕТЬ|802.1X|SMB / GVFS|ПЕЧАТЬ / CUPS"
 
 CORP_TXT="$TMPDIR/corp.txt"
 run_diag "$CORP_TXT" --corp --privacy
 assert_contains "$CORP_TXT" "ARM_INFO КОРПОРАТИВНЫЙ"
 assert_contains "$CORP_TXT" "Профиль: корпоративный"
-for section in "ДОМЕН / KERBEROS" "DNS / DOMAIN" "СЕТЬ" "DNS" "802.1X" "SMB / GVFS" "ПЕЧАТЬ / CUPS" "СВОДКА" "РЕКОМЕНДАЦИИ"; do
+for section in "ДОМЕН / KERBEROS" "DNS / DOMAIN" "СЕТЬ" "802.1X" "SMB / GVFS" "ПЕЧАТЬ / CUPS" "СВОДКА" "РЕКОМЕНДАЦИИ"; do
     assert_section_once "$CORP_TXT" "$section"
 done
 assert_contains "$CORP_TXT" "Параметр"
@@ -156,8 +159,8 @@ grep -q 'disk_is_removable()' "$SCRIPT" || die "storage: removable disk filter m
 grep -q 'check_domain()' "$SCRIPT" || die "enterprise: domain checker missing"
 grep -q 'check_network()' "$SCRIPT" || die "enterprise: network checker missing"
 grep -Fq 'done < <(findmnt -n -l -t cifs -o TARGET 2>/dev/null)' "$SCRIPT" || die "enterprise: CIFS TARGET-only enumeration missing"
-grep -Fq 'timeout 6 ls -U -A -1 -- "$mnt"' "$SCRIPT" || die "enterprise: CIFS full-directory readdir probe missing"
-grep -Fq 'timeout 6 stat -L -- "$sample"' "$SCRIPT" || die "enterprise: CIFS metadata lookup probe missing"
+grep -Fq 'timeout -k 1 6 ls -U -A -1 -- "$mnt/"' "$SCRIPT" || die "enterprise: CIFS full-directory readdir probe missing"
+grep -Fq 'timeout -k 1 6 stat -L -- "$sample"' "$SCRIPT" || die "enterprise: CIFS metadata lookup probe missing"
 grep -Fq 'network.cifs.mount.$cifs_count' "$SCRIPT" || die "enterprise: per-share CIFS report row missing"
 ! grep -Fq 'run_timeout 5 find "$mnt" -mindepth 1 -maxdepth 1 -print -quit' "$SCRIPT" || die "enterprise: old first-entry-only CIFS probe returned"
 ! grep -Fq "findmnt -n -l -t cifs -o TARGET,SOURCE 2>/dev/null | awk" "$SCRIPT" || die "enterprise: whitespace-splitting CIFS parser returned"

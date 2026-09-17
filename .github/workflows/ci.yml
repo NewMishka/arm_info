@@ -23,6 +23,12 @@ jobs:
         run: bash tests/test_cli.sh
       - name: Enterprise profile tests
         run: bash tests/test_enterprise.sh
+      - name: Enterprise discovery regression tests
+        run: |
+          bash -n tests/test_enterprise_discovery.sh
+          shellcheck --severity=error tests/test_enterprise_discovery.sh
+          bash tests/test_enterprise_discovery.sh
+          sudo bash tests/test_enterprise_discovery.sh
       - name: Recommendation command audit tests
         run: bash tests/test_recommendation_commands.sh
       - name: Full report section coverage

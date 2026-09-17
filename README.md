@@ -93,7 +93,7 @@ sha256sum -c SHA256SUMS
 ```text
 -h, --help
 -V, --version
---privacy
+-p, --privacy
 -s, --save
 -o, --output PATH
 -q, --quiet
@@ -149,6 +149,8 @@ arm_info --compare arm-a.json arm-b.json
 ```bash
 sudo arm_info --privacy
 ```
+
+`-p` — короткая форма `--privacy`, действует во всех профилях.
 
 Privacy-режим скрывает hostname, MAC, DNS, SSSD-домены, маскирует IP и заменяет имена интерфейсов. В корпоративных профилях дополнительно скрываются доменные значения; printer URI всегда очищается от встроенных учётных данных. При явном сохранении автоматическое имя privacy-отчёта не содержит hostname. Подробно: [docs/PRIVACY.md](docs/PRIVACY.md).
 

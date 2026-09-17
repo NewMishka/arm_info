@@ -46,13 +46,13 @@ usage() {
 arm_info enterprise profiles 1.2.4
 
 Использование:
-  arm_info --profile domain [--privacy] [--json] [-s|--save] [-o FILE]
-  arm_info --profile network [--privacy] [--json] [-s|--save] [-o FILE]
-  arm_info --profile print [--privacy] [--json] [-s|--save] [-o FILE]
-  arm_info --profile software [--privacy] [--json] [-s|--save] [-o FILE]
-  arm_info -c [--privacy] [--json] [-s|--save] [-o FILE]
-  arm_info --corp [--privacy] [--json] [-s|--save] [-o FILE]
-  arm_info --profile enterprise [--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --profile domain [-p|--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --profile network [-p|--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --profile print [-p|--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --profile software [-p|--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info -c [-p|--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --corp [-p|--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --profile enterprise [-p|--privacy] [--json] [-s|--save] [-o FILE]
   arm_info --compare REPORT_A.json REPORT_B.json [--json] [-s|--save] [-o FILE]
 
 Профили:
@@ -61,6 +61,12 @@ arm_info enterprise profiles 1.2.4
   print        CUPS, очереди, задания, backend URI, ошибки журнала
   software     глобальная инвентаризация всех RPM-пакетов и общие процессы
   enterprise   domain + network + print (без инвентаризации ПО)
+
+Параметры:
+  -p, --privacy           обезличить отчёт
+  -s, --save              сохранить отчёт в файл
+  -o, --output PATH       указать файл или каталог сохранения
+  --json                  вывести отчёт в JSON
 
 Коды завершения:
   0  проблем не обнаружено
@@ -81,7 +87,7 @@ while (($#)); do
         --compare)
             [[ $# -ge 3 ]] || { echo "Ошибка: --compare требует два JSON-файла" >&2; exit 64; }
             COMPARE_A=$2; COMPARE_B=$3; shift 3 ;;
-        --privacy) PRIVACY=1; shift ;;
+        -p|--privacy) PRIVACY=1; shift ;;
         --json) JSON_MODE=1; shift ;;
         -s|--save) SAVE_REPORT=1; shift ;;
         -o|--output)
@@ -324,7 +330,7 @@ recommendation_for() {
             REC_ACTION="Устранить фактическую сетевую, Kerberos/credential или I/O-причину. Размонтирование выполнять только после проверки открытых файлов и процессов."
             REC_COMMAND="findmnt -t cifs -o TARGET,SOURCE,OPTIONS|journalctl -k -b --no-pager | grep -Ei 'cifs|smb' | tail -120|sudo -u 'USER_NAME' klist -A"
             ;;
-        network.gvfs)
+        network.gvfs|network.gvfs.*)
             REC_CAUSE="Один или несколько GVFS mount не отвечают. Возможны недоступный SMB-ресурс или зависшие пользовательские gvfs-процессы."
             REC_IMPACT="Файловый менеджер может долго открывать сетевые папки, зависать при удалении/копировании и удерживать старые подключения."
             REC_CHECK="Проверить gio mounts, процессы gvfs/caja и доступность конкретного каталога с timeout."
@@ -631,17 +637,25 @@ _srv_records() {
     fi
 }
 
+_srv_targets() {
+    # SRV target "." means that the service is unavailable, not a DC.
+    awk 'NF == 4 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ && $4 != "." {
+        host=tolower($4); sub(/\.$/, "", host)
+        if (host ~ /^[a-z0-9_][a-z0-9_.-]*$/) print host
+    }' | sort -u
+}
+
 _tcp_ok() {
     local host=$1 port=$2
     host=${host%.}
-    if have nc; then run_timeout 3 nc -z "$host" "$port" >/dev/null 2>&1
-    elif have timeout; then timeout 3 bash -c "</dev/null >/dev/tcp/$host/$port" >/dev/null 2>&1
-    else return 2
+    have timeout || return 2
+    if have nc; then timeout -k 1 3 nc -z "$host" "$port" >/dev/null 2>&1
+    else timeout -k 1 3 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$host" "$port" >/dev/null 2>&1
     fi
 }
 
 check_dns_common() {
-    local section=${1:-DNS} domain=${2:-} resolv_target manager dns search_domain fqdn rc ldap_srv krb_srv ldap_count krb_count targets target reachable=0 tested=0
+    local section=${1:-DNS} domain=${2:-} resolv_target manager dns search_domain fqdn rc ldap_srv krb_srv dc_srv ldap_count krb_count targets target reachable=0 tested=0 untested=0
     resolv_target=$(readlink -f /etc/resolv.conf 2>/dev/null || printf '/etc/resolv.conf')
     case "$resolv_target" in
         *systemd/resolve*) manager="systemd-resolved" ;;
@@ -677,34 +691,32 @@ check_dns_common() {
     if [[ -n $domain ]]; then
         ldap_srv=$(_srv_records "_ldap._tcp.$domain")
         krb_srv=$(_srv_records "_kerberos._tcp.$domain")
+        dc_srv=$(_srv_records "_ldap._tcp.dc._msdcs.$domain")
         ldap_count=$(grep -c . <<<"$ldap_srv" 2>/dev/null || true); krb_count=$(grep -c . <<<"$krb_srv" 2>/dev/null || true)
         if ((ldap_count>0)); then add_check "$section" "dns.srv.ldap" "LDAP SRV" "$ldap_count записей" ok; else add_check "$section" "dns.srv.ldap" "LDAP SRV" "не найден" warn; fi
         if ((krb_count>0)); then add_check "$section" "dns.srv.kerberos" "Kerberos SRV" "$krb_count записей" ok; else add_check "$section" "dns.srv.kerberos" "Kerberos SRV" "не найден" warn; fi
 
-        targets=$(printf '%s\
-%s\
-' "$ldap_srv" "$krb_srv" | awk 'NF{print $NF}' | sed 's/\.$//' | sort -u | head -n3)
-        local dc_index=0 krb_ok ldap_ok dc_sev dc_display krb_text ldap_text
+        targets=$(printf '%s\n' "$ldap_srv" "$krb_srv" "$dc_srv" | _srv_targets)
+        add_check "$section" "domain.dc.discovery" "Контроллеров по DNS" "$(grep -c . <<<"$targets" || true)" info \
+          "Все уникальные узлы из LDAP, Kerberos и AD DC SRV; это обнаруженные узлы, а не список активных соединений АРМ."
+        local dc_index=0 krb_rc ldap_rc dc_sev dc_display krb_text ldap_text port
         while IFS= read -r target; do
             [[ -n $target ]] || continue
             dc_index=$((dc_index+1))
-            krb_ok=0; ldap_ok=0
-
-            if _tcp_ok "$target" 88; then
-                krb_ok=1; reachable=$((reachable+1))
-            fi
-            tested=$((tested+1))
-
-            if _tcp_ok "$target" 389; then
-                ldap_ok=1; reachable=$((reachable+1))
-            fi
-            tested=$((tested+1))
-
-            if ((krb_ok)); then krb_text='доступен'; else krb_text='недоступен'; fi
-            if ((ldap_ok)); then ldap_text='доступен'; else ldap_text='недоступен'; fi
-            if ((krb_ok && ldap_ok)); then
+            krb_rc=0; ldap_rc=0
+            _tcp_ok "$target" 88 || krb_rc=$?
+            _tcp_ok "$target" 389 || ldap_rc=$?
+            for port in "$krb_rc" "$ldap_rc"; do
+                if ((port==2)); then untested=$((untested+1))
+                else tested=$((tested+1)); ((port==0)) && reachable=$((reachable+1)); fi
+            done
+            case $krb_rc in 0) krb_text='доступен';; 2) krb_text='не проверен';; *) krb_text='недоступен';; esac
+            case $ldap_rc in 0) ldap_text='доступен';; 2) ldap_text='не проверен';; *) ldap_text='недоступен';; esac
+            if ((krb_rc==2 || ldap_rc==2)); then
+                dc_sev=unknown
+            elif ((krb_rc==0 && ldap_rc==0)); then
                 dc_sev=ok
-            elif ((krb_ok || ldap_ok)); then
+            elif ((krb_rc==0 || ldap_rc==0)); then
                 dc_sev=warn
             else
                 dc_sev=crit
@@ -715,7 +727,7 @@ check_dns_common() {
         done <<<"$targets"
         if ((tested>0)); then
             if ((reachable==tested)); then rc=ok; elif ((reachable>0)); then rc=warn; else rc=crit; fi
-            add_check "$section" "domain.dc.ports" "KDC/LDAP доступность" "$reachable из $tested TCP-проверок" "$rc"
+            add_check "$section" "domain.dc.ports" "KDC/LDAP доступность" "$reachable из $tested TCP-проверок; не проверены: $untested" "$rc"
         else
             add_check "$section" "domain.dc.ports" "KDC/LDAP доступность" "не проверена" unknown "Нужны SRV-записи и nc/timeout"
         fi
@@ -794,7 +806,8 @@ _cifs_desktop_user() {
 
 _cifs_exec_as() {
     local as_user=${1:-}; shift
-    if [[ -n $as_user ]]; then
+    if [[ -n $as_user && $as_user != "$(id -un 2>/dev/null)" && $as_user != "$(id -u)" ]]; then
+        ((EUID==0)) || return 125
         if have runuser; then runuser -u "$as_user" -- "$@"
         elif have sudo; then sudo -n -u "$as_user" -- "$@"
         else return 125
@@ -836,7 +849,7 @@ _cifs_probe() {
 
     # Этап 1: полностью прочитать список имён в каталоге. В отличие от
     # find -print -quit это не завершается после первого cached dentry.
-    _cifs_exec_as "$as_user" env LC_ALL=C timeout 6 ls -U -A -1 -- "$mnt" >/dev/null 2>"$errfile"
+    _cifs_exec_as "$as_user" env LC_ALL=C timeout -k 1 6 ls -U -A -1 -- "$mnt/" >/dev/null 2>"$errfile"
     rc=$?
     if ((rc != 0)); then
         CIFS_PROBE_RC=$rc
@@ -849,7 +862,7 @@ _cifs_probe() {
     # Этап 2: если каталог не пустой, получить метаданные одного элемента.
     # Caja/приложения делают metadata lookup, поэтому простой readdir недостаточен.
     : >"$errfile"
-    _cifs_exec_as "$as_user" env LC_ALL=C timeout 6 find "$mnt" -mindepth 1 -maxdepth 1 -print -quit >"$samplefile" 2>"$errfile"
+    _cifs_exec_as "$as_user" env LC_ALL=C timeout -k 1 6 find "$mnt" -mindepth 1 -maxdepth 1 -print -quit >"$samplefile" 2>"$errfile"
     rc=$?
     if ((rc != 0)); then
         CIFS_PROBE_RC=$rc
@@ -861,7 +874,7 @@ _cifs_probe() {
     IFS= read -r sample <"$samplefile" || sample=''
     if [[ -n $sample ]]; then
         : >"$errfile"
-        _cifs_exec_as "$as_user" env LC_ALL=C timeout 6 stat -L -- "$sample" >/dev/null 2>"$errfile"
+        _cifs_exec_as "$as_user" env LC_ALL=C timeout -k 1 6 stat -L -- "$sample" >/dev/null 2>"$errfile"
         rc=$?
         if ((rc != 0)); then
             CIFS_PROBE_RC=$rc
@@ -890,8 +903,83 @@ _cifs_state_text() {
     esac
 }
 
+_gvfs_runtime_dirs() {
+    # Сначала перечисляем runtime-каталоги, не обращаясь к FUSE от root.
+    printf '%s\n' /run/user/[0-9]*
+}
+
+check_gvfs() {
+    local smb_index=${1:-0} runtime g uid gvfs_user dir name dirs_file errfile rc
+    local count=0 good=0 bad=0 unknown=0 discovery_unknown=0 session=0
+    local state sev label display detail
+    while IFS= read -r runtime; do
+        uid=${runtime##*/}
+        [[ $uid =~ ^[0-9]+$ ]] || continue
+        g=$runtime/gvfs
+        session=$((session+1))
+        gvfs_user=$(id -nu "$uid" 2>/dev/null || true)
+        dirs_file=$(mktemp) || {
+            discovery_unknown=$((discovery_unknown+1))
+            add_check "SMB / GVFS" "network.gvfs.discovery.$session" "Перечисление GVFS" "нет временного файла для списка" unknown
+            continue
+        }
+        errfile=$(mktemp) || {
+            rm -f -- "$dirs_file"; discovery_unknown=$((discovery_unknown+1))
+            add_check "SMB / GVFS" "network.gvfs.discovery.$session" "Перечисление GVFS" "нет временного файла для ошибок" unknown
+            continue
+        }
+        rc=125
+        if [[ -n $gvfs_user ]] && have timeout && have ls; then
+            # ls -U без -l/-F/color перечисляет имена без stat каждого ресурса.
+            # Сломанная шара остаётся в списке. Не использовать find -type d.
+            _cifs_exec_as "$gvfs_user" env LC_ALL=C timeout -k 1 6 \
+              ls -U -A -1 --color=never --quoting-style=literal -- "$g" >"$dirs_file" 2>"$errfile"
+            rc=$?
+        fi
+        if ((rc!=0)) && ! grep -Fq 'No such file or directory' "$errfile"; then
+            discovery_unknown=$((discovery_unknown+1))
+            display=$(mask_domain "$gvfs_user (UID $uid)")
+            add_check "SMB / GVFS" "network.gvfs.discovery.$session" "Перечисление GVFS" \
+              "$display; список не получен полностью (rc=$rc)" unknown \
+              "Проверить сессию владельца GVFS; отсутствие списка не означает отсутствие подключений."
+        fi
+        while IFS= read -r name || [[ -n $name ]]; do
+            [[ -n $name ]] || continue
+            dir=$g/$name
+            count=$((count+1))
+            _cifs_probe "$dir" "$gvfs_user"
+            state=$CIFS_PROBE_STATE
+            case $state in
+                OK) good=$((good+1)); sev=ok ;;
+                INCONCLUSIVE) unknown=$((unknown+1)); sev=unknown ;;
+                *) bad=$((bad+1)); sev=warn ;;
+            esac
+            if [[ $name == smb-share:* ]]; then
+                smb_index=$((smb_index+1)); label="SMB-ресурс #$smb_index"
+            else label="GVFS-ресурс #$count"; fi
+            if ((PRIVACY)); then
+                display='ресурс скрыт'
+                detail="контекст: скрыто; GVFS; rc=$CIFS_PROBE_RC"
+            else
+                display=$dir
+                detail="контекст: $gvfs_user; GVFS; rc=$CIFS_PROBE_RC"
+                [[ -n $CIFS_PROBE_ERR ]] && detail+="; $CIFS_PROBE_ERR"
+            fi
+            add_check "SMB / GVFS" "network.gvfs.mount.$count" "$label" \
+              "$display; $(_cifs_state_text "$state")" "$sev" "$detail"
+        done <"$dirs_file"
+        rm -f -- "$dirs_file" "$errfile"
+    done < <(_gvfs_runtime_dirs)
+    if ((count==0 && discovery_unknown==0)); then
+        add_check "SMB / GVFS" "network.gvfs" "GVFS mounts" "нет" info
+    else
+        add_check "SMB / GVFS" "network.gvfs" "GVFS итого" \
+          "$count; доступны: $good; проблемы: $bad; не проверены: $unknown; неполных списков: $discovery_unknown" info
+    fi
+}
+
 check_network() {
-    local gw ifaces idx=0 row iface ip mac speed duplex link dns_domain cifs_count=0 cifs_ok=0 cifs_bad=0 cifs_unknown=0 mnt gvfs_count=0 gvfs_bad=0 gvfs_unknown=0 g dir gvfs_uid gvfs_user gvfs_dirs gvfs_state
+    local gw ifaces idx=0 row iface ip mac speed duplex link dns_domain cifs_count=0 cifs_ok=0 cifs_bad=0 cifs_unknown=0 mnt
     local cifs_source cifs_options cifs_multiuser cifs_user cifs_context cifs_state cifs_text cifs_detail cifs_sev cifs_source_display cifs_target_display
     local eap_count=0 active_eap_count=0 cert_global_min=-1 cert_unknown=0 cert_seen=0 cert_index=0 system_ca_profiles=0 uuid type eap conn_name
     local cert_spec cert_kind cert_field cert_label certref certpath cert_display cert_start cert_end start_fmt end_fmt end_epoch now days cert_cmd_path sev
@@ -916,7 +1004,10 @@ check_network() {
         done <<<"$ifaces"
     fi
 
-    dns_domain=$(_detect_domain); check_dns_common "DNS" "$dns_domain"
+    # В enterprise DNS уже собран check_domain; повтор создавал одинаковые JSON keys.
+    if [[ $PROFILE != enterprise ]]; then
+        dns_domain=$(_detect_domain); check_dns_common "DNS" "$dns_domain"
+    fi
 
     if have nmcli; then
         # -g включает terse output; на ряде версий NetworkManager двоеточия в file://
@@ -1178,7 +1269,8 @@ check_network() {
             else
                 cifs_detail="контекст: $cifs_context; multiuser: $cifs_multiuser"
             fi
-            [[ -n $CIFS_PROBE_ERR ]] && cifs_detail="$cifs_detail; $CIFS_PROBE_ERR"
+            # stderr утилит содержит реальный путь/имя даже при маскировке строки.
+            if [[ -n $CIFS_PROBE_ERR ]] && ((PRIVACY==0)); then cifs_detail="$cifs_detail; $CIFS_PROBE_ERR"; fi
             case "$cifs_state" in
                 OK) cifs_ok=$((cifs_ok+1)); cifs_sev=ok ;;
                 INCONCLUSIVE) cifs_unknown=$((cifs_unknown+1)); cifs_sev=unknown ;;
@@ -1204,40 +1296,7 @@ check_network() {
         add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "findmnt отсутствует" unknown
     fi
 
-    for g in /run/user/*/gvfs; do
-        [[ -d $g ]] || continue
-        gvfs_uid=${g#/run/user/}; gvfs_uid=${gvfs_uid%%/*}
-        gvfs_user=''
-        if have getent; then gvfs_user=$(getent passwd "$gvfs_uid" 2>/dev/null | cut -d: -f1 | head -n1); fi
-        [[ -n $gvfs_user ]] || gvfs_user=$(id -nu "$gvfs_uid" 2>/dev/null || true)
-
-        if [[ -n $gvfs_user ]]; then
-            gvfs_dirs=$(_cifs_exec_as "$gvfs_user" find "$g" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null || true)
-        else
-            gvfs_dirs=$(find "$g" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null || true)
-        fi
-
-        while IFS= read -r dir; do
-            [[ -n $dir ]] || continue
-            gvfs_count=$((gvfs_count+1))
-            _cifs_probe "$dir" "$gvfs_user"
-            gvfs_state=$CIFS_PROBE_STATE
-            case "$gvfs_state" in
-                OK) ;;
-                INCONCLUSIVE) gvfs_unknown=$((gvfs_unknown+1)) ;;
-                *) gvfs_bad=$((gvfs_bad+1)) ;;
-            esac
-        done <<<"$gvfs_dirs"
-    done
-    if ((gvfs_count==0)); then
-        add_check "SMB / GVFS" "network.gvfs" "GVFS mounts" "нет" info
-    elif ((gvfs_bad==0 && gvfs_unknown==0)); then
-        add_check "SMB / GVFS" "network.gvfs" "GVFS mounts" "$gvfs_count, доступны" ok
-    elif ((gvfs_bad==0)); then
-        add_check "SMB / GVFS" "network.gvfs" "GVFS mounts" "$gvfs_count; не проверены: $gvfs_unknown" unknown
-    else
-        add_check "SMB / GVFS" "network.gvfs" "GVFS mounts" "$gvfs_count; проблемы: $gvfs_bad; не проверены: $gvfs_unknown" warn
-    fi
+    check_gvfs "$cifs_count"
     proc_caja=$(pgrep -xc caja 2>/dev/null || true); proc_gvfs=$(pgrep -fc 'gvfsd-smb|gvfsd-fuse' 2>/dev/null || true)
     add_check "SMB / GVFS" "network.desktop" "Caja / GVFS процессы" "caja:$proc_caja gvfs:$proc_gvfs" ok
 }
@@ -1543,8 +1602,8 @@ arm_info — диагностика технического состояния 
 Параметры:
   -h, --help              показать справку
   -V, --version           показать версию
-  --privacy               обезличить hostname, IP, MAC, DNS и имена интерфейсов
-  -s, --save             сохранить отчёт в файл
+  -p, --privacy           обезличить hostname, IP, MAC, DNS и имена интерфейсов
+  -s, --save              сохранить отчёт в файл
   -o, --output PATH       сохранить отчёт в указанный файл или каталог
   -q, --quiet             не выводить отчёт в терминал (имеет смысл с сохранением)
   --json                  вывести отчёт в JSON вместо текстового формата
@@ -1566,7 +1625,7 @@ while (($#)); do
     case "$1" in
         -h|--help) SHOW_HELP=1; shift ;;
         -V|--version) echo "arm_info $ARM_INFO_VERSION"; exit 0 ;;
-        --privacy) PRIVACY_MODE=1; shift ;;
+        -p|--privacy) PRIVACY_MODE=1; shift ;;
         -s|--save) SAVE_REPORT=1; shift ;;
         -q|--quiet) QUIET_MODE=1; shift ;;
         --json) JSON_MODE=1; shift ;;

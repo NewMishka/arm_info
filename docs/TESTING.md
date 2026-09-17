@@ -17,6 +17,7 @@ make test
 `make test` дополнительно запускает:
 
 - `tests/test_cli.sh` — версия, CLI, standard JSON schema v1, privacy и контракт стандартных рекомендаций;
+- `tests/test_enterprise_discovery.sh` — поведенческие проверки production-функций: шесть уникальных DC из трёх SRV-источников, отсутствие TCP-инструментов, три GVFS-ресурса с одним неисправным, UTF-8/пробелы, privacy ошибок, запуск под владельцем и неполное перечисление. Переключение к другому UID проверяется, если среда разрешает `runuser`; локальные каталоги не заменяют полевой тест FUSE/SMB на РЕД ОС.
 - `tests/test_enterprise.sh` — корпоративный CLI, schema v2, privacy, `--compare`, single-file policy и контракт корпоративного отчёта;
 - `tests/test_recommendation_commands.sh` — статический аудит рекомендуемых команд: безопасные placeholder-токены, отсутствие известных некорректных форм, синтаксис representative commands и обязательная маркировка state-changing действий;
 - `tests/test_sections.sh` — сквозной контроль всех пользовательских разделов стандартного TXT, всех основных групп standard JSON, всех секций профилей `domain/network/print/software/enterprise`, корпоративного TXT и критичных helper-контрактов SMART/CPU/ФС/корпоративных проверок.
