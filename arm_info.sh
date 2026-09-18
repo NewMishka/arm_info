@@ -395,29 +395,29 @@ recommendation_for() {
             REC_CAUSE="Служба CUPS не активна либо её состояние не определено."
             REC_IMPACT="Локальная и сетевая печать через CUPS будет недоступна."
             REC_CHECK="Проверить systemd state и полный журнал CUPS текущей загрузки."
-            REC_ACTION="Устранить первую ошибку конфигурации/backend, затем перезапустить CUPS."
-            REC_COMMAND="systemctl status cups --no-pager -l|journalctl -u cups -b --no-pager | tail -150|cupsctl"
+            REC_ACTION="Устранить первую ошибку конфигурации/backend, затем при необходимости перезапустить CUPS. Перезапуск прерывает текущую обработку заданий и выполняется только после просмотра журнала."
+            REC_COMMAND="systemctl status cups --no-pager -l|journalctl -u cups -b --no-pager | tail -150|cupsctl|sudo systemctl restart cups"
             ;;
         print.scheduler)
             REC_CAUSE="CUPS scheduler не отвечает на lpstat."
             REC_IMPACT="Очереди и задания печати не могут обслуживаться корректно."
             REC_CHECK="Сопоставить состояние cups.service, scheduler и журнал."
-            REC_ACTION="Восстановить работу scheduler после устранения причины службы/конфигурации."
-            REC_COMMAND="lpstat -r|systemctl status cups --no-pager -l|journalctl -u cups -b --no-pager | tail -150"
+            REC_ACTION="Восстановить работу scheduler после устранения причины службы/конфигурации. Перезапускать CUPS только после фиксации ошибки в журнале."
+            REC_COMMAND="lpstat -r|systemctl status cups --no-pager -l|journalctl -u cups -b --no-pager | tail -150|sudo systemctl restart cups"
             ;;
         print.queues)
             REC_CAUSE="Обнаружены paused/disabled/stopped очереди. Причиной могут быть backend, аутентификация, недоступный принтер или ручная приостановка."
             REC_IMPACT="Задания будут накапливаться или не попадут на устройство печати."
-            REC_CHECK="Получить состояние каждой очереди, причины остановки, backend URI и незавершённые задания."
-            REC_ACTION="Исправить первичную причину. Возобновлять очередь только после проверки backend/устройства."
-            REC_COMMAND="lpstat -a -p -d -v|lpstat -W not-completed -o|journalctl -u cups -b --no-pager | tail -150|cupsenable QUEUE_NAME|cupsaccept QUEUE_NAME|cancel -a"
+            REC_CHECK="Получить сводное состояние CUPS, подробную очередь конкретного принтера, причины остановки, backend URI и незавершённые задания."
+            REC_ACTION="Исправить первичную причину. Возобновлять очередь и отправлять пробную страницу только после проверки backend, устройства и расходных материалов. Для очистки одной очереди использовать cancel -a QUEUE_NAME."
+            REC_COMMAND="lpstat -t|lpq -P QUEUE_NAME -l|journalctl -u cups -b --no-pager | tail -150|cupsenable QUEUE_NAME|cupsaccept QUEUE_NAME|cancel -a QUEUE_NAME|lpr -P QUEUE_NAME /usr/share/cups/data/testprint"
             ;;
         print.jobs)
             REC_CAUSE="В очередях накопилось много незавершённых заданий. Возможны остановленная очередь, недоступный backend или проблемное задание."
             REC_IMPACT="Новые задания задерживаются; spool может расти."
-            REC_CHECK="Определить очередь и самое старое/проблемное задание, затем проверить состояние принтера и backend."
-            REC_ACTION="Устранить причину очереди. Удалять задания только осознанно после согласования, чтобы не потерять пользовательскую печать."
-            REC_COMMAND="lpstat -W not-completed -o|lpstat -p -v|du -sh /var/spool/cups 2>/dev/null|cancel JOB_ID|cancel -a"
+            REC_CHECK="Определить очередь и самое старое/проблемное задание, затем проверить состояние принтера и backend. lpq -a -l показывает подробности по всем очередям."
+            REC_ACTION="Устранить причину очереди. Отменять одно задание, одну очередь или все очереди только осознанно после согласования, чтобы не потерять пользовательскую печать. Не удалять /var/spool/cups/* вручную."
+            REC_COMMAND="lpstat -W not-completed -o|lpq -a -l|lpstat -p -v|du -sh /var/spool/cups 2>/dev/null|cancel JOB_ID|cancel -a QUEUE_NAME|cancel -a"
             ;;
         print.lpstat)
             REC_CAUSE="Утилита lpstat отсутствует, поэтому состояние очередей CUPS не проверено."
@@ -429,9 +429,9 @@ recommendation_for() {
         print.journal)
             REC_CAUSE="В журнале CUPS есть warning/error за текущую загрузку либо журнал недоступен."
             REC_IMPACT="Могут присутствовать повторяющиеся ошибки backend, фильтра, аутентификации или устройства."
-            REC_CHECK="Посмотреть не только количество, но и уникальные последние сообщения с Job/Printer context."
-            REC_ACTION="Устранять причину по тексту журнала: backend/связь, аутентификация или фильтр печати. Если нужно намеренно удалить все задания, использовать cancel -a; очистка не исправляет причину ошибки и не очищает очередь Windows print-server."
-            REC_COMMAND="journalctl -u cups -b -p warning..alert --no-pager | tail -150|journalctl -u cups -b --no-pager | grep -Ei 'job|printer|backend|filter|auth|error|failed' | tail -150|lpstat -W not-completed -o|cancel -a"
+            REC_CHECK="Посмотреть не только количество, но и уникальные последние сообщения с Job/Printer context; сопоставить их со сводкой CUPS и подробностями очередей."
+            REC_ACTION="Устранять причину по тексту журнала: backend/связь, аутентификация или фильтр печати. Для одной очереди использовать cancel -a QUEUE_NAME, для всех — cancel -a. Очистка не исправляет причину ошибки и не очищает очередь Windows print-server. Не удалять /var/spool/cups/* вручную."
+            REC_COMMAND="journalctl -u cups -b -p warning..alert --no-pager | tail -150|journalctl -u cups -b --no-pager | grep -Ei 'job|printer|backend|filter|auth|error|failed' | tail -150|lpstat -t|lpq -a -l|cancel -a QUEUE_NAME|cancel -a"
             ;;
         software.rpm)
             REC_CAUSE="RPM inventory недоступна, потому что rpm не найден."
@@ -598,11 +598,16 @@ command_description() {
         find\ /run/user*) desc="покажет пользовательские GVFS-точки монтирования" ;;
         lpstat\ -r*) desc="проверит, отвечает ли CUPS scheduler" ;;
         lpstat*) desc="покажет состояние очередей/приёма заданий, задания, default printer и backend CUPS" ;;
+        lpq\ -P*) desc="покажет подробное состояние заданий выбранной очереди" ;;
+        lpq*) desc="покажет подробное состояние заданий во всех доступных очередях" ;;
         cupsctl*) desc="покажет текущие параметры сервера CUPS" ;;
         cupsenable*) desc="возобновит указанную очередь после устранения первичной причины" ;;
         cupsaccept*) desc="разрешит указанной очереди принимать новые задания" ;;
         cancel\ -a) desc="удалит все доступные для отмены задания во всех очередях выбранного CUPS-сервера; для чужих заданий нужны права администратора; очередь Windows не очищает" ;;
+        cancel\ -a\ *) desc="удалит все доступные для отмены задания только из указанной очереди; для чужих заданий нужны права администратора" ;;
         cancel*) desc="отменит указанное задание печати; выполнять только после подтверждения, что задание можно удалить" ;;
+        lpr\ -P*) desc="создаст пробное задание в указанной очереди из штатной тестовой страницы CUPS; выполнять только когда принтер готов" ;;
+        sudo\ systemctl\ restart\ cups*) desc="перезапустит CUPS; выполнять после фиксации и устранения первичной ошибки, учитывая текущие задания" ;;
         du\ -sh\ /var/spool/cups*) desc="покажет объём диска, занятый spool CUPS" ;;
         command\ -v*) desc="проверит наличие указанной утилиты в PATH" ;;
         rpm\ -q\ cups-client*) desc="проверит, установлен ли пакет cups-client, обычно содержащий lpstat" ;;
@@ -617,7 +622,7 @@ command_description() {
         desc="$desc Перед выполнением замените служебный маркер на фактическое значение из отчёта/системы."
     fi
     case "$cmd" in
-        cupsenable*|cupsaccept*|cancel*|dnf\ install*) desc="ИЗМЕНЯЕТ СОСТОЯНИЕ: $desc" ;;
+        cupsenable*|cupsaccept*|cancel*|lpr\ -P*|sudo\ systemctl\ restart\ cups*|dnf\ install*) desc="ИЗМЕНЯЕТ СОСТОЯНИЕ: $desc" ;;
     esac
     printf '%s' "$desc"
 }

@@ -40,6 +40,17 @@ grep -Fq 'cifs_detail="контекст: скрыто; multiuser: $cifs_multiuse
 ! grep -Fq '<MOUNT>' "$SCRIPT" || fail 'shell-redirection-style MOUNT placeholder remains'
 ! grep -Fq '<QUEUE>' "$SCRIPT" || fail 'shell-redirection-style QUEUE placeholder remains'
 ! grep -Fq '<JOB_ID>' "$SCRIPT" || fail 'shell-redirection-style JOB placeholder remains'
+! grep -Fq 'rm -rf /var/spool/cups' "$SCRIPT" || fail 'unsafe direct CUPS spool deletion must not be recommended'
+
+# CUPS recommendations prefer supported client/admin interfaces over direct
+# manipulation of spool files and distinguish one queue from all queues.
+grep -Fq 'lpstat -t' "$SCRIPT" || fail 'CUPS full status recommendation missing'
+grep -Fq 'lpq -P QUEUE_NAME -l' "$SCRIPT" || fail 'per-queue lpq recommendation missing'
+grep -Fq 'lpq -a -l' "$SCRIPT" || fail 'all-queue lpq recommendation missing'
+grep -Fq 'cancel -a QUEUE_NAME' "$SCRIPT" || fail 'per-queue cancellation recommendation missing'
+grep -Fq 'cancel -a"' "$SCRIPT" || fail 'all-queue cancellation recommendation missing'
+grep -Fq 'lpr -P QUEUE_NAME /usr/share/cups/data/testprint' "$SCRIPT" || fail 'CUPS test-page recommendation missing'
+grep -Fq 'sudo systemctl restart cups' "$SCRIPT" || fail 'controlled CUPS restart recommendation missing'
 
 # Representative copy/paste commands must be valid Bash after replacing service markers.
 commands=(
@@ -50,6 +61,12 @@ commands=(
   "findmnt -t cifs -o TARGET,SOURCE,OPTIONS"
   "sudo -u 'USER_NAME' klist -A"
   "lpstat -W not-completed -o"
+  "lpstat -t"
+  "lpq -P QUEUE_NAME -l"
+  "lpq -a -l"
+  "cancel -a QUEUE_NAME"
+  "lpr -P QUEUE_NAME /usr/share/cups/data/testprint"
+  "sudo systemctl restart cups"
   "dnf provides '/usr/bin/lpstat'"
   "systemctl status UNIT_NAME --no-pager -l"
   "journalctl -u UNIT_NAME -b --no-pager | tail -120"
