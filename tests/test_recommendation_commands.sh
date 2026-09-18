@@ -27,7 +27,7 @@ grep -Fq '_cifs_desktop_user()' "$SCRIPT" || fail 'CIFS GUI-user context helper 
 grep -Fq 'ls -U -A -1 -- "$mnt/"' "$SCRIPT" || fail 'CIFS full-directory readdir probe missing'
 grep -Fq 'stat -L -- "$sample"' "$SCRIPT" || fail 'CIFS sample metadata probe missing'
 grep -Fq 'network.cifs.mount.$cifs_count' "$SCRIPT" || fail 'per-share CIFS report row missing'
-grep -Fq 'cifs_detail="контекст: скрыто; multiuser: $cifs_multiuser"' "$SCRIPT" || fail 'CIFS privacy context masking missing'
+grep -Fq "source='источник скрыт'; target='TARGET скрыт'; detail='контекст: скрыто'" "$SCRIPT" || fail 'CIFS privacy context masking missing'
 ! grep -Fq "timeout 5 stat -f 'MOUNT_PATH'" "$SCRIPT" || fail 'manual CIFS MOUNT_PATH recommendation remains'
 ! grep -Fq 'findmnt -rn -t cifs -o TARGET' "$SCRIPT" || fail 'CIFS raw findmnt mode would hex-escape non-ASCII TARGETs'
 ! grep -Fq "findmnt -n -l -t cifs -o TARGET,SOURCE 2>/dev/null | awk" "$SCRIPT" || fail 'CIFS checker must not split TARGET/SOURCE on whitespace'

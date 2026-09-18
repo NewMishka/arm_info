@@ -864,8 +864,98 @@ _dc_probe_targets() {
     done
 }
 
+# Stage 3 collector contract: discovery/probing populates a normalized snapshot;
+# report checks only interpret that snapshot. This keeps every discovered DC in
+# the output even when probing is unavailable or the common time budget expires.
+DC_LDAP_SRV=''
+DC_KRB_SRV=''
+DC_AD_SRV=''
+DC_TARGETS=()
+DC_KRB_RESULTS=()
+DC_LDAP_RESULTS=()
+
+collect_domain_controller_inventory() {
+    local domain=$1 target result_dir='' index=0 rc
+    DC_LDAP_SRV=''; DC_KRB_SRV=''; DC_AD_SRV=''
+    DC_TARGETS=(); DC_KRB_RESULTS=(); DC_LDAP_RESULTS=()
+    [[ -n $domain ]] || return 0
+
+    DC_LDAP_SRV=$(_srv_records "_ldap._tcp.$domain")
+    DC_KRB_SRV=$(_srv_records "_kerberos._tcp.$domain")
+    DC_AD_SRV=$(_srv_records "_ldap._tcp.dc._msdcs.$domain")
+    while IFS= read -r target; do
+        [[ -n $target ]] && DC_TARGETS+=("$target")
+    done < <(printf '%s\n' "$DC_LDAP_SRV" "$DC_KRB_SRV" "$DC_AD_SRV" | _srv_targets)
+
+    result_dir=$(mktemp -d 2>/dev/null || true)
+    if [[ -n $result_dir ]]; then
+        _dc_probe_targets "$(printf '%s\n' "${DC_TARGETS[@]}")" "$result_dir"
+    fi
+    for target in "${DC_TARGETS[@]}"; do
+        index=$((index+1))
+        rc=125
+        [[ -n $result_dir && -r $result_dir/$index.88 ]] && read -r rc <"$result_dir/$index.88"
+        DC_KRB_RESULTS+=("$rc")
+        rc=125
+        [[ -n $result_dir && -r $result_dir/$index.389 ]] && read -r rc <"$result_dir/$index.389"
+        DC_LDAP_RESULTS+=("$rc")
+    done
+    [[ -n $result_dir ]] && rm -rf -- "$result_dir"
+}
+
+emit_domain_controller_checks() {
+    local section=$1 ldap_count krb_count index target krb_rc ldap_rc port
+    local reachable=0 tested=0 untested=0 budget_skipped=0
+    local dc_sev dc_display krb_text ldap_text rc
+
+    ldap_count=$(grep -c . <<<"$DC_LDAP_SRV" 2>/dev/null || true)
+    krb_count=$(grep -c . <<<"$DC_KRB_SRV" 2>/dev/null || true)
+    if ((ldap_count>0)); then add_check "$section" "dns.srv.ldap" "LDAP SRV" "$ldap_count записей" ok
+    else add_check "$section" "dns.srv.ldap" "LDAP SRV" "не найден" warn; fi
+    if ((krb_count>0)); then add_check "$section" "dns.srv.kerberos" "Kerberos SRV" "$krb_count записей" ok
+    else add_check "$section" "dns.srv.kerberos" "Kerberos SRV" "не найден" warn; fi
+
+    add_check "$section" "domain.dc.discovery" "Контроллеров по DNS" "${#DC_TARGETS[@]}" info \
+      "Все уникальные узлы из LDAP, Kerberos и AD DC SRV; это обнаруженные узлы, а не список активных соединений АРМ."
+    for index in "${!DC_TARGETS[@]}"; do
+        target=${DC_TARGETS[index]}
+        krb_rc=${DC_KRB_RESULTS[index]:-125}
+        ldap_rc=${DC_LDAP_RESULTS[index]:-125}
+        for port in "$krb_rc" "$ldap_rc"; do
+            if ((port==2 || port==125 || port==126)); then
+                untested=$((untested+1)); ((port==126)) && budget_skipped=$((budget_skipped+1))
+            else
+                tested=$((tested+1)); ((port==0)) && reachable=$((reachable+1))
+            fi
+        done
+        case $krb_rc in 0) krb_text='доступен';; 126) krb_text='не проверен (лимит времени)';; 2|125) krb_text='не проверен';; *) krb_text='недоступен';; esac
+        case $ldap_rc in 0) ldap_text='доступен';; 126) ldap_text='не проверен (лимит времени)';; 2|125) ldap_text='не проверен';; *) ldap_text='недоступен';; esac
+        if ((krb_rc==2 || krb_rc==125 || krb_rc==126 || ldap_rc==2 || ldap_rc==125 || ldap_rc==126)); then
+            dc_sev=unknown
+        elif ((krb_rc==0 && ldap_rc==0)); then
+            dc_sev=ok
+        elif ((krb_rc==0 || ldap_rc==0)); then
+            dc_sev=warn
+        else
+            dc_sev=crit
+        fi
+        if ((PRIVACY)); then dc_display='скрыто'; else dc_display=$target; fi
+        add_check "$section" "domain.dc.node.$((index+1))" "Контроллер #$((index+1))" \
+          "$dc_display — Kerberos 88: $krb_text; LDAP 389: $ldap_text" "$dc_sev"
+    done
+    if ((tested>0)); then
+        if ((reachable==tested)); then rc=ok; elif ((reachable>0)); then rc=warn; else rc=crit; fi
+        ((untested>0)) && rc=unknown
+        add_check "$section" "domain.dc.ports" "KDC/LDAP доступность" \
+          "$reachable из $tested TCP-проверок; не проверены: $untested; лимит времени: $budget_skipped" "$rc"
+    else
+        add_check "$section" "domain.dc.ports" "KDC/LDAP доступность" \
+          "не проверена; лимит времени: $budget_skipped" unknown "Нужны SRV-записи и timeout; либо исчерпан общий бюджет активных сетевых проверок."
+    fi
+}
+
 check_dns_common() {
-    local section=${1:-DNS} domain=${2:-} resolv_target manager dns search_domain fqdn rc ldap_srv krb_srv dc_srv ldap_count krb_count targets target reachable=0 tested=0 untested=0 budget_skipped=0
+    local section=${1:-DNS} domain=${2:-} resolv_target manager dns search_domain fqdn rc
     resolv_target=$(readlink -f /etc/resolv.conf 2>/dev/null || printf '/etc/resolv.conf')
     case "$resolv_target" in
         *systemd/resolve*) manager="systemd-resolved" ;;
@@ -901,56 +991,8 @@ check_dns_common() {
     else add_check "$section" "dns.fqdn" "Разрешение FQDN" "FQDN не определён" warn; fi
 
     if [[ -n $domain ]]; then
-        ldap_srv=$(_srv_records "_ldap._tcp.$domain")
-        krb_srv=$(_srv_records "_kerberos._tcp.$domain")
-        dc_srv=$(_srv_records "_ldap._tcp.dc._msdcs.$domain")
-        ldap_count=$(grep -c . <<<"$ldap_srv" 2>/dev/null || true); krb_count=$(grep -c . <<<"$krb_srv" 2>/dev/null || true)
-        if ((ldap_count>0)); then add_check "$section" "dns.srv.ldap" "LDAP SRV" "$ldap_count записей" ok; else add_check "$section" "dns.srv.ldap" "LDAP SRV" "не найден" warn; fi
-        if ((krb_count>0)); then add_check "$section" "dns.srv.kerberos" "Kerberos SRV" "$krb_count записей" ok; else add_check "$section" "dns.srv.kerberos" "Kerberos SRV" "не найден" warn; fi
-
-        targets=$(printf '%s\n' "$ldap_srv" "$krb_srv" "$dc_srv" | _srv_targets)
-        add_check "$section" "domain.dc.discovery" "Контроллеров по DNS" "$(grep -c . <<<"$targets" || true)" info \
-          "Все уникальные узлы из LDAP, Kerberos и AD DC SRV; это обнаруженные узлы, а не список активных соединений АРМ."
-        local dc_index=0 krb_rc ldap_rc dc_sev dc_display krb_text ldap_text port dc_results
-        dc_results=$(mktemp -d 2>/dev/null || true)
-        if [[ -n $dc_results ]]; then _dc_probe_targets "$targets" "$dc_results"
-        fi
-        while IFS= read -r target; do
-            [[ -n $target ]] || continue
-            dc_index=$((dc_index+1))
-            krb_rc=125; ldap_rc=125
-            [[ -n $dc_results && -r $dc_results/$dc_index.88 ]] && read -r krb_rc <"$dc_results/$dc_index.88"
-            [[ -n $dc_results && -r $dc_results/$dc_index.389 ]] && read -r ldap_rc <"$dc_results/$dc_index.389"
-            for port in "$krb_rc" "$ldap_rc"; do
-                if ((port==2 || port==125 || port==126)); then
-                    untested=$((untested+1)); ((port==126)) && budget_skipped=$((budget_skipped+1))
-                else tested=$((tested+1)); ((port==0)) && reachable=$((reachable+1)); fi
-            done
-            case $krb_rc in 0) krb_text='доступен';; 126) krb_text='не проверен (лимит времени)';; 2|125) krb_text='не проверен';; *) krb_text='недоступен';; esac
-            case $ldap_rc in 0) ldap_text='доступен';; 126) ldap_text='не проверен (лимит времени)';; 2|125) ldap_text='не проверен';; *) ldap_text='недоступен';; esac
-            if ((krb_rc==2 || krb_rc==125 || krb_rc==126 || ldap_rc==2 || ldap_rc==125 || ldap_rc==126)); then
-                dc_sev=unknown
-            elif ((krb_rc==0 && ldap_rc==0)); then
-                dc_sev=ok
-            elif ((krb_rc==0 || ldap_rc==0)); then
-                dc_sev=warn
-            else
-                dc_sev=crit
-            fi
-            if ((PRIVACY)); then dc_display='скрыто'; else dc_display=$target; fi
-            add_check "$section" "domain.dc.node.$dc_index" "Контроллер #$dc_index" \
-              "$dc_display — Kerberos 88: $krb_text; LDAP 389: $ldap_text" "$dc_sev"
-        done <<<"$targets"
-        [[ -n $dc_results ]] && rm -rf -- "$dc_results"
-        if ((tested>0)); then
-            if ((reachable==tested)); then rc=ok; elif ((reachable>0)); then rc=warn; else rc=crit; fi
-            ((untested>0)) && rc=unknown
-            add_check "$section" "domain.dc.ports" "KDC/LDAP доступность" \
-              "$reachable из $tested TCP-проверок; не проверены: $untested; лимит времени: $budget_skipped" "$rc"
-        else
-            add_check "$section" "domain.dc.ports" "KDC/LDAP доступность" \
-              "не проверена; лимит времени: $budget_skipped" unknown "Нужны SRV-записи и timeout; либо исчерпан общий бюджет активных сетевых проверок."
-        fi
+        collect_domain_controller_inventory "$domain"
+        emit_domain_controller_checks "$section"
     else
         add_check "$section" "dns.srv" "Доменные SRV" "домен не определён" unknown
     fi
@@ -1445,6 +1487,308 @@ check_gvfs() {
     fi
 }
 
+# Stage 3 resource model. Collectors only discover normalized resources and
+# their execution context. Probes run afterwards, and rendering is the final
+# step. This is deliberately an in-memory snapshot so the shipped utility
+# remains one standalone Bash file.
+NETRES_KEYS=(); NETRES_KINDS=(); NETRES_ORIGINS=(); NETRES_SOURCES=()
+NETRES_TARGETS=(); NETRES_USERS=(); NETRES_CONTEXTS=(); NETRES_CONFIGURED=()
+NETRES_MOUNTED=(); NETRES_INITIAL_MOUNTED=(); NETRES_PROBES=()
+NETRES_RUNTIMES=(); NETRES_BUSES=(); NETRES_DETAILS=()
+NETRES_STATES=(); NETRES_RCS=(); NETRES_ERRORS=()
+NETRES_DISC_KEYS=(); NETRES_DISC_LABELS=(); NETRES_DISC_VALUES=()
+NETRES_DISC_SEVERITIES=(); NETRES_DISC_DETAILS=()
+declare -A NETRES_INDEX=()
+NETRES_CIFS_DISCOVERY=ok
+NETRES_AUTOFS_CONFIGURED=0
+NETRES_GVFS_DISCOVERY_UNKNOWN=0
+
+network_resource_inventory_reset() {
+    NETRES_KEYS=(); NETRES_KINDS=(); NETRES_ORIGINS=(); NETRES_SOURCES=()
+    NETRES_TARGETS=(); NETRES_USERS=(); NETRES_CONTEXTS=(); NETRES_CONFIGURED=()
+    NETRES_MOUNTED=(); NETRES_INITIAL_MOUNTED=(); NETRES_PROBES=()
+    NETRES_RUNTIMES=(); NETRES_BUSES=(); NETRES_DETAILS=()
+    NETRES_STATES=(); NETRES_RCS=(); NETRES_ERRORS=()
+    NETRES_DISC_KEYS=(); NETRES_DISC_LABELS=(); NETRES_DISC_VALUES=()
+    NETRES_DISC_SEVERITIES=(); NETRES_DISC_DETAILS=()
+    NETRES_INDEX=()
+    NETRES_CIFS_DISCOVERY=ok
+    NETRES_AUTOFS_CONFIGURED=0
+    NETRES_GVFS_DISCOVERY_UNKNOWN=0
+}
+
+network_resource_discovery_issue() {
+    NETRES_DISC_KEYS+=("$1"); NETRES_DISC_LABELS+=("$2"); NETRES_DISC_VALUES+=("$3")
+    NETRES_DISC_SEVERITIES+=("${4:-unknown}"); NETRES_DISC_DETAILS+=("${5:-}")
+}
+
+network_resource_add() {
+    local key=$1 kind=$2 origin=$3 source=$4 target=$5 user=$6 context=$7
+    local configured=$8 mounted=$9 probe=${10} runtime=${11} bus=${12} detail=${13:-}
+    local idx=${NETRES_INDEX[$key]:-} old
+    if [[ -n $idx ]]; then
+        idx=$((idx-1))
+        old=${NETRES_ORIGINS[idx]}
+        [[ ,$old, == *,$origin,* ]] || NETRES_ORIGINS[idx]="${old:+$old,}$origin"
+        [[ -n ${NETRES_SOURCES[idx]} ]] || NETRES_SOURCES[idx]=$source
+        if [[ ${NETRES_PROBES[idx]} == none || (${NETRES_PROBES[idx]} == gio && $probe == path) ]]; then
+            NETRES_PROBES[idx]=$probe; NETRES_TARGETS[idx]=$target
+            NETRES_USERS[idx]=$user; NETRES_CONTEXTS[idx]=$context
+            NETRES_RUNTIMES[idx]=$runtime; NETRES_BUSES[idx]=$bus
+        fi
+        [[ $configured == yes ]] && NETRES_CONFIGURED[idx]=yes
+        [[ $mounted == yes ]] && NETRES_MOUNTED[idx]=yes
+        if [[ -n $detail && ${NETRES_DETAILS[idx]} != *"$detail"* ]]; then
+            NETRES_DETAILS[idx]="${NETRES_DETAILS[idx]:+${NETRES_DETAILS[idx]}; }$detail"
+        fi
+        NETRES_LAST_INDEX=$idx
+        return 0
+    fi
+    idx=${#NETRES_KEYS[@]}
+    NETRES_INDEX[$key]=$((idx+1)); NETRES_LAST_INDEX=$idx
+    NETRES_KEYS+=("$key"); NETRES_KINDS+=("$kind"); NETRES_ORIGINS+=("$origin")
+    NETRES_SOURCES+=("$source"); NETRES_TARGETS+=("$target"); NETRES_USERS+=("$user")
+    NETRES_CONTEXTS+=("$context"); NETRES_CONFIGURED+=("$configured")
+    NETRES_MOUNTED+=("$mounted"); NETRES_INITIAL_MOUNTED+=("$mounted")
+    NETRES_PROBES+=("$probe"); NETRES_RUNTIMES+=("$runtime"); NETRES_BUSES+=("$bus")
+    NETRES_DETAILS+=("$detail"); NETRES_STATES+=(PENDING); NETRES_RCS+=(125); NETRES_ERRORS+=('')
+}
+
+collect_cifs_resources() {
+    local mnt source options multiuser desktop_user user context probe
+    if ! have findmnt; then NETRES_CIFS_DISCOVERY=unknown; return 0; fi
+    desktop_user=$(_cifs_desktop_user 2>/dev/null || true)
+    while IFS= read -r mnt; do
+        [[ -n $mnt ]] || continue
+        source=$(findmnt -n -T "$mnt" -o SOURCE 2>/dev/null | head -n1)
+        options=$(findmnt -n -T "$mnt" -o OPTIONS 2>/dev/null | head -n1)
+        multiuser=no; [[ ,$options, == *,multiuser,* ]] && multiuser=yes
+        user=''; context=$(id -un 2>/dev/null || printf 'uid=%s' "$(id -u)"); probe=path
+        if [[ $multiuser == yes && $(id -u) -eq 0 ]]; then
+            if [[ -n $desktop_user ]]; then user=$desktop_user; context=$desktop_user
+            else probe=blocked; context='GUI-пользователь не определён'; fi
+        fi
+        network_resource_add "path:$mnt" smb cifs "$source" "$mnt" "$user" "$context" \
+          yes yes "$probe" '' '' "multiuser: $multiuser"
+    done < <(findmnt -n -l -t cifs -o TARGET 2>/dev/null)
+}
+
+collect_autofs_resources() {
+    local base map targets target source rc mounted user context probe idx=0
+    have findmnt || return 0
+    user=$(_cifs_desktop_user 2>/dev/null || true)
+    context=${user:-$(id -un 2>/dev/null || printf 'uid=%s' "$(id -u)")}
+    while IFS= read -r base; do
+        [[ -n $base ]] || continue
+        map=$(findmnt -C -n -M "$base" -t autofs -o SOURCE 2>/dev/null | head -n1)
+        [[ $map == /* ]] || continue
+        idx=$((idx+1)); targets=$(_autofs_map_targets "$map" "$base"); rc=$?
+        if ((rc!=0)); then
+            network_resource_discovery_issue "network.autofs.discovery.$idx" "Карта autofs" \
+              "$(mask_domain "$map"): список разобран не полностью" unknown \
+              "Поддерживаются статические CIFS-карты с ключом, параметрами и одним источником; нужны права чтения и python3. Исполняемые карты не запускаются."
+        fi
+        while IFS= read -r target; do
+            [[ -n $target ]] || continue
+            NETRES_AUTOFS_CONFIGURED=$((NETRES_AUTOFS_CONFIGURED+1))
+            mounted=no
+            [[ -n $(findmnt -C -n -M "$target" -t cifs -o TARGET 2>/dev/null) ]] && mounted=yes
+            probe=none
+            [[ $mounted == yes || $PROBE_AUTOFS -eq 1 ]] && probe=path
+            if [[ $probe == path && $(id -u) -eq 0 && -z $user ]]; then probe=blocked; fi
+            network_resource_add "path:$target" smb autofs "$map" "$target" "$user" "$context" \
+              yes "$mounted" "$probe" '' '' "карта: $map"
+        done <<<"$targets"
+    done < <(findmnt -n -l -t autofs -o TARGET 2>/dev/null)
+}
+
+collect_gvfs_resources() {
+    local runtime g uid user dir name list_file err_file rc session=0 bus gio_rc uri key kind
+    while IFS= read -r runtime; do
+        uid=${runtime##*/}; [[ $uid =~ ^[0-9]+$ ]] || continue
+        g=$runtime/gvfs; session=$((session+1)); user=$(id -nu "$uid" 2>/dev/null || true)
+        list_file=$(mktemp) || {
+            NETRES_GVFS_DISCOVERY_UNKNOWN=$((NETRES_GVFS_DISCOVERY_UNKNOWN+1))
+            network_resource_discovery_issue "network.gvfs.discovery.$session" "Перечисление GVFS" "нет временного файла для списка" unknown
+            continue
+        }
+        err_file=$(mktemp) || {
+            rm -f -- "$list_file"; NETRES_GVFS_DISCOVERY_UNKNOWN=$((NETRES_GVFS_DISCOVERY_UNKNOWN+1))
+            network_resource_discovery_issue "network.gvfs.discovery.$session" "Перечисление GVFS" "нет временного файла для ошибок" unknown
+            continue
+        }
+        rc=125
+        if [[ -n $user ]] && have timeout && have ls; then
+            _cifs_run_limited "$user" 6 env LC_ALL=C ls -U -A -1 --color=never \
+              --quoting-style=literal -- "$g" >"$list_file" 2>"$err_file"
+            rc=$?
+        fi
+        if ((rc!=0)) && ! grep -Fq 'No such file or directory' "$err_file"; then
+            NETRES_GVFS_DISCOVERY_UNKNOWN=$((NETRES_GVFS_DISCOVERY_UNKNOWN+1))
+            network_resource_discovery_issue "network.gvfs.discovery.$session" "Перечисление GVFS" \
+              "$(mask_domain "$user (UID $uid)"); список не получен полностью (rc=$rc)" unknown \
+              "Проверить сессию владельца GVFS; отсутствие списка не означает отсутствие подключений."
+        fi
+        while IFS= read -r name || [[ -n $name ]]; do
+            [[ -n $name ]] || continue
+            dir=$g/$name; key="$uid/$(_smb_resource_key "$name")"
+            if [[ $name == smb-share:* ]]; then kind=smb; else kind=gvfs; fi
+            network_resource_add "gvfs:$key" "$kind" gvfs "$name" "$dir" "$user" "$user" \
+              yes yes path "$runtime" '' 'GVFS'
+        done <"$list_file"
+
+        bus=$(_gvfs_session_bus "$uid" "$runtime" || true)
+        if [[ -n $bus && -n $user ]] && have gio && have timeout; then
+            : >"$list_file"; : >"$err_file"
+            _cifs_run_limited "$user" 6 env LC_ALL=C XDG_RUNTIME_DIR="$runtime" \
+              DBUS_SESSION_BUS_ADDRESS="$bus" gio mount -l >"$list_file" 2>"$err_file"
+            gio_rc=$?
+            if ((gio_rc!=0)) || [[ -s $err_file ]]; then
+                NETRES_GVFS_DISCOVERY_UNKNOWN=$((NETRES_GVFS_DISCOVERY_UNKNOWN+1))
+                network_resource_discovery_issue "network.gvfs.gio.discovery.$session" "Подключения GIO" \
+                  "список сессии не получен (rc=$gio_rc)" unknown
+            fi
+            while IFS= read -r uri; do
+                [[ -n $uri ]] || continue
+                key="$uid/$(_smb_resource_key "$uri")"
+                network_resource_add "gvfs:$key" smb gio "$uri" "$uri" "$user" "$user" \
+                  yes yes gio "$runtime" "$bus" 'GIO'
+            done < <(sed -nE 's/^[[:space:]]*Mount\([0-9]+\):.* -> (smb:\/\/.*)$/\1/p' "$list_file")
+        elif pgrep -u "$uid" -x 'gvfsd|gvfsd-smb|caja' >/dev/null 2>&1; then
+            NETRES_GVFS_DISCOVERY_UNKNOWN=$((NETRES_GVFS_DISCOVERY_UNKNOWN+1))
+            network_resource_discovery_issue "network.gvfs.gio.discovery.$session" "Подключения GIO" \
+              "не проверены: gio или адрес пользовательской D-Bus сессии недоступен" unknown
+        fi
+        rm -f -- "$list_file" "$err_file"
+    done < <(_gvfs_runtime_dirs)
+    if ((session==0)) && pgrep -x 'gvfsd|gvfsd-smb|caja' >/dev/null 2>&1; then
+        NETRES_GVFS_DISCOVERY_UNKNOWN=$((NETRES_GVFS_DISCOVERY_UNKNOWN+1))
+        network_resource_discovery_issue "network.gvfs.gio.discovery" "Подключения GIO" \
+          "не проверены: пользовательская GVFS-сессия недоступна" unknown
+    fi
+}
+
+probe_network_resources() {
+    local i probe state rc err target user origins
+    for i in "${!NETRES_KEYS[@]}"; do
+        probe=${NETRES_PROBES[i]}; target=${NETRES_TARGETS[i]}; user=${NETRES_USERS[i]}
+        origins=${NETRES_ORIGINS[i]}
+        case $probe in
+            none)
+                state=NOT_MOUNTED; rc=0; err=''
+                ;;
+            blocked)
+                state=INCONCLUSIVE; rc=125; err='активный локальный GUI-пользователь не определён'
+                ;;
+            gio)
+                _gio_probe "$target" "$user" "${NETRES_RUNTIMES[i]}" "${NETRES_BUSES[i]}"
+                state=$CIFS_PROBE_STATE; rc=$CIFS_PROBE_RC; err=$CIFS_PROBE_ERR
+                ;;
+            *)
+                _cifs_probe "$target" "$user"
+                state=$CIFS_PROBE_STATE; rc=$CIFS_PROBE_RC; err=$CIFS_PROBE_ERR
+                if [[ ,$origins, == *,autofs,* && ${NETRES_INITIAL_MOUNTED[i]} == no && $state == OK ]]; then
+                    if [[ -n $(findmnt -C -n -M "$target" -t cifs -o TARGET 2>/dev/null) ]]; then
+                        NETRES_MOUNTED[i]=yes
+                    else
+                        state=MOUNT_UNCONFIRMED
+                    fi
+                fi
+                ;;
+        esac
+        NETRES_STATES[i]=$state; NETRES_RCS[i]=$rc; NETRES_ERRORS[i]=$err
+    done
+}
+
+_network_resource_state_text() {
+    case $1 in
+        NOT_MOUNTED) printf 'не смонтирован; доступность не проверена' ;;
+        MOUNT_UNCONFIRMED) printf 'каталог отвечает, CIFS-монтирование не подтверждено' ;;
+        *) _cifs_state_text "$1" ;;
+    esac
+}
+
+_network_resource_severity() {
+    case $1 in
+        OK) printf ok;; NOT_MOUNTED) printf info;; INCONCLUSIVE|BUDGET|MOUNT_UNCONFIRMED) printf unknown;; *) printf warn;;
+    esac
+}
+
+emit_network_resource_checks() {
+    local start=${1:-0} mode=${2:-all} i origins state sev value detail source target
+    local smb_index=$start gvfs_index=0 cifs_count=0 cifs_ok=0 cifs_bad=0 cifs_unknown=0
+    local gvfs_count=0 gvfs_ok=0 gvfs_bad=0 gvfs_unknown=0 autofs_rows=0 label
+
+    for i in "${!NETRES_DISC_KEYS[@]}"; do
+        add_check "SMB / GVFS" "${NETRES_DISC_KEYS[i]}" "${NETRES_DISC_LABELS[i]}" \
+          "${NETRES_DISC_VALUES[i]}" "${NETRES_DISC_SEVERITIES[i]}" "${NETRES_DISC_DETAILS[i]}"
+    done
+
+    # Active CIFS first, preserving the established visual layout and keys.
+    if [[ $mode == all || $mode == cifs ]]; then
+        for i in "${!NETRES_KEYS[@]}"; do
+            origins=${NETRES_ORIGINS[i]}; [[ ,$origins, == *,cifs,* ]] || continue
+            cifs_count=$((cifs_count+1)); smb_index=$((smb_index+1)); state=${NETRES_STATES[i]}; sev=$(_network_resource_severity "$state")
+            case $sev in ok) cifs_ok=$((cifs_ok+1));; unknown) cifs_unknown=$((cifs_unknown+1));; *) cifs_bad=$((cifs_bad+1));; esac
+            if ((PRIVACY)); then
+                source='источник скрыт'; target='TARGET скрыт'; detail='контекст: скрыто'
+            else
+                source=${NETRES_SOURCES[i]:-не определён}; target=${NETRES_TARGETS[i]}
+                detail="контекст: ${NETRES_CONTEXTS[i]}; ${NETRES_DETAILS[i]}"
+            fi
+            [[ -n ${NETRES_ERRORS[i]} && $PRIVACY -eq 0 ]] && detail+="; ${NETRES_ERRORS[i]}"
+            value="$source → $target; $(_network_resource_state_text "$state")"
+            add_check "SMB / GVFS" "network.cifs.mount.$cifs_count" "SMB-ресурс #$smb_index" "$value" "$sev" "$detail"
+        done
+        if [[ $NETRES_CIFS_DISCOVERY == unknown ]]; then add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "findmnt отсутствует" unknown
+        elif ((cifs_count==0)); then add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "нет" info
+        else add_check "SMB / GVFS" "network.cifs" "CIFS итого" "$cifs_count; доступны: $cifs_ok; проблемы: $cifs_bad; не проверены: $cifs_unknown" info; fi
+    fi
+
+    if [[ $mode == all || $mode == autofs ]]; then
+        for i in "${!NETRES_KEYS[@]}"; do
+            origins=${NETRES_ORIGINS[i]}; [[ ,$origins, == *,autofs,* ]] || continue
+            [[ ,$origins, == *,cifs,* ]] && continue
+            # A resource already mounted before collection is represented by the
+            # active CIFS row. Compatibility wrappers therefore do not duplicate it.
+            [[ ${NETRES_INITIAL_MOUNTED[i]} == yes ]] && continue
+            autofs_rows=$((autofs_rows+1)); smb_index=$((smb_index+1)); state=${NETRES_STATES[i]}; sev=$(_network_resource_severity "$state")
+            if ((PRIVACY)); then value="скрыто; $(_network_resource_state_text "$state")"; detail='autofs; карта: скрыто'
+            else value="${NETRES_TARGETS[i]}; $(_network_resource_state_text "$state")"; detail="autofs; ${NETRES_DETAILS[i]}"; fi
+            [[ -n ${NETRES_ERRORS[i]} && $PRIVACY -eq 0 ]] && detail+="; ${NETRES_ERRORS[i]}"
+            add_check "SMB / GVFS" "network.autofs.mount.$smb_index" "SMB-ресурс #$smb_index" "$value" "$sev" "$detail"
+        done
+        if ((NETRES_AUTOFS_CONFIGURED>0)); then
+            add_check "SMB / GVFS" "network.autofs" "Настроено через autofs" "$NETRES_AUTOFS_CONFIGURED; уже смонтированные показаны в CIFS" info
+        fi
+        AUTOFS_SMB_LAST_INDEX=$smb_index
+    fi
+
+    if [[ $mode == all || $mode == gvfs ]]; then
+        for i in "${!NETRES_KEYS[@]}"; do
+            origins=${NETRES_ORIGINS[i]}; [[ ,$origins, == *,gvfs,* || ,$origins, == *,gio,* ]] || continue
+            gvfs_count=$((gvfs_count+1)); state=${NETRES_STATES[i]}; sev=$(_network_resource_severity "$state")
+            case $sev in ok) gvfs_ok=$((gvfs_ok+1));; unknown) gvfs_unknown=$((gvfs_unknown+1));; *) gvfs_bad=$((gvfs_bad+1));; esac
+            if [[ ${NETRES_KINDS[i]} == smb ]]; then smb_index=$((smb_index+1)); label="SMB-ресурс #$smb_index"; else gvfs_index=$((gvfs_index+1)); label="GVFS-ресурс #$gvfs_index"; fi
+            if ((PRIVACY)); then value="ресурс скрыт; $(_network_resource_state_text "$state")"; detail="контекст: скрыто; ${NETRES_ORIGINS[i]}; rc=${NETRES_RCS[i]}"
+            else value="${NETRES_TARGETS[i]}; $(_network_resource_state_text "$state")"; detail="контекст: ${NETRES_CONTEXTS[i]}; ${NETRES_ORIGINS[i]}; rc=${NETRES_RCS[i]}"; fi
+            [[ -n ${NETRES_ERRORS[i]} && $PRIVACY -eq 0 ]] && detail+="; ${NETRES_ERRORS[i]}"
+            add_check "SMB / GVFS" "network.gvfs.mount.$gvfs_count" "$label" "$value" "$sev" "$detail"
+        done
+        if ((gvfs_count==0 && NETRES_GVFS_DISCOVERY_UNKNOWN==0)); then add_check "SMB / GVFS" "network.gvfs" "GVFS mounts" "нет" info
+        else add_check "SMB / GVFS" "network.gvfs" "GVFS итого" "$gvfs_count; доступны: $gvfs_ok; проблемы: $gvfs_bad; не проверены: $gvfs_unknown; неполных списков: $NETRES_GVFS_DISCOVERY_UNKNOWN" info; fi
+    fi
+}
+
+check_network_resources() {
+    network_resource_inventory_reset
+    collect_cifs_resources
+    collect_autofs_resources
+    collect_gvfs_resources
+    probe_network_resources
+    emit_network_resource_checks 0 all
+}
+
 # Cache only within one check_network invocation. Call in the parent shell:
 # command substitution would discard cache updates. Empty values are cached too.
 nm_802_value() {
@@ -1714,66 +2058,7 @@ check_network() {
         fi
     fi
 
-    if have findmnt; then
-        cifs_user=$(_cifs_desktop_user 2>/dev/null || true)
-        while IFS= read -r mnt; do
-            [[ -n $mnt ]] || continue
-            cifs_count=$((cifs_count+1))
-            cifs_source=$(findmnt -n -T "$mnt" -o SOURCE 2>/dev/null | head -n1)
-            cifs_options=$(findmnt -n -T "$mnt" -o OPTIONS 2>/dev/null | head -n1)
-            cifs_multiuser=no
-            [[ ,$cifs_options, == *,multiuser,* ]] && cifs_multiuser=yes
-            cifs_context=$(id -un 2>/dev/null || printf 'uid=%s' "$(id -u)")
-
-            if [[ $cifs_multiuser == yes && $(id -u) -eq 0 ]]; then
-                if [[ -n $cifs_user ]]; then
-                    cifs_context=$cifs_user
-                    _cifs_probe "$mnt" "$cifs_user"
-                else
-                    CIFS_PROBE_STATE=INCONCLUSIVE
-                    CIFS_PROBE_RC=125
-                    CIFS_PROBE_ERR='multiuser mount: активный локальный GUI-пользователь не определён'
-                fi
-            else
-                _cifs_probe "$mnt" ''
-            fi
-
-            cifs_state=$CIFS_PROBE_STATE
-            cifs_text=$(_cifs_state_text "$cifs_state")
-            if ((PRIVACY)); then
-                cifs_detail="контекст: скрыто; multiuser: $cifs_multiuser"
-            else
-                cifs_detail="контекст: $cifs_context; multiuser: $cifs_multiuser"
-            fi
-            # stderr утилит содержит реальный путь/имя даже при маскировке строки.
-            if [[ -n $CIFS_PROBE_ERR ]] && ((PRIVACY==0)); then cifs_detail="$cifs_detail; $CIFS_PROBE_ERR"; fi
-            case "$cifs_state" in
-                OK) cifs_ok=$((cifs_ok+1)); cifs_sev=ok ;;
-                INCONCLUSIVE|BUDGET) cifs_unknown=$((cifs_unknown+1)); cifs_sev=unknown ;;
-                *) cifs_bad=$((cifs_bad+1)); cifs_sev=warn ;;
-            esac
-
-            if ((PRIVACY)); then
-                cifs_source_display='источник скрыт'
-                cifs_target_display='TARGET скрыт'
-            else
-                cifs_source_display=${cifs_source:-не определён}
-                cifs_target_display=$mnt
-            fi
-            add_check "SMB / GVFS" "network.cifs.mount.$cifs_count" "SMB-ресурс #$cifs_count" "$cifs_source_display → $cifs_target_display; $cifs_text" "$cifs_sev" "$cifs_detail"
-        done < <(findmnt -n -l -t cifs -o TARGET 2>/dev/null)
-
-        if ((cifs_count==0)); then
-            add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "нет" info
-        else
-            add_check "SMB / GVFS" "network.cifs" "CIFS итого" "$cifs_count; доступны: $cifs_ok; проблемы: $cifs_bad; не проверены: $cifs_unknown" info
-        fi
-    else
-        add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "findmnt отсутствует" unknown
-    fi
-
-    check_autofs_smb "$cifs_count"
-    check_gvfs "$AUTOFS_SMB_LAST_INDEX"
+    check_network_resources
     proc_caja=$(pgrep -xc caja 2>/dev/null || true); proc_gvfs=$(pgrep -fc 'gvfsd-smb|gvfsd-fuse' 2>/dev/null || true)
     add_check "SMB / GVFS" "network.desktop" "Caja / GVFS процессы" "caja:$proc_caja gvfs:$proc_gvfs" ok
 }

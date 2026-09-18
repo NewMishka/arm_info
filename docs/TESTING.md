@@ -16,6 +16,9 @@ make test
 
 `make test` дополнительно запускает:
 
+- `tests/test_stage1_performance.sh` — регрессии TXT-рендера и кэша NetworkManager;
+- `tests/test_stage2_limits.sh` — единые тайм-ауты, общий сетевой бюджет и ограниченная параллельность DC;
+- `tests/test_stage3_architecture.sh` — граница collectors/probes/emitters, единый снимок CIFS/autofs/GVFS/GIO, признаки configured/mounted/available, дедупликация, отдельные статусы и privacy;
 - `tests/test_cli.sh` — версия, CLI, standard JSON schema v1, privacy и контракт стандартных рекомендаций;
 - `tests/test_enterprise_discovery.sh` — поведенческие проверки production-функций: шесть уникальных DC из трёх SRV-источников, отсутствие TCP-инструментов, три GVFS-ресурса с одним неисправным, UTF-8/пробелы, privacy ошибок, запуск под владельцем и неполное перечисление; GIO без FUSE и удаление GIO/FUSE дублей; CUPS с нулём/двумя записями, служебными строками и ошибкой доступа к журналу; рекомендация cancel -a. Переключение к другому UID проверяется, если среда разрешает `runuser`; локальные каталоги не заменяют полевой тест FUSE/SMB на РЕД ОС.
 - `tests/test_enterprise.sh` — корпоративный CLI, schema v2, privacy, `--compare`, single-file policy и контракт корпоративного отчёта;
@@ -36,6 +39,7 @@ CI проверяет:
 - корпоративные profiles/compare/recommendations tests;
 - recommendation-command audit tests;
 - CIFS runtime-probe regression tests (UTF-8, пробелы, actual directory read);
+- архитектурный контракт collectors → inventory → probes → checks и объединение разных способов монтирования;
 - полный тест разделов отчёта `tests/test_sections.sh`;
 - Bash syntax в Ubuntu 24.04, Fedora и Rocky Linux 9;
 - согласованность версии `VERSION` / `arm_info.sh` / RPM spec / `make version` / README;
