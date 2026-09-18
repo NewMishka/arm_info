@@ -34,6 +34,7 @@ set -o pipefail
 
 VERSION="1.2.4"
 PROFILE=""
+PROBE_AUTOFS=0
 PRIVACY=0
 JSON_MODE=0
 SAVE_REPORT=0
@@ -63,6 +64,7 @@ arm_info enterprise profiles 1.2.4
   enterprise   domain + network + print (без инвентаризации ПО)
 
 Параметры:
+  --probe-autofs          проверить также несмонтированные ресурсы autofs (может вызвать монтирование)
   -p, --privacy           обезличить отчёт
   -s, --save              сохранить отчёт в файл
   -o, --output PATH       указать файл или каталог сохранения
@@ -87,6 +89,7 @@ while (($#)); do
         --compare)
             [[ $# -ge 3 ]] || { echo "Ошибка: --compare требует два JSON-файла" >&2; exit 64; }
             COMPARE_A=$2; COMPARE_B=$3; shift 3 ;;
+        --probe-autofs) PROBE_AUTOFS=1; shift ;;
         -p|--privacy) PRIVACY=1; shift ;;
         --json) JSON_MODE=1; shift ;;
         -s|--save) SAVE_REPORT=1; shift ;;
@@ -323,7 +326,7 @@ recommendation_for() {
             REC_ACTION="Заранее обновить истекающий сертификат или исправить профиль 802.1X согласно политике организации."
             REC_COMMAND="nmcli -f NAME,UUID,TYPE connection show|nmcli connection show 'PROFILE_NAME' | grep -E '^802-1x\.(eap|identity|ca-cert|client-cert|phase2-ca-cert|phase2-client-cert|private-key|system-ca-certs):'|openssl x509 -in \"CERT_PATH\" -noout -subject -issuer -dates|journalctl -u NetworkManager -b --no-pager | grep -Ei '802.1x|eap|supplicant|certificate' | tail -120"
             ;;
-        network.cifs|network.cifs.mount.*)
+        network.cifs|network.cifs.mount.*|network.autofs.mount.*)
             REC_CAUSE="CIFS смонтирован, но фактическое чтение каталога или metadata lookup завершились ошибкой/тайм-аутом. Для sec=krb5,multiuser результат проверяется в контексте активного локального GUI-пользователя, а не root."
             REC_IMPACT="Caja/приложения могут зависать либо не открывать конкретную шару, даже если mount формально присутствует."
             REC_CHECK="Сопоставить SOURCE → TARGET и статус конкретного SMB-ресурса. Проверка выполняет полный readdir каталога под timeout и stat одного элемента, поэтому она не ограничивается первым cached dentry."
@@ -904,6 +907,113 @@ _cifs_state_text() {
     esac
 }
 
+_autofs_map_targets() {
+    # Map data is never sourced/evaluated. Executable maps are not run.
+    local map=$1 base=$2
+    [[ -f $map && -r $map && ! -x $map ]] && have python3 || return 2
+    python3 - "$map" "$base" <<'AUTOFS_PY'
+import sys, shlex, posixpath
+path, base = sys.argv[1:]
+incomplete = False
+pending = ''
+try:
+    with open(path, encoding='utf-8') as f:
+        for physical in f:
+            line = pending + physical.rstrip('\n')
+            if line.endswith('\\'):
+                pending = line[:-1] + ' '
+                continue
+            pending = ''
+            try:
+                fields = shlex.split(line, comments=True)
+            except ValueError:
+                incomplete = True
+                continue
+            if not fields:
+                continue
+            if fields[0].startswith('+'):
+                incomplete = True
+                continue
+            if len(fields) >= 2 and fields[1].startswith('-') and 'fstype=cifs' not in fields[1].lstrip('-').split(','):
+                continue
+            if len(fields) != 3 or 'fstype=cifs' not in fields[1].lstrip('-').split(','):
+                incomplete = True
+                continue
+            key, options, source = fields
+            if any(c in key for c in '*?[]$&\n\r\t') or not source.startswith(('://', '//')):
+                incomplete = True
+                continue
+            if base == '/-':
+                valid = key.startswith('/')
+                target = posixpath.normpath(key)
+            else:
+                target = posixpath.normpath(base.rstrip('/') + '/' + key)
+                valid = not key.startswith('/') and target.startswith(base.rstrip('/') + '/')
+            if not valid:
+                incomplete = True
+                continue
+            print(target)
+    if pending:
+        incomplete = True
+except (OSError, UnicodeError):
+    incomplete = True
+sys.exit(2 if incomplete else 0)
+AUTOFS_PY
+}
+
+check_autofs_smb() {
+    local base map targets target mounted rc user state sev detail value idx=0 configured=0
+    local -A seen=()
+    AUTOFS_SMB_LAST_INDEX=${1:-0}
+    have findmnt || return 0
+    user=$(_cifs_desktop_user 2>/dev/null || true)
+    while IFS= read -r base; do
+        [[ -n $base ]] || continue
+        map=$(findmnt -C -n -M "$base" -t autofs -o SOURCE 2>/dev/null | head -n1)
+        [[ $map == /* ]] || continue
+        idx=$((idx+1))
+        targets=$(_autofs_map_targets "$map" "$base")
+        rc=$?
+        if ((rc!=0)); then
+            add_check "SMB / GVFS" "network.autofs.discovery.$idx" "Карта autofs" \
+              "$(mask_domain "$map"): список разобран не полностью" unknown \
+              "Поддерживаются статические CIFS-карты с ключом, параметрами и одним источником; нужны права чтения и python3. Исполняемые карты не запускаются."
+        fi
+        while IFS= read -r target; do
+            [[ -n $target && ${seen[$target]:-} != 1 ]] || continue
+            seen["$target"]=1
+            configured=$((configured+1))
+            mounted=$(findmnt -C -n -M "$target" -t cifs -o TARGET 2>/dev/null)
+            [[ -n $mounted ]] && continue
+            AUTOFS_SMB_LAST_INDEX=$((AUTOFS_SMB_LAST_INDEX+1))
+            state='не смонтирован; доступность не проверена'; sev=info
+            if ((PROBE_AUTOFS)); then
+                if ((EUID==0)) && [[ -z $user ]]; then
+                    state='не проверен: GUI-пользователь не определён'; sev=unknown
+                else
+                    if ((EUID==0)); then _cifs_probe "$target" "$user"
+                    else _cifs_probe "$target" ''; fi
+                    state=$(_cifs_state_text "$CIFS_PROBE_STATE")
+                    case $CIFS_PROBE_STATE in
+                        OK)
+                            mounted=$(findmnt -C -n -M "$target" -t cifs -o TARGET 2>/dev/null)
+                            if [[ -n $mounted ]]; then sev=ok; state='смонтирован по обращению; доступен'
+                            else sev=unknown; state='каталог отвечает, CIFS-монтирование не подтверждено'; fi ;;
+                        INCONCLUSIVE) sev=unknown ;;
+                        *) sev=warn ;;
+                    esac
+                fi
+            fi
+            value="$(mask_domain "$target"); $state"
+            detail="autofs; карта: $(mask_domain "$map")"
+            add_check "SMB / GVFS" "network.autofs.mount.$AUTOFS_SMB_LAST_INDEX" "SMB-ресурс #$AUTOFS_SMB_LAST_INDEX" "$value" "$sev" "$detail"
+        done <<<"$targets"
+    done < <(findmnt -n -l -t autofs -o TARGET 2>/dev/null)
+    if ((configured>0)); then
+        add_check "SMB / GVFS" "network.autofs" "Настроено через autofs" "$configured; уже смонтированные показаны в CIFS" info
+    fi
+}
+
 _gvfs_runtime_dirs() {
     # Сначала перечисляем runtime-каталоги, не обращаясь к FUSE от root.
     {
@@ -1394,7 +1504,8 @@ check_network() {
         add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "findmnt отсутствует" unknown
     fi
 
-    check_gvfs "$cifs_count"
+    check_autofs_smb "$cifs_count"
+    check_gvfs "$AUTOFS_SMB_LAST_INDEX"
     proc_caja=$(pgrep -xc caja 2>/dev/null || true); proc_gvfs=$(pgrep -fc 'gvfsd-smb|gvfsd-fuse' 2>/dev/null || true)
     add_check "SMB / GVFS" "network.desktop" "Caja / GVFS процессы" "caja:$proc_caja gvfs:$proc_gvfs" ok
 }

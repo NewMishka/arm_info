@@ -98,6 +98,51 @@ columns = [re.search('[а-яё]', line).start() for line in lines if re.match(r'
 assert len(columns) == 6 and len(set(columns)) == 1, columns
 PY
 
+# Static autofs: quoted keys, literal UID, inactive and broken resources.
+source "$TMP/functions.sh"
+PRIVACY=0
+PROBE_AUTOFS=0
+MAP="$TMP/auto.samba"
+cat >"$MAP" <<'MAP_DATA'
+"Общий_(X)" -fstype=cifs,multiuser,cruid=$UID,sec=krb5 ://files.example.test/common
+"Home Folder_(Z)" -fstype=cifs,multiuser,cruid=$UID,sec=krb5 ://files.example.test/home
+"Internet_(N)" -fstype=cifs,multiuser,cruid=$UID,sec=krb5 ://files.example.test/broken
+MAP_DATA
+findmnt() {
+    case "$*" in
+        '-n -l -t autofs -o TARGET') echo /fixture;;
+        '-C -n -M /fixture -t autofs -o SOURCE') echo "$MAP";;
+        '-C -n -M /fixture/Общий_(X) -t cifs -o TARGET') echo '/fixture/Общий_(X)';;
+        '-C -n -M /fixture/Home Folder_(Z) -t cifs -o TARGET') [[ ${PROBED_HOME:-0} == 1 ]] && echo '/fixture/Home Folder_(Z)';;
+    esac
+}
+_cifs_desktop_user() { id -un; }
+_cifs_probe() {
+    case $1 in
+        *Home*) PROBED_HOME=1; CIFS_PROBE_STATE=OK;;
+        *Internet*) CIFS_PROBE_STATE=NETWORK;;
+        *) fail 'unexpected probe';;
+    esac
+}
+reset_checks
+check_autofs_smb 1
+[[ $AUTOFS_SMB_LAST_INDEX == 3 && ${VALUES[*]} == *'3; уже смонтированные'* ]] || fail 'autofs missing/duplicate resource'
+[[ ${VALUES[*]} == *'не смонтирован; доступность не проверена'* && $WARN_COUNT == 0 ]] || fail 'inactive is not a failure'
+[[ ${PROBED_HOME:-0} == 0 ]] || fail 'passive report triggered a mount'
+PROBE_AUTOFS=1
+reset_checks
+check_autofs_smb 1
+[[ $AUTOFS_SMB_LAST_INDEX == 3 && $WARN_COUNT == 1 && ${VALUES[*]} == *'смонтирован по обращению; доступен'* && ${VALUES[*]} == *'сеть недоступна'* ]] || fail 'active autofs status'
+PRIVACY=1
+PROBED_HOME=0
+reset_checks
+check_autofs_smb 1
+[[ ${VALUES[*]} != *fixture* && ${DETAILS[*]} != *"$MAP"* ]] || fail 'autofs privacy leak'
+chmod +x "$MAP"
+if _autofs_map_targets "$MAP" /fixture >"$TMP/map-output"; then fail 'executable map accepted'; fi
+[[ ! -s "$TMP/map-output" ]] || fail 'executable map was read as static'
+unset -f findmnt
+
 # GIO-only mounts plus a duplicate FUSE view: enumerate all, probe each once.
 source "$TMP/functions.sh"
 PRIVACY=1
