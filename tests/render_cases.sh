@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # Shared input cases for the frozen pre-refactor rendering fixture.
 render_cases() {
     local COLUMNS
