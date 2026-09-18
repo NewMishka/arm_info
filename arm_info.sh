@@ -2,7 +2,7 @@
 
 (
 # ============================================================
-# arm_info 1.2.4 — диагностика АРМ для РЕД ОС 7 / 8
+# arm_info 1.3.0 — диагностика АРМ для РЕД ОС 7 / 8
 # Запуск: исполняемый Bash-файл; base и enterprise находятся в одном файле.
 # Результат выводится на экран; сохранение выполняется только по -s/--save.
 # ============================================================
@@ -12,7 +12,7 @@ if [ -z "${BASH_VERSION:-}" ]; then
     exit 1
 fi
 
-ARM_INFO_VERSION="1.2.4"
+ARM_INFO_VERSION="1.3.0"
 
 # Единый безопасный запуск потенциально зависающих внешних команд. Если GNU
 # timeout отсутствует, команда не запускается без ограничения: код 125 означает
@@ -34,15 +34,15 @@ else
 fi
 
 
-# enterprise-profile-dispatch-v1.2.4 — single-file edition
+# enterprise-profile-dispatch-v1.3.0 — single-file edition
 # Enterprise-профили встроены в arm_info.sh; внешний helper не требуется.
 _arm_enterprise_run() (
-# arm_info enterprise profiles — v1.2.4
+# arm_info enterprise profiles — v1.3.0
 # Read-only diagnostics for RED OS enterprise workstations.
 set -u
 set -o pipefail
 
-VERSION="1.2.4"
+VERSION="1.3.0"
 PROFILE=""
 PROBE_AUTOFS=0
 PRIVACY=0
@@ -68,7 +68,7 @@ NETWORK_PROBE_DEADLINE=0
 
 usage() {
     cat <<'USAGE'
-arm_info enterprise profiles 1.2.4
+arm_info enterprise profiles 1.3.0
 
 Использование:
   arm_info --profile domain [-p|--privacy] [--json] [-s|--save] [-o FILE]

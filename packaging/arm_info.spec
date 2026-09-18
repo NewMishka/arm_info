@@ -1,5 +1,5 @@
 Name:           arm-info
-Version:        1.2.4
+Version:        1.3.0
 Release:        1%{?dist}
 Summary:        Diagnostic utility for RED OS and compatible Linux workstations
 License:        MIT
@@ -39,6 +39,11 @@ install -Dm0644 %{SOURCE3} %{buildroot}%{_docdir}/%{name}/README.md
 %config(noreplace) %{_sysconfdir}/arm_info.conf
 
 %changelog
+* Fri Sep 18 2026 NewMishka - 1.3.0-1
+- Add bounded corporate DNS/DC, CIFS/autofs/GVFS/GIO and mail diagnostics
+- Normalize network resources and collapse duplicate GIO/FUSE and nested CIFS/DFS mounts
+- Improve CUPS recovery guidance, privacy coverage and performance regression tests
+
 * Wed Sep 16 2026 NewMishka - 1.2.4-1
 - Audit and correct all administrator recommendation commands
 - Add per-command descriptions, explicit state-change warnings and safe placeholders
