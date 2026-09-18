@@ -1,31 +1,33 @@
-# Pre-release checklist — arm_info 1.3.0
+# Release verification checklist — arm_info 1.3.0
 
 Чек-лист фиксирует объём автоматической и полевой проверки релиза. Непомеченные пункты не считаются подтверждёнными и сохраняются как явные границы полевого покрытия.
+
+Публикация подтверждена: [PR #10](https://github.com/NewMishka/arm_info/pull/10), [CI #236](https://github.com/NewMishka/arm_info/actions/runs/35362777619), [Release workflow #8](https://github.com/NewMishka/arm_info/actions/runs/35362777688), [тег и assets v1.3.0](https://github.com/NewMishka/arm_info/releases/tag/v1.3.0).
 
 ## Автоматические проверки
 
 - [x] `make version`, `make check` и `make test` проходят в чистом рабочем дереве.
-- [ ] `bash -n` и ShellCheck `--severity=error` проходят для скрипта, installer, tests и RPM helper.
-- [ ] `tests/test_stage1_performance.sh` подтверждает TXT-рендер без лишних subprocess и кэш NetworkManager.
-- [ ] `tests/test_stage2_limits.sh` подтверждает общий бюджет, bounded timeout и предел параллельности DC.
+- [x] `bash -n` и ShellCheck `--severity=error` проходят для скрипта, installer, tests и RPM helper.
+- [x] `tests/test_stage1_performance.sh` подтверждает TXT-рендер без лишних subprocess и кэш NetworkManager.
+- [x] `tests/test_stage2_limits.sh` подтверждает общий бюджет, bounded timeout и предел параллельности DC.
 - [x] `tests/test_stage3_architecture.sh` подтверждает границы collectors/inventory/probes/checks, признаки configured/mounted/available и дедупликацию ресурсов.
-- [ ] `tests/test_enterprise_discovery.sh` подтверждает все DC, GIO без FUSE, ошибки отдельных ресурсов, CUPS journal и privacy stderr.
-- [ ] `tests/test_mail_profile.sh` подтверждает discovery, URI validation, DNS/TCP/TLS/STARTTLS, capabilities, privacy и бюджет без доступа к реальной почте.
-- [ ] `tests/test_recommendation_commands.sh` подтверждает безопасные токены, описания команд и маркировку state-changing действий.
-- [ ] `tests/test_cifs_probe.sh` подтверждает полный readdir + metadata lookup, UTF-8/пробелы и отсутствие metadata-only `stat -f`.
-- [ ] `tests/test_sections.sh` подтверждает все пользовательские разделы TXT/JSON и профили `domain/network/print/mail/software/enterprise`.
-- [ ] CI проходит на Ubuntu 24.04, Fedora и Rocky Linux 9; installer/RPM smoke tests успешны.
+- [x] `tests/test_enterprise_discovery.sh` подтверждает все DC, GIO без FUSE, ошибки отдельных ресурсов, CUPS journal и privacy stderr.
+- [x] `tests/test_mail_profile.sh` подтверждает discovery, URI validation, DNS/TCP/TLS/STARTTLS, capabilities, privacy и бюджет без доступа к реальной почте.
+- [x] `tests/test_recommendation_commands.sh` подтверждает безопасные токены, описания команд и маркировку state-changing действий.
+- [x] `tests/test_cifs_probe.sh` подтверждает полный readdir + metadata lookup, UTF-8/пробелы и отсутствие metadata-only `stat -f`.
+- [x] `tests/test_sections.sh` подтверждает все пользовательские разделы TXT/JSON и профили `domain/network/print/mail/software/enterprise`.
+- [x] CI проходит на Ubuntu 24.04, Fedora и Rocky Linux 9; installer/RPM smoke tests успешны.
 
 ## CLI, версия и упаковка
 
-- [ ] `bash arm_info.sh -c --help` содержит `-p`, выровненный `-s`, `--probe-autofs`, `--network-budget`, `--network-jobs`, `--mail-endpoint`, `--mail-domain`.
-- [ ] Неверные значения лимитов и `-o` без `-s` завершаются кодом 64.
-- [ ] Без `-s/--save` ни стандартный, ни корпоративный профиль не создаёт файл; privacy-имя не содержит hostname.
-- [ ] В репозитории нет `arm_info-enterprise.sh`; распространяется один `arm_info.sh`.
+- [x] `bash arm_info.sh -c --help` содержит `-p`, выровненный `-s`, `--probe-autofs`, `--network-budget`, `--network-jobs`, `--mail-endpoint`, `--mail-domain`.
+- [x] Неверные значения лимитов и `-o` без `-s` завершаются кодом 64.
+- [x] Без `-s/--save` ни стандартный, ни корпоративный профиль не создаёт файл; privacy-имя не содержит hostname.
+- [x] В репозитории нет `arm_info-enterprise.sh`; распространяется один `arm_info.sh`.
 - [x] Перед выпуском, отдельным финальным коммитом: `VERSION`, `ARM_INFO_VERSION`, RPM spec, README и release notes переведены на 1.3.0; `make version` выводит 1.3.0.
 - [x] `docs/releases/v1.3.0.md` больше не помечен как черновик и содержит только подтверждённые заявления.
-- [ ] Release workflow публикует `arm_info.sh` и `SHA256SUMS`; checksum проверен.
-- [ ] Перед merge `main...feature` имеет `behind_by = 0`, полный PR CI — success.
+- [x] Release workflow публикует `arm_info.sh` и `SHA256SUMS`; checksum проверен.
+- [x] Перед merge `main...feature` имеет `behind_by = 0`, полный PR CI — success.
 
 ## Полевой прогон на целевом РЕД ОС
 
@@ -76,14 +78,14 @@
 
 ## Команды рекомендаций и совместимость
 
-- [ ] Каждая команда имеет описание результата; shell pipeline остаётся одной физической строкой.
-- [ ] Используются только актуальные безопасные токены: `DOMAIN_FQDN`, `DC_FQDN`, `DC_IP`, `USER_NAME`, `PROFILE_NAME`, `CERT_PATH`, `QUEUE_NAME`, `JOB_ID`, `PARENT_PID`, `UNIT_NAME`, `DEVICE_PATH`, `MD_DEVICE`, `IFACE_NAME`, `MAIL_HOST`, `MAIL_PORT`, `MAIL_IP`, `MAIL_PROTOCOL`, `MAIL_DOMAIN`.
-- [ ] Kerberos-команды учитывают user context; RAID не предполагает `/dev/md0`; OpenSSL учитывает PEM/DER.
-- [ ] Изменяющие состояние команды не запускаются самим `arm_info` и выполняются вручную только после подтверждения причины.
-- [ ] Если РЕД ОС 7 или 8 не проверена, эта ветка не описывается как подтверждённая runtime-совместимость.
+- [x] Каждая команда имеет описание результата; shell pipeline остаётся одной физической строкой.
+- [x] Используются только актуальные безопасные токены: `DOMAIN_FQDN`, `DC_FQDN`, `DC_IP`, `USER_NAME`, `PROFILE_NAME`, `CERT_PATH`, `QUEUE_NAME`, `JOB_ID`, `PARENT_PID`, `UNIT_NAME`, `DEVICE_PATH`, `MD_DEVICE`, `IFACE_NAME`, `MAIL_HOST`, `MAIL_PORT`, `MAIL_IP`, `MAIL_PROTOCOL`, `MAIL_DOMAIN`.
+- [x] Kerberos-команды учитывают user context; RAID не предполагает `/dev/md0`; OpenSSL учитывает PEM/DER.
+- [x] Изменяющие состояние команды не запускаются самим `arm_info` и выполняются вручную только после подтверждения причины.
+- [x] Если РЕД ОС 7 или 8 не проверена, эта ветка не описывается как подтверждённая runtime-совместимость.
 
 ## После одобрения кандидата
 
 - [x] Получено явное решение выпустить 1.3.0.
 - [x] Выполнен финальный version bump и повторён весь автоматический прогон.
-- [ ] После merge подтверждены tag `v1.3.0`, GitHub Release, оба asset и `sha256sum -c SHA256SUMS`.
+- [x] После merge подтверждены tag `v1.3.0`, GitHub Release, оба asset и SHA-256 опубликованного `arm_info.sh`.

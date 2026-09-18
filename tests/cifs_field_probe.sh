@@ -2,7 +2,7 @@
 set -u
 set -o pipefail
 
-# Полевой read-only probe для стабилизации CIFS в arm_info 1.2.4.
+# Полевой read-only probe CIFS для актуальной версии arm_info.
 # Ничего не монтирует/размонтирует и не меняет Kerberos/CIFS credentials.
 # Цель: отличить реальный timeout/metadata failure ресурса от ошибки пользовательского контекста
 # на sec=krb5,multiuser и зафиксировать причину без ложного «зависла».
@@ -130,7 +130,7 @@ fi
 DESKTOP_USER=$(find_desktop_user 2>/dev/null || true)
 CURRENT_USER=$(id -un 2>/dev/null || printf 'uid=%s' "$(id -u)")
 
-printf 'CIFS field probe — arm_info 1.2.4 stabilization\n'
+printf 'CIFS field probe — arm_info\n'
 printf 'Текущий контекст : %s (uid=%s)\n' "$CURRENT_USER" "$(id -u)"
 printf 'GUI-пользователь  : %s\n' "${DESKTOP_USER:-не определён}"
 printf 'Timeout           : %s сек.\n' "$TIMEOUT_SEC"
