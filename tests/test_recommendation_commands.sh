@@ -14,6 +14,9 @@ grep -q 'MD_DEVICE' "$SCRIPT" || fail 'RAID placeholder missing'
 grep -q 'UNIT_NAME' "$SCRIPT" || fail 'systemd unit placeholder missing'
 grep -q 'DEVICE_PATH' "$SCRIPT" || fail 'device placeholder missing'
 grep -q 'USER_NAME' "$SCRIPT" || fail 'user-context placeholder missing'
+grep -q 'MAIL_HOST' "$SCRIPT" || fail 'mail host placeholder missing'
+grep -q 'MAIL_PORT' "$SCRIPT" || fail 'mail port placeholder missing'
+grep -q 'MAIL_DOMAIN' "$SCRIPT" || fail 'mail domain placeholder missing'
 
 # CIFS recommendation/runtime contract. The recommendation no longer duplicates
 # the production probe as a large shell loop: arm_info itself performs the
@@ -21,10 +24,10 @@ grep -q 'USER_NAME' "$SCRIPT" || fail 'user-context placeholder missing'
 grep -Fq 'findmnt -t cifs -o TARGET,SOURCE,OPTIONS' "$SCRIPT" || fail 'CIFS mount listing recommendation missing'
 grep -Fq 'полный readdir каталога под timeout и stat одного элемента' "$SCRIPT" || fail 'hardened CIFS guidance missing'
 grep -Fq '_cifs_desktop_user()' "$SCRIPT" || fail 'CIFS GUI-user context helper missing'
-grep -Fq 'timeout 6 ls -U -A -1 -- "$mnt"' "$SCRIPT" || fail 'CIFS full-directory readdir probe missing'
-grep -Fq 'timeout 6 stat -L -- "$sample"' "$SCRIPT" || fail 'CIFS sample metadata probe missing'
+grep -Fq 'ls -U -A -1 -- "$mnt/"' "$SCRIPT" || fail 'CIFS full-directory readdir probe missing'
+grep -Fq 'stat -L -- "$sample"' "$SCRIPT" || fail 'CIFS sample metadata probe missing'
 grep -Fq 'network.cifs.mount.$cifs_count' "$SCRIPT" || fail 'per-share CIFS report row missing'
-grep -Fq 'cifs_detail="контекст: скрыто; multiuser: $cifs_multiuser"' "$SCRIPT" || fail 'CIFS privacy context masking missing'
+grep -Fq "source='источник скрыт'; target='TARGET скрыт'; detail='контекст: скрыто'" "$SCRIPT" || fail 'CIFS privacy context masking missing'
 ! grep -Fq "timeout 5 stat -f 'MOUNT_PATH'" "$SCRIPT" || fail 'manual CIFS MOUNT_PATH recommendation remains'
 ! grep -Fq 'findmnt -rn -t cifs -o TARGET' "$SCRIPT" || fail 'CIFS raw findmnt mode would hex-escape non-ASCII TARGETs'
 ! grep -Fq "findmnt -n -l -t cifs -o TARGET,SOURCE 2>/dev/null | awk" "$SCRIPT" || fail 'CIFS checker must not split TARGET/SOURCE on whitespace'
@@ -40,6 +43,17 @@ grep -Fq 'cifs_detail="контекст: скрыто; multiuser: $cifs_multiuse
 ! grep -Fq '<MOUNT>' "$SCRIPT" || fail 'shell-redirection-style MOUNT placeholder remains'
 ! grep -Fq '<QUEUE>' "$SCRIPT" || fail 'shell-redirection-style QUEUE placeholder remains'
 ! grep -Fq '<JOB_ID>' "$SCRIPT" || fail 'shell-redirection-style JOB placeholder remains'
+! grep -Fq 'rm -rf /var/spool/cups' "$SCRIPT" || fail 'unsafe direct CUPS spool deletion must not be recommended'
+
+# CUPS recommendations prefer supported client/admin interfaces over direct
+# manipulation of spool files and distinguish one queue from all queues.
+grep -Fq 'lpstat -t' "$SCRIPT" || fail 'CUPS full status recommendation missing'
+grep -Fq 'lpq -P QUEUE_NAME -l' "$SCRIPT" || fail 'per-queue lpq recommendation missing'
+grep -Fq 'lpq -a -l' "$SCRIPT" || fail 'all-queue lpq recommendation missing'
+grep -Fq 'cancel -a QUEUE_NAME' "$SCRIPT" || fail 'per-queue cancellation recommendation missing'
+grep -Fq 'cancel -a"' "$SCRIPT" || fail 'all-queue cancellation recommendation missing'
+grep -Fq 'lpr -P QUEUE_NAME /usr/share/cups/data/testprint' "$SCRIPT" || fail 'CUPS test-page recommendation missing'
+grep -Fq 'sudo systemctl restart cups' "$SCRIPT" || fail 'controlled CUPS restart recommendation missing'
 
 # Representative copy/paste commands must be valid Bash after replacing service markers.
 commands=(
@@ -50,6 +64,17 @@ commands=(
   "findmnt -t cifs -o TARGET,SOURCE,OPTIONS"
   "sudo -u 'USER_NAME' klist -A"
   "lpstat -W not-completed -o"
+  "lpstat -t"
+  "lpq -P QUEUE_NAME -l"
+  "lpq -a -l"
+  "cancel -a QUEUE_NAME"
+  "lpr -P QUEUE_NAME /usr/share/cups/data/testprint"
+  "sudo systemctl restart cups"
+  "getent ahosts MAIL_HOST"
+  "timeout 5 nc -vz MAIL_HOST MAIL_PORT"
+  "openssl s_client -connect MAIL_HOST:MAIL_PORT -servername MAIL_HOST -starttls MAIL_PROTOCOL -verify_hostname MAIL_HOST -verify_return_error -showcerts </dev/null"
+  "openssl s_client -connect MAIL_HOST:MAIL_PORT -servername MAIL_HOST -verify_hostname MAIL_HOST -verify_return_error -showcerts </dev/null"
+  "dig +short MAIL_DOMAIN MX"
   "dnf provides '/usr/bin/lpstat'"
   "systemctl status UNIT_NAME --no-pager -l"
   "journalctl -u UNIT_NAME -b --no-pager | tail -120"

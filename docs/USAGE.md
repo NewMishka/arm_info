@@ -16,7 +16,7 @@ sudo bash /tmp/arm_info.sh
 sudo bash /tmp/arm_info.sh -c
 ```
 
-`-c` — короткий алиас `--corp`.
+`-c` — короткий алиас `--corp`, `-p` — `--privacy`. Например, `sudo arm_info -c -p -s` выводит и сохраняет обезличенный корпоративный отчёт.
 
 Запуск через `sh` не рекомендуется: используются Bash-конструкции.
 
@@ -61,7 +61,17 @@ ARM_INFO_PRIVATE_YYYY-MM-DD_HH-MM-SS.txt
 sudo arm_info -c
 ```
 
-`-c` — алиас `--corp`; оба варианта эквивалентны `--profile enterprise` и выполняет `domain + network + print`. Глобальная инвентаризация ПО в него не входит.
+`-c` — алиас `--corp`; оба варианта эквивалентны `--profile enterprise` и выполняют `domain + network + print + mail`. Глобальная инвентаризация ПО в него не входит.
+
+Для ограничения времени активных сетевых проверок используются `--network-budget SEC` (1–300, по умолчанию 30) и `--network-jobs N` (1–16, по умолчанию 4 параллельные TCP-проверки DC). Бюджет общий для DC, CIFS, активного autofs, GIO и mail, а не выдаётся каждому ресурсу отдельно. Обнаружение продолжается независимо от остатка бюджета; не успевшие пройти активную проверку объекты остаются в отчёте с N/A.
+
+Например:
+
+```bash
+sudo bash arm_info.sh -c -p --network-budget 60
+```
+
+Эта команда запускает корпоративный профиль (`-c`), обезличивает отчёт (`-p`) и разрешает суммарно до 60 секунд на активные сетевые проверки. Она не сохраняет файл без `-s`, не включает активное автомонтирование без `--probe-autofs` и не меняет систему. Все три параметра перечислены в `bash arm_info.sh -c --help`.
 
 `-c` / `--corp` и `--profile enterprise` по умолчанию ничего не сохраняют. При явном `-s/--save` без `-o` имена формируются так:
 
@@ -72,7 +82,36 @@ ARM_INFO_CORP_PRIVATE_YYYYMMDD_HHMMSS.txt   # --privacy
 
 Для корпоративного JSON расширение меняется на `.json`.
 
-Отдельные профили `domain`, `network`, `print` и `software` также выводятся только в терминал; файл создаётся только при явном `-s/--save`, а `-o/--output` используется вместе с ним.
+Отдельные профили `domain`, `network`, `print`, `mail` и `software` также выводятся только в терминал; файл создаётся только при явном `-s/--save`, а `-o/--output` используется вместе с ним.
+
+## Проверка почтовых серверов
+
+Обычный запуск пытается найти IMAP/SMTP в Thunderbird-совместимых `prefs.js` активного или invoking пользователя:
+
+```bash
+sudo arm_info --profile mail
+```
+
+Endpoints можно задать явно и повторять параметр:
+
+```bash
+sudo arm_info --profile mail \
+  --mail-endpoint imaps://imap.example.test:993 \
+  --mail-endpoint smtp://smtp.example.test:587 \
+  --mail-domain example.test
+```
+
+`imaps://` и `smtps://` означают implicit TLS; `imap://` и `smtp://` — STARTTLS. URI с логином/паролем отклоняются. Для централизованного запуска поддерживаются `ARM_INFO_MAIL_ENDPOINTS` (URI через запятую/точку с запятой), `ARM_INFO_MAIL_DOMAINS` и `ARM_INFO_MAIL_PREFS` (явные `prefs.js` через двоеточие).
+
+Те же whitelist-ключи можно сохранить в `/etc/arm_info.conf` или передать другой файл через `--config PATH`:
+
+```ini
+ARM_INFO_MAIL_ENDPOINTS=imaps://imap.example.test:993,smtp://smtp.example.test:587
+ARM_INFO_MAIL_DOMAINS=example.test
+# ARM_INFO_MAIL_PREFS=/home/user/.client/profile/prefs.js
+```
+
+Проверяются DNS, TCP, TLS/STARTTLS, hostname/цепочка/срок сертификата и AUTH-механизмы, объявленные сервером до входа. Проверка не читает пароль, не меняет Kerberos cache, не открывает почтовый ящик и не отправляет письмо. Все сетевые операции входят в `--network-budget`.
 
 ## Выбор места сохранения
 
@@ -178,6 +217,8 @@ make version
 Версия берётся из файла `VERSION`. `Makefile` не хранит отдельный номер версии; `make check` сверяет `VERSION` с `arm_info.sh` и RPM spec.
 
 
-## Команды рекомендаций в 1.2.4
+## Команды рекомендаций
 
-Все команды проходят отдельный command-audit contract. Каждая команда в TXT имеет описание ожидаемого результата; state-changing команды явно помечаются. Служебные значения задаются безопасными токенами (`DOMAIN_FQDN`, `PROFILE_NAME`, `MOUNT_PATH`, `UNIT_NAME` и т. п.), которые нужно заменить перед запуском. Подробно: [COMMANDS.md](COMMANDS.md).
+Все команды проходят отдельный command-audit contract. Каждая команда в TXT имеет описание ожидаемого результата; state-changing команды явно помечаются. Служебные значения задаются безопасными токенами (`DOMAIN_FQDN`, `PROFILE_NAME`, `QUEUE_NAME`, `UNIT_NAME`, `MAIL_HOST` и т. п.), которые нужно заменить перед запуском. Подробно: [COMMANDS.md](COMMANDS.md).
+
+Для ресурсов autofs обычный корпоративный отчёт также читает статические CIFS-карты (нужен `python3`). Несмонтированные ресурсы показываются без попытки подключения. Активная проверка: `sudo arm_info -c -p --probe-autofs`; чтение каталога может вызвать автомонтирование, root использует активного GUI-пользователя.

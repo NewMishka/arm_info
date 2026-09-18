@@ -39,7 +39,7 @@ grep -q 'Штраф, баллов' "$SCRIPT" || die "stability transparent penal
 grep -q '"penalty_hardware"' "$SCRIPT" || die "stability JSON penalty details"
 grep -q 'Съёмных ФС вне индекса' "$SCRIPT" || die "removable filesystem report"
 grep -q '^run_smart() {' "$SCRIPT" || die "SMART wrapper missing"
-grep -Fq 'timeout 8 smartctl "$@"' "$SCRIPT" || die "SMART wrapper timeout contract"
+grep -Fq '_arm_run_limited 8 smartctl "$@"' "$SCRIPT" || die "SMART wrapper timeout contract"
 grep -Fq 'SMART_ALL=$(run_smart -a "$DEV"' "$SCRIPT" || die "SMART collection must use wrapper"
 ! grep -Fq '(медиана; максимум ${CPU_TEMP_MAX}°C)' "$SCRIPT" || die "CPU maximum must not be shown with median"
 grep -q '^format_uptime_ru() {' "$SCRIPT" || die "Russian uptime formatter missing"
@@ -96,7 +96,7 @@ RC=$?
 set -e
 [[ $RC -eq 64 ]] || die "removed save option must exit 64, got $RC"
 set +e
-bash "$SCRIPT" --json --privacy >"$TMP"
+bash "$SCRIPT" --json -p >"$TMP"
 RC=$?
 set -e
 ((RC>=0 && RC<=3)) || die "unexpected diagnostic exit code: $RC"

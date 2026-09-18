@@ -15,7 +15,12 @@ bash "$SCRIPT" -c --help | grep -q -- '--corp' || die "-c help"
 grep -Fq -- '-c|--corp) PROFILE=enterprise' "$SCRIPT" || die "-c parser"
 grep -Fq -- '-c|--corp|--profile' "$SCRIPT" || die "-c dispatcher"
 bash "$SCRIPT" --corp --help | grep -q -- '--save' || die "--corp save help"
-grep -q 'enterprise) check_domain; check_network; check_print ;;' "$SCRIPT" || die "enterprise profile must exclude software inventory"
+bash "$SCRIPT" --profile mail --help | grep -q -- '--mail-endpoint URI' || die "mail help"
+grep -q 'enterprise) check_domain; check_network; check_print; check_mail ;;' "$SCRIPT" || die "enterprise profile must include mail and exclude software inventory"
+grep -Fq 'domain.dc.node.$((index+1))' "$SCRIPT" || die "per-DC detail key"
+grep -Fq '"Контроллер #$((index+1))"' "$SCRIPT" || die "per-DC detail label"
+grep -Fq '_cifs_probe "$dir" "$gvfs_user"' "$SCRIPT" || die "GVFS must use real directory probe"
+! grep -Fq 'run_timeout 4 stat -f "$dir"' "$SCRIPT" || die "GVFS must not use metadata-only stat -f"
 
 # No hard-coded application/vendor inventory and no hard-coded Kerberos error-code list.
 if grep -Eiq '(r7|remmina|freerdp|icaclient|citrix|basis|workplace|bsscrypto|cryptopro|cprocsp|jacarta|snx)' "$SCRIPT"; then
@@ -25,11 +30,11 @@ if grep -Eq 'Kerberos 6/7/15|c6=|c7=|c15=' "$SCRIPT"; then
   die "hard-coded Kerberos error codes found"
 fi
 
-TMP1=$(mktemp); TMP2=$(mktemp); DIFF=$(mktemp)
-trap 'rm -f "$TMP1" "$TMP2" "$DIFF"' EXIT
+TMP1=$(mktemp); TMP2=$(mktemp); DIFF=$(mktemp); MAIL_CFG=$(mktemp); MAIL_JSON=$(mktemp)
+trap 'rm -f "$TMP1" "$TMP2" "$DIFF" "$MAIL_CFG" "$MAIL_JSON"' EXIT
 
 set +e
-bash "$SCRIPT" --profile domain --json --privacy >"$TMP1"
+bash "$SCRIPT" --profile domain --json -p >"$TMP1"
 RC=$?
 set -e
 ((RC>=0 && RC<=3)) || die "domain exit code $RC"
@@ -47,6 +52,25 @@ for r in d['recommendations']:
     for k in ('key','level','title','source','possible_causes','impact','checks','action','commands','verification'):
         assert k in r, (k,r)
     assert isinstance(r['commands'], list)
+PY
+
+cat >"$MAIL_CFG" <<'CFG'
+ARM_INFO_MAIL_ENDPOINTS=imaps://mail.private.example:993
+ARM_INFO_MAIL_DOMAINS=private.example
+CFG
+set +e
+bash "$SCRIPT" --profile mail --config "$MAIL_CFG" --network-budget 1 --json --privacy >"$MAIL_JSON"
+RC=$?
+set -e
+((RC>=0 && RC<=3)) || die "mail config exit code $RC"
+python3 - "$MAIL_JSON" <<'PY' || die "mail config/privacy JSON"
+import json,sys
+d=json.load(open(sys.argv[1],encoding='utf-8'))
+assert d['profile']=='mail'
+text=json.dumps(d,ensure_ascii=False)
+assert 'обнаружено: 1' in text
+assert 'mail-host-1' in text and 'mail-domain-1' in text
+assert 'private.example' not in text
 PY
 
 set +e
@@ -71,7 +95,7 @@ echo "OK: enterprise profiles, privacy JSON and compare tests passed"
 
 # Recommendations must be present in text output when diagnostics are incomplete/warn/crit.
 TXT=$(mktemp)
-trap 'rm -f "$TMP1" "$TMP2" "$DIFF" "$TXT"' EXIT
+trap 'rm -f "$TMP1" "$TMP2" "$DIFF" "$MAIL_CFG" "$MAIL_JSON" "$TXT"' EXIT
 set +e
 bash "$SCRIPT" --profile domain --privacy >"$TXT"
 RC=$?

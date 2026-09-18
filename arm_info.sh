@@ -2,7 +2,7 @@
 
 (
 # ============================================================
-# arm_info 1.2.4 — диагностика АРМ для РЕД ОС 7 / 8
+# arm_info 1.3.0 — диагностика АРМ для РЕД ОС 7 / 8
 # Запуск: исполняемый Bash-файл; base и enterprise находятся в одном файле.
 # Результат выводится на экран; сохранение выполняется только по -s/--save.
 # ============================================================
@@ -12,7 +12,17 @@ if [ -z "${BASH_VERSION:-}" ]; then
     exit 1
 fi
 
-ARM_INFO_VERSION="1.2.4"
+ARM_INFO_VERSION="1.3.0"
+
+# Единый безопасный запуск потенциально зависающих внешних команд. Если GNU
+# timeout отсутствует, команда не запускается без ограничения: код 125 означает
+# неполную проверку, а не ошибку диагностируемого сервиса.
+_arm_run_limited() {
+    local seconds=$1
+    shift
+    command -v timeout >/dev/null 2>&1 || return 125
+    timeout -k 1 "$seconds" "$@"
+}
 
 ARM_INFO_SELF_SOURCE=${BASH_SOURCE[0]:-$0}
 if [[ -f $ARM_INFO_SELF_SOURCE ]]; then
@@ -24,43 +34,74 @@ else
 fi
 
 
-# enterprise-profile-dispatch-v1.2.4 — single-file edition
+# enterprise-profile-dispatch-v1.3.0 — single-file edition
 # Enterprise-профили встроены в arm_info.sh; внешний helper не требуется.
 _arm_enterprise_run() (
-# arm_info enterprise profiles — v1.2.4
+# arm_info enterprise profiles — v1.3.0
 # Read-only diagnostics for RED OS enterprise workstations.
 set -u
 set -o pipefail
 
-VERSION="1.2.4"
+VERSION="1.3.0"
 PROFILE=""
+PROBE_AUTOFS=0
 PRIVACY=0
 JSON_MODE=0
 SAVE_REPORT=0
 OUTPUT_PATH=""
 COMPARE_A=""
 COMPARE_B=""
+MAIL_ENDPOINT_SPECS=()
+MAIL_DOMAIN_SPECS=()
+ENTERPRISE_CONFIG_FILE="/etc/arm_info.conf"
+MAIL_CONFIG_ENDPOINTS=""
+MAIL_CONFIG_DOMAINS=""
+MAIL_CONFIG_PREFS=""
+ARM_INFO_NETWORK_BUDGET=${ARM_INFO_NETWORK_BUDGET:-30}
+ARM_INFO_DC_JOBS=${ARM_INFO_DC_JOBS:-4}
+ARM_INFO_DC_PROBE_TIMEOUT=${ARM_INFO_DC_PROBE_TIMEOUT:-3}
+NETWORK_PROBE_DEADLINE=0
+
+[[ $ARM_INFO_NETWORK_BUDGET =~ ^[0-9]+$ ]] && ((ARM_INFO_NETWORK_BUDGET>=1 && ARM_INFO_NETWORK_BUDGET<=300)) || ARM_INFO_NETWORK_BUDGET=30
+[[ $ARM_INFO_DC_JOBS =~ ^[0-9]+$ ]] && ((ARM_INFO_DC_JOBS>=1 && ARM_INFO_DC_JOBS<=16)) || ARM_INFO_DC_JOBS=4
+[[ $ARM_INFO_DC_PROBE_TIMEOUT =~ ^[0-9]+$ ]] && ((ARM_INFO_DC_PROBE_TIMEOUT>=1 && ARM_INFO_DC_PROBE_TIMEOUT<=30)) || ARM_INFO_DC_PROBE_TIMEOUT=3
 
 usage() {
     cat <<'USAGE'
-arm_info enterprise profiles 1.2.4
+arm_info enterprise profiles 1.3.0
 
 Использование:
-  arm_info --profile domain [--privacy] [--json] [-s|--save] [-o FILE]
-  arm_info --profile network [--privacy] [--json] [-s|--save] [-o FILE]
-  arm_info --profile print [--privacy] [--json] [-s|--save] [-o FILE]
-  arm_info --profile software [--privacy] [--json] [-s|--save] [-o FILE]
-  arm_info -c [--privacy] [--json] [-s|--save] [-o FILE]
-  arm_info --corp [--privacy] [--json] [-s|--save] [-o FILE]
-  arm_info --profile enterprise [--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --profile domain [-p|--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --profile network [-p|--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --profile print [-p|--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --profile mail [-p|--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --profile software [-p|--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info -c [-p|--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --corp [-p|--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --profile enterprise [-p|--privacy] [--json] [-s|--save] [-o FILE]
   arm_info --compare REPORT_A.json REPORT_B.json [--json] [-s|--save] [-o FILE]
 
 Профили:
   domain       AD/SSSD/Kerberos, DNS SRV, KDC/LDAP, синхронизация времени
   network      DNS, интерфейсы, 802.1X, CIFS/SMB, GVFS/Caja
   print        CUPS, очереди, задания, backend URI, ошибки журнала
+  mail         IMAP/SMTP: DNS, TCP, TLS/STARTTLS, сертификаты и AUTH без входа
   software     глобальная инвентаризация всех RPM-пакетов и общие процессы
-  enterprise   domain + network + print (без инвентаризации ПО)
+  enterprise   domain + network + print + mail (без инвентаризации ПО)
+
+Параметры:
+  --probe-autofs          проверить также несмонтированные ресурсы autofs (может вызвать монтирование)
+  --network-budget SEC   общий лимит активных DC/SMB/autofs/GIO/MAIL-проверок, 1–300 сек. (по умолчанию 30)
+  --network-jobs N       число параллельных TCP-проверок DC, 1–16 (по умолчанию 4)
+  --mail-endpoint URI    добавить IMAP/SMTP endpoint; можно повторять
+                         imaps://host:993, imap://host:143,
+                         smtps://host:465 или smtp://host:587
+  --mail-domain DOMAIN   добавить почтовый домен для проверки MX/SRV; можно повторять
+  --config PATH          использовать другой конфигурационный файл
+  -p, --privacy           обезличить отчёт
+  -s, --save              сохранить отчёт в файл
+  -o, --output PATH       указать файл или каталог сохранения
+  --json                  вывести отчёт в JSON
 
 Коды завершения:
   0  проблем не обнаружено
@@ -81,7 +122,34 @@ while (($#)); do
         --compare)
             [[ $# -ge 3 ]] || { echo "Ошибка: --compare требует два JSON-файла" >&2; exit 64; }
             COMPARE_A=$2; COMPARE_B=$3; shift 3 ;;
-        --privacy) PRIVACY=1; shift ;;
+        --probe-autofs) PROBE_AUTOFS=1; shift ;;
+        --network-budget)
+            [[ $# -ge 2 && $2 =~ ^[0-9]+$ && $2 -ge 1 && $2 -le 300 ]] || { echo "Ошибка: --network-budget требует число от 1 до 300" >&2; exit 64; }
+            ARM_INFO_NETWORK_BUDGET=$2; shift 2 ;;
+        --network-budget=*)
+            _arm_value=${1#*=}
+            [[ $_arm_value =~ ^[0-9]+$ && $_arm_value -ge 1 && $_arm_value -le 300 ]] || { echo "Ошибка: --network-budget требует число от 1 до 300" >&2; exit 64; }
+            ARM_INFO_NETWORK_BUDGET=$_arm_value; shift ;;
+        --network-jobs)
+            [[ $# -ge 2 && $2 =~ ^[0-9]+$ && $2 -ge 1 && $2 -le 16 ]] || { echo "Ошибка: --network-jobs требует число от 1 до 16" >&2; exit 64; }
+            ARM_INFO_DC_JOBS=$2; shift 2 ;;
+        --network-jobs=*)
+            _arm_value=${1#*=}
+            [[ $_arm_value =~ ^[0-9]+$ && $_arm_value -ge 1 && $_arm_value -le 16 ]] || { echo "Ошибка: --network-jobs требует число от 1 до 16" >&2; exit 64; }
+            ARM_INFO_DC_JOBS=$_arm_value; shift ;;
+        --mail-endpoint)
+            [[ $# -ge 2 ]] || { echo "Ошибка: --mail-endpoint требует URI" >&2; exit 64; }
+            MAIL_ENDPOINT_SPECS+=("$2"); shift 2 ;;
+        --mail-endpoint=*) MAIL_ENDPOINT_SPECS+=("${1#*=}"); shift ;;
+        --mail-domain)
+            [[ $# -ge 2 ]] || { echo "Ошибка: --mail-domain требует домен" >&2; exit 64; }
+            MAIL_DOMAIN_SPECS+=("$2"); shift 2 ;;
+        --mail-domain=*) MAIL_DOMAIN_SPECS+=("${1#*=}"); shift ;;
+        --config)
+            [[ $# -ge 2 ]] || { echo "Ошибка: --config требует путь" >&2; exit 64; }
+            ENTERPRISE_CONFIG_FILE=$2; shift 2 ;;
+        --config=*) ENTERPRISE_CONFIG_FILE=${1#*=}; shift ;;
+        -p|--privacy) PRIVACY=1; shift ;;
         --json) JSON_MODE=1; shift ;;
         -s|--save) SAVE_REPORT=1; shift ;;
         -o|--output)
@@ -94,6 +162,22 @@ while (($#)); do
     esac
 done
 
+# Корпоративный профиль читает только три mail-ключа. Файл никогда не source-ится.
+load_enterprise_config() {
+    local file=$1 key val
+    [[ -r $file ]] || return 0
+    while IFS='=' read -r key val; do
+        key=$(printf '%s' "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        val=${val%%#*}; val=$(printf '%s' "$val" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        case $key in
+            ARM_INFO_MAIL_ENDPOINTS) MAIL_CONFIG_ENDPOINTS=$val ;;
+            ARM_INFO_MAIL_DOMAINS) MAIL_CONFIG_DOMAINS=$val ;;
+            ARM_INFO_MAIL_PREFS) MAIL_CONFIG_PREFS=$val ;;
+        esac
+    done <"$file"
+}
+load_enterprise_config "$ENTERPRISE_CONFIG_FILE"
+
 if [[ -n $OUTPUT_PATH && $SAVE_REPORT -ne 1 ]]; then
     echo "Ошибка: -o/--output используется только вместе с -s/--save" >&2
     exit 64
@@ -103,7 +187,7 @@ if [[ -n $COMPARE_A || -n $COMPARE_B ]]; then
     [[ -n $COMPARE_A && -n $COMPARE_B ]] || { echo "Ошибка: укажите два файла для сравнения" >&2; exit 64; }
 else
     case "$PROFILE" in
-        domain|network|print|software|enterprise) ;;
+        domain|network|print|mail|software|enterprise) ;;
         "") echo "Ошибка: требуется --profile или --compare" >&2; usage >&2; exit 64 ;;
         *) echo "Ошибка: неизвестный профиль: $PROFILE" >&2; exit 64 ;;
     esac
@@ -170,7 +254,24 @@ fi
 have() { command -v "$1" >/dev/null 2>&1; }
 run_timeout() {
     local sec=$1; shift
-    if have timeout; then timeout "$sec" "$@"; else "$@"; fi
+    _arm_run_limited "$sec" "$@"
+}
+
+network_budget_start() {
+    local budget=${ARM_INFO_NETWORK_BUDGET:-30}
+    NETWORK_PROBE_DEADLINE=${NETWORK_PROBE_DEADLINE:-0}
+    ((NETWORK_PROBE_DEADLINE>0)) || NETWORK_PROBE_DEADLINE=$((SECONDS+budget))
+}
+
+# Sets NETWORK_PROBE_LIMIT to min(requested, remaining). Returns 1 when the
+# common active-probe budget is exhausted.
+network_probe_limit() {
+    local requested=$1 remaining
+    network_budget_start
+    remaining=$((NETWORK_PROBE_DEADLINE-SECONDS))
+    if ((remaining<=0)); then NETWORK_PROBE_LIMIT=0; return 1; fi
+    if ((requested<remaining)); then NETWORK_PROBE_LIMIT=$requested; else NETWORK_PROBE_LIMIT=$remaining; fi
+    return 0
 }
 trim() { sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
 join_by() { local IFS=$1; shift; printf '%s' "$*"; }
@@ -206,6 +307,14 @@ add_check() {
 # максимум контекста: причины, влияние, проверки, действия и команды.
 REC_KEYS=(); REC_LEVELS=(); REC_TITLES=(); REC_CAUSES=(); REC_IMPACTS=()
 REC_CHECKS=(); REC_ACTIONS=(); REC_COMMANDS=(); REC_VERIFIES=(); REC_SOURCES=()
+
+# Обнаруженные почтовые endpoints существуют только в рамках одного запуска.
+# Пароли и содержимое писем не читаются и не сохраняются.
+MAIL_PROTOCOLS=(); MAIL_HOSTS=(); MAIL_PORTS=(); MAIL_TLS_MODES=()
+MAIL_SOURCES=(); MAIL_AUTH_HINTS=(); MAIL_DOMAINS=()
+MAIL_DNS_CACHE_HOSTS=(); MAIL_DNS_CACHE_STATES=(); MAIL_DNS_CACHE_TEXTS=()
+MAIL_DISCOVERY_INCOMPLETE=0
+MAIL_DISCOVERY_TRUNCATED=0
 
 recommendation_for() {
     local key=$1 severity=$2 value=$3 detail=${4:-}
@@ -317,47 +426,92 @@ recommendation_for() {
             REC_ACTION="Заранее обновить истекающий сертификат или исправить профиль 802.1X согласно политике организации."
             REC_COMMAND="nmcli -f NAME,UUID,TYPE connection show|nmcli connection show 'PROFILE_NAME' | grep -E '^802-1x\.(eap|identity|ca-cert|client-cert|phase2-ca-cert|phase2-client-cert|private-key|system-ca-certs):'|openssl x509 -in \"CERT_PATH\" -noout -subject -issuer -dates|journalctl -u NetworkManager -b --no-pager | grep -Ei '802.1x|eap|supplicant|certificate' | tail -120"
             ;;
-        network.cifs|network.cifs.mount.*)
+        network.cifs|network.cifs.mount.*|network.autofs.mount.*)
             REC_CAUSE="CIFS смонтирован, но фактическое чтение каталога или metadata lookup завершились ошибкой/тайм-аутом. Для sec=krb5,multiuser результат проверяется в контексте активного локального GUI-пользователя, а не root."
             REC_IMPACT="Caja/приложения могут зависать либо не открывать конкретную шару, даже если mount формально присутствует."
             REC_CHECK="Сопоставить SOURCE → TARGET и статус конкретного SMB-ресурса. Проверка выполняет полный readdir каталога под timeout и stat одного элемента, поэтому она не ограничивается первым cached dentry."
             REC_ACTION="Устранить фактическую сетевую, Kerberos/credential или I/O-причину. Размонтирование выполнять только после проверки открытых файлов и процессов."
             REC_COMMAND="findmnt -t cifs -o TARGET,SOURCE,OPTIONS|journalctl -k -b --no-pager | grep -Ei 'cifs|smb' | tail -120|sudo -u 'USER_NAME' klist -A"
             ;;
-        network.gvfs)
+        network.gvfs|network.gvfs.*)
             REC_CAUSE="Один или несколько GVFS mount не отвечают. Возможны недоступный SMB-ресурс или зависшие пользовательские gvfs-процессы."
             REC_IMPACT="Файловый менеджер может долго открывать сетевые папки, зависать при удалении/копировании и удерживать старые подключения."
             REC_CHECK="Проверить gio mounts, процессы gvfs/caja и доступность конкретного каталога с timeout."
             REC_ACTION="После фиксации диагностики перезапустить только проблемные пользовательские gvfs/caja процессы либо переподключить ресурс."
             REC_COMMAND="loginctl list-sessions --no-legend|ps -ef | grep -E 'caja|gvfsd' | grep -v grep|find /run/user/*/gvfs -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null"
             ;;
+        mail.config.invalid)
+            REC_CAUSE="Один или несколько явно заданных почтовых URI имеют неподдерживаемый формат, недопустимое имя узла или порт."
+            REC_IMPACT="Соответствующий сервер исключён из проверки, поэтому отчёт о почтовой инфраструктуре неполон."
+            REC_CHECK="Проверить URI без логина и пароля: imaps://HOST:993, imap://HOST:143, smtps://HOST:465 или smtp://HOST:587."
+            REC_ACTION="Исправить параметры --mail-endpoint либо ARM_INFO_MAIL_ENDPOINTS и повторить профиль mail."
+            REC_COMMAND="$ARM_INFO_SELF_CMD --profile mail --mail-endpoint imaps://MAIL_HOST:993 --mail-endpoint smtps://MAIL_HOST:465"
+            ;;
+        mail.discovery)
+            REC_CAUSE="Не все локальные профили почтового клиента удалось безопасно прочитать за ограниченное время."
+            REC_IMPACT="Часть настроенных IMAP/SMTP-серверов могла не попасть в отчёт."
+            REC_CHECK="Определить активного desktop-пользователя и доступность его Thunderbird-совместимых prefs.js."
+            REC_ACTION="Запустить профиль в контексте нужного АРМ либо явно передать endpoints без учётных данных."
+            REC_COMMAND="loginctl list-sessions --no-legend|$ARM_INFO_SELF_CMD --profile mail --mail-endpoint imaps://MAIL_HOST:993 --mail-endpoint smtps://MAIL_HOST:465"
+            ;;
+        mail.endpoint.*.dns)
+            REC_CAUSE="Имя настроенного почтового сервера не разрешается либо DNS-проверка не завершилась в общий лимит времени."
+            REC_IMPACT="Почтовый клиент не сможет установить соединение с IMAP/SMTP по этому имени."
+            REC_CHECK="Проверить системный resolver, A/AAAA записи и DNS-настройки активного сетевого профиля."
+            REC_ACTION="Восстановить штатное DNS-разрешение; не подменять корпоративный DNS постоянной записью /etc/hosts без согласования."
+            REC_COMMAND="getent ahosts MAIL_HOST|resolvectl query MAIL_HOST|nmcli -f GENERAL.CONNECTION,IP4.DNS,IP4.DOMAIN device show"
+            ;;
+        mail.endpoint.*.tcp)
+            REC_CAUSE="DNS-имя разрешается, но настроенный TCP-порт IMAP/SMTP недоступен, отвергает соединение либо проверка ограничена по времени."
+            REC_IMPACT="Получение или отправка почты через этот endpoint будет недоступна."
+            REC_CHECK="Проверить маршрут, firewall/proxy, доступность сервера и фактически настроенный порт."
+            REC_ACTION="Исправить сетевую доступность или конфигурацию клиента; не переключать порт наугад без параметров почтовой инфраструктуры."
+            REC_COMMAND="getent ahosts MAIL_HOST|timeout 5 nc -vz MAIL_HOST MAIL_PORT|ip route get MAIL_IP"
+            ;;
+        mail.endpoint.*.tls.*)
+            REC_CAUSE="TLS/STARTTLS не подтверждён: возможны ошибка handshake, недоверенная цепочка, несовпадение имени, истёкший/истекающий сертификат либо небезопасный plain-режим."
+            REC_IMPACT="Почтовый клиент может блокировать соединение, показывать предупреждение или передавать данные без требуемой защиты."
+            REC_CHECK="Проверить режим TLS, цепочку, имя сервера и срок leaf-сертификата без выполнения аутентификации."
+            REC_ACTION="Исправить сертификат/цепочку или параметры клиента. Не отключать проверку сертификата как постоянное решение."
+            case $key in
+                *.implicit) REC_COMMAND="openssl s_client -connect MAIL_HOST:MAIL_PORT -servername MAIL_HOST -verify_hostname MAIL_HOST -verify_return_error -showcerts </dev/null|date" ;;
+                *) REC_COMMAND="openssl s_client -connect MAIL_HOST:MAIL_PORT -servername MAIL_HOST -starttls MAIL_PROTOCOL -verify_hostname MAIL_HOST -verify_return_error -showcerts </dev/null|date" ;;
+            esac
+            ;;
+        mail.domain.*)
+            REC_CAUSE="DNS-записи почтового домена не удалось проверить установленными средствами или в доступный сетевой бюджет."
+            REC_IMPACT="Автоматическое обнаружение почтовых служб остаётся непроверенным; это не доказывает недоступность настроенных endpoints."
+            REC_CHECK="Проверить MX и SRV через корпоративный DNS. Отсутствие SRV допустимо, если клиенты настраиваются централизованно."
+            REC_ACTION="Сопоставить записи с документацией почтовой инфраструктуры и фактическими настройками клиента."
+            REC_COMMAND="dig +short MAIL_DOMAIN MX|dig +short _imaps._tcp.MAIL_DOMAIN SRV|dig +short _submission._tcp.MAIL_DOMAIN SRV"
+            ;;
         print.cups.service)
             REC_CAUSE="Служба CUPS не активна либо её состояние не определено."
             REC_IMPACT="Локальная и сетевая печать через CUPS будет недоступна."
             REC_CHECK="Проверить systemd state и полный журнал CUPS текущей загрузки."
-            REC_ACTION="Устранить первую ошибку конфигурации/backend, затем перезапустить CUPS."
-            REC_COMMAND="systemctl status cups --no-pager -l|journalctl -u cups -b --no-pager | tail -150|cupsctl"
+            REC_ACTION="Устранить первую ошибку конфигурации/backend, затем при необходимости перезапустить CUPS. Перезапуск прерывает текущую обработку заданий и выполняется только после просмотра журнала."
+            REC_COMMAND="systemctl status cups --no-pager -l|journalctl -u cups -b --no-pager | tail -150|cupsctl|sudo systemctl restart cups"
             ;;
         print.scheduler)
             REC_CAUSE="CUPS scheduler не отвечает на lpstat."
             REC_IMPACT="Очереди и задания печати не могут обслуживаться корректно."
             REC_CHECK="Сопоставить состояние cups.service, scheduler и журнал."
-            REC_ACTION="Восстановить работу scheduler после устранения причины службы/конфигурации."
-            REC_COMMAND="lpstat -r|systemctl status cups --no-pager -l|journalctl -u cups -b --no-pager | tail -150"
+            REC_ACTION="Восстановить работу scheduler после устранения причины службы/конфигурации. Перезапускать CUPS только после фиксации ошибки в журнале."
+            REC_COMMAND="lpstat -r|systemctl status cups --no-pager -l|journalctl -u cups -b --no-pager | tail -150|sudo systemctl restart cups"
             ;;
         print.queues)
             REC_CAUSE="Обнаружены paused/disabled/stopped очереди. Причиной могут быть backend, аутентификация, недоступный принтер или ручная приостановка."
             REC_IMPACT="Задания будут накапливаться или не попадут на устройство печати."
-            REC_CHECK="Получить состояние каждой очереди, причины остановки, backend URI и незавершённые задания."
-            REC_ACTION="Исправить первичную причину. Возобновлять очередь только после проверки backend/устройства."
-            REC_COMMAND="lpstat -a -p -d -v|lpstat -W not-completed -o|journalctl -u cups -b --no-pager | tail -150|cupsenable QUEUE_NAME|cupsaccept QUEUE_NAME"
+            REC_CHECK="Получить сводное состояние CUPS, подробную очередь конкретного принтера, причины остановки, backend URI и незавершённые задания."
+            REC_ACTION="Исправить первичную причину. Возобновлять очередь и отправлять пробную страницу только после проверки backend, устройства и расходных материалов. Для очистки одной очереди использовать cancel -a QUEUE_NAME."
+            REC_COMMAND="lpstat -t|lpq -P QUEUE_NAME -l|journalctl -u cups -b --no-pager | tail -150|cupsenable QUEUE_NAME|cupsaccept QUEUE_NAME|cancel -a QUEUE_NAME|lpr -P QUEUE_NAME /usr/share/cups/data/testprint"
             ;;
         print.jobs)
             REC_CAUSE="В очередях накопилось много незавершённых заданий. Возможны остановленная очередь, недоступный backend или проблемное задание."
             REC_IMPACT="Новые задания задерживаются; spool может расти."
-            REC_CHECK="Определить очередь и самое старое/проблемное задание, затем проверить состояние принтера и backend."
-            REC_ACTION="Устранить причину очереди. Удалять задания только осознанно после согласования, чтобы не потерять пользовательскую печать."
-            REC_COMMAND="lpstat -W not-completed -o|lpstat -p -v|du -sh /var/spool/cups 2>/dev/null|cancel JOB_ID"
+            REC_CHECK="Определить очередь и самое старое/проблемное задание, затем проверить состояние принтера и backend. lpq -a -l показывает подробности по всем очередям."
+            REC_ACTION="Устранить причину очереди. Отменять одно задание, одну очередь или все очереди только осознанно после согласования, чтобы не потерять пользовательскую печать. Не удалять /var/spool/cups/* вручную."
+            REC_COMMAND="lpstat -W not-completed -o|lpq -a -l|lpstat -p -v|du -sh /var/spool/cups 2>/dev/null|cancel JOB_ID|cancel -a QUEUE_NAME|cancel -a"
             ;;
         print.lpstat)
             REC_CAUSE="Утилита lpstat отсутствует, поэтому состояние очередей CUPS не проверено."
@@ -367,11 +521,11 @@ recommendation_for() {
             REC_COMMAND="command -v lpstat|rpm -q cups-client|dnf provides '/usr/bin/lpstat'"
             ;;
         print.journal)
-            REC_CAUSE="В журнале CUPS много warning/error за текущую загрузку либо журнал недоступен."
+            REC_CAUSE="В журнале CUPS есть warning/error за текущую загрузку либо журнал недоступен."
             REC_IMPACT="Могут присутствовать повторяющиеся ошибки backend, фильтра, аутентификации или устройства."
-            REC_CHECK="Посмотреть не только количество, но и уникальные последние сообщения с Job/Printer context."
-            REC_ACTION="Устранять наиболее раннюю повторяющуюся первичную ошибку; не ориентироваться только на число записей."
-            REC_COMMAND="journalctl -u cups -b -p warning..alert --no-pager | tail -150|journalctl -u cups -b --no-pager | grep -Ei 'job|printer|backend|filter|auth|error|failed' | tail -150"
+            REC_CHECK="Посмотреть не только количество, но и уникальные последние сообщения с Job/Printer context; сопоставить их со сводкой CUPS и подробностями очередей."
+            REC_ACTION="Устранять причину по тексту журнала: backend/связь, аутентификация или фильтр печати. Для одной очереди использовать cancel -a QUEUE_NAME, для всех — cancel -a. Очистка не исправляет причину ошибки и не очищает очередь Windows print-server. Не удалять /var/spool/cups/* вручную."
+            REC_COMMAND="journalctl -u cups -b -p warning..alert --no-pager | tail -150|journalctl -u cups -b --no-pager | grep -Ei 'job|printer|backend|filter|auth|error|failed' | tail -150|lpstat -t|lpq -a -l|cancel -a QUEUE_NAME|cancel -a"
             ;;
         software.rpm)
             REC_CAUSE="RPM inventory недоступна, потому что rpm не найден."
@@ -437,16 +591,26 @@ pad_right() {
     ((len<width)) && printf '%*s' "$((width-len))" ''
 }
 
+# Conservative byte bound: short printable text cannot wrap in fold. Keep fold
+# for long/multiline/control text so legacy wrapping and locale behavior survive.
+_report_fits() {
+    local LC_ALL=C
+    [[ $1 != *[[:cntrl:]]* && ${#1} -le $2 ]]
+}
+
 print_check_row() {
     local label=$1 status=$2 value=$3 total label_w=31 status_w=9 gap=2 value_w i max
     local -a label_lines=() value_lines=()
-    total=$(report_width)
+    total=${REPORT_WIDTH:-}
+    [[ -n $total ]] || total=$(report_width)
     ((total<96)) && label_w=27
     value_w=$((total-label_w-status_w-(gap*2)))
     ((value_w<24)) && value_w=24
 
-    mapfile -t label_lines < <(printf '%s\n' "$label" | fold -s -w "$label_w")
-    mapfile -t value_lines < <(printf '%s\n' "$value" | fold -s -w "$value_w")
+    if _report_fits "$label" "$label_w"; then label_lines=("$label")
+    else mapfile -t label_lines < <(printf '%s\n' "$label" | fold -s -w "$label_w"); fi
+    if _report_fits "$value" "$value_w"; then value_lines=("$value")
+    else mapfile -t value_lines < <(printf '%s\n' "$value" | fold -s -w "$value_w"); fi
     ((${#label_lines[@]})) || label_lines=("")
     ((${#value_lines[@]})) || value_lines=("")
     max=${#label_lines[@]}; ((${#value_lines[@]}>max)) && max=${#value_lines[@]}
@@ -454,22 +618,26 @@ print_check_row() {
     for ((i=0; i<max; i++)); do
         local l=${label_lines[i]:-} s='' v=${value_lines[i]:-}
         ((i==0)) && s=$status
-        printf '%s%*s%s%*s%s\n' \
-            "$(pad_right "$l" "$label_w")" "$gap" '' \
-            "$(pad_right "$s" "$status_w")" "$gap" '' "$v"
+        pad_right "$l" "$label_w"
+        printf '%*s' "$gap" ''
+        pad_right "$s" "$status_w"
+        printf '%*s%s\n' "$gap" '' "$v"
     done
 }
 
 print_rec_field() {
     local label=$1 text=$2 total label_w=23 indent=3 gap=1 value_w i=0 line
-    total=$(report_width)
+    total=${REPORT_WIDTH:-}
+    [[ -n $total ]] || total=$(report_width)
     value_w=$((total-indent-label_w-gap))
     ((value_w<32)) && value_w=32
     while IFS= read -r line || [[ -n $line ]]; do
         if ((i==0)); then
-            printf '%*s%s %s\n' "$indent" '' "$(pad_right "$label" "$label_w")" "$line"
+            printf '%*s' "$indent" ''
+            pad_right "$label" "$label_w"
+            printf ' %s\n' "$line"
         else
-            printf '%*s%s %s\n' "$indent" '' "$(pad_right '' "$label_w")" "$line"
+            printf '%*s %s\n' "$((indent+label_w))" '' "$line"
         fi
         i=$((i+1))
     done < <(printf '%s\n' "$text" | fold -s -w "$value_w")
@@ -509,13 +677,14 @@ command_description() {
         nmcli\ -f\ NAME,UUID,TYPE\ connection\ show*) desc="покажет сохранённые NetworkManager-профили, чтобы выбрать нужный PROFILE_NAME" ;;
         nmcli\ connection\ show*) desc="покажет параметры выбранного NetworkManager-профиля; фильтр оставляет только 802.1X-поля" ;;
         nmcli*) desc="покажет состояние сетевых устройств и профилей NetworkManager" ;;
+        openssl\ s_client*) desc="выполнит TLS/STARTTLS handshake без входа в почтовый ящик и покажет цепочку/ошибки проверки сертификата" ;;
         openssl\ x509*) desc="прочитает X.509-сертификат и покажет Subject, Issuer, начало и окончание срока действия; для DER добавьте -inform DER" ;;
         getent*) desc="проверит разрешение имени через системные NSS/DNS-настройки" ;;
         ip\ -br\ link*) desc="покажет краткое состояние сетевых интерфейсов и link" ;;
         ip\ -br\ addr*) desc="покажет краткий список адресов сетевых интерфейсов" ;;
         ip\ -4\ route*) desc="покажет IPv4-маршруты и маршрут по умолчанию" ;;
         ip\ route\ get*) desc="покажет, через какой интерфейс и шлюз система пойдёт к указанному IP" ;;
-        timeout*nc*) desc="проверит установление TCP-соединения с указанным DC/портом и ограничит ожидание 5 секундами" ;;
+        timeout*nc*) desc="проверит установление TCP-соединения с указанным узлом/портом и ограничит ожидание 5 секундами" ;;
         findmnt\ -n\ -l\ -t\ cifs\ -o\ TARGET*) desc="покажет локальные TARGET CIFS; arm_info дополнительно выполняет полный readdir и metadata lookup с таймаутом в пользовательском контексте для multiuser" ;;
         findmnt\ -t\ cifs*) desc="покажет активные CIFS-точки монтирования, источник и параметры mount" ;;
         timeout*stat*) desc="проверит доступность конкретной точки монтирования без длительного зависания" ;;
@@ -524,10 +693,16 @@ command_description() {
         find\ /run/user*) desc="покажет пользовательские GVFS-точки монтирования" ;;
         lpstat\ -r*) desc="проверит, отвечает ли CUPS scheduler" ;;
         lpstat*) desc="покажет состояние очередей/приёма заданий, задания, default printer и backend CUPS" ;;
+        lpq\ -P*) desc="покажет подробное состояние заданий выбранной очереди" ;;
+        lpq*) desc="покажет подробное состояние заданий во всех доступных очередях" ;;
         cupsctl*) desc="покажет текущие параметры сервера CUPS" ;;
         cupsenable*) desc="возобновит указанную очередь после устранения первичной причины" ;;
         cupsaccept*) desc="разрешит указанной очереди принимать новые задания" ;;
+        cancel\ -a) desc="удалит все доступные для отмены задания во всех очередях выбранного CUPS-сервера; для чужих заданий нужны права администратора; очередь Windows не очищает" ;;
+        cancel\ -a\ *) desc="удалит все доступные для отмены задания только из указанной очереди; для чужих заданий нужны права администратора" ;;
         cancel*) desc="отменит указанное задание печати; выполнять только после подтверждения, что задание можно удалить" ;;
+        lpr\ -P*) desc="создаст пробное задание в указанной очереди из штатной тестовой страницы CUPS; выполнять только когда принтер готов" ;;
+        sudo\ systemctl\ restart\ cups*) desc="перезапустит CUPS; выполнять после фиксации и устранения первичной ошибки, учитывая текущие задания" ;;
         du\ -sh\ /var/spool/cups*) desc="покажет объём диска, занятый spool CUPS" ;;
         command\ -v*) desc="проверит наличие указанной утилиты в PATH" ;;
         rpm\ -q\ cups-client*) desc="проверит, установлен ли пакет cups-client, обычно содержащий lpstat" ;;
@@ -538,11 +713,11 @@ command_description() {
         *) desc="выполнит диагностическую проверку, связанную с указанной рекомендацией" ;;
     esac
 
-    if [[ $cmd =~ (DOMAIN_FQDN|DC_FQDN|DC_IP|USER_NAME|PROFILE_NAME|CERT_PATH|QUEUE_NAME|JOB_ID|PARENT_PID|UNIT_NAME|DEVICE_PATH|MD_DEVICE|IFACE_NAME) ]]; then
+    if [[ $cmd =~ (DOMAIN_FQDN|DC_FQDN|DC_IP|USER_NAME|PROFILE_NAME|CERT_PATH|QUEUE_NAME|JOB_ID|PARENT_PID|UNIT_NAME|DEVICE_PATH|MD_DEVICE|IFACE_NAME|MAIL_HOST|MAIL_PORT|MAIL_IP|MAIL_PROTOCOL|MAIL_DOMAIN) ]]; then
         desc="$desc Перед выполнением замените служебный маркер на фактическое значение из отчёта/системы."
     fi
     case "$cmd" in
-        cupsenable*|cupsaccept*|cancel*|dnf\ install*) desc="ИЗМЕНЯЕТ СОСТОЯНИЕ: $desc" ;;
+        cupsenable*|cupsaccept*|cancel*|lpr\ -P*|sudo\ systemctl\ restart\ cups*|dnf\ install*) desc="ИЗМЕНЯЕТ СОСТОЯНИЕ: $desc" ;;
     esac
     printf '%s' "$desc"
 }
@@ -631,17 +806,156 @@ _srv_records() {
     fi
 }
 
+_srv_targets() {
+    # SRV target "." means that the service is unavailable, not a DC.
+    awk 'NF == 4 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ && $4 != "." {
+        host=tolower($4); sub(/\.$/, "", host)
+        if (host ~ /^[a-z0-9_][a-z0-9_.-]*$/) print host
+    }' | sort -u
+}
+
 _tcp_ok() {
-    local host=$1 port=$2
+    local host=$1 port=$2 seconds=${3:-${ARM_INFO_DC_PROBE_TIMEOUT:-3}}
     host=${host%.}
-    if have nc; then run_timeout 3 nc -z "$host" "$port" >/dev/null 2>&1
-    elif have timeout; then timeout 3 bash -c "</dev/null >/dev/tcp/$host/$port" >/dev/null 2>&1
-    else return 2
+    if have nc; then _arm_run_limited "$seconds" nc -z "$host" "$port" >/dev/null 2>&1
+    else _arm_run_limited "$seconds" bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$host" "$port" >/dev/null 2>&1
+    fi
+}
+
+_dc_probe_one() {
+    local target=$1 port=$2 seconds=$3 result=$4 rc=0
+    _tcp_ok "$target" "$port" "$seconds" || rc=$?
+    printf '%s\n' "$rc" >"$result"
+}
+
+# Probe every discovered endpoint with bounded concurrency. Result files keep
+# collection order deterministic even though probes finish out of order.
+_dc_probe_targets() {
+    local targets=$1 result_dir=$2 total next=0 active=0 target port index
+    local jobs=${ARM_INFO_DC_JOBS:-4} probe_timeout=${ARM_INFO_DC_PROBE_TIMEOUT:-3}
+    local -a target_list=() pids=()
+    while IFS= read -r target; do
+        [[ -n $target ]] && target_list+=("$target")
+    done <<<"$targets"
+    total=$((${#target_list[@]}*2))
+    while ((next<total || active>0)); do
+        while ((next<total && active<jobs)); do
+            index=$((next/2)); target=${target_list[index]}
+            if ((next%2==0)); then port=88; else port=389; fi
+            if ! network_probe_limit "$probe_timeout"; then
+                while ((next<total)); do
+                    index=$((next/2))
+                    if ((next%2==0)); then port=88; else port=389; fi
+                    printf '126\n' >"$result_dir/$((index+1)).$port"
+                    next=$((next+1))
+                done
+                break
+            fi
+            _dc_probe_one "$target" "$port" "$NETWORK_PROBE_LIMIT" \
+              "$result_dir/$((index+1)).$port" &
+            pids+=("$!")
+            active=$((active+1)); next=$((next+1))
+        done
+        if ((active>0)); then
+            wait "${pids[0]}" 2>/dev/null || true
+            pids=("${pids[@]:1}")
+            active=$((active-1))
+        fi
+    done
+}
+
+# Stage 3 collector contract: discovery/probing populates a normalized snapshot;
+# report checks only interpret that snapshot. This keeps every discovered DC in
+# the output even when probing is unavailable or the common time budget expires.
+DC_LDAP_SRV=''
+DC_KRB_SRV=''
+DC_AD_SRV=''
+DC_TARGETS=()
+DC_KRB_RESULTS=()
+DC_LDAP_RESULTS=()
+
+collect_domain_controller_inventory() {
+    local domain=$1 target result_dir='' index=0 rc
+    DC_LDAP_SRV=''; DC_KRB_SRV=''; DC_AD_SRV=''
+    DC_TARGETS=(); DC_KRB_RESULTS=(); DC_LDAP_RESULTS=()
+    [[ -n $domain ]] || return 0
+
+    DC_LDAP_SRV=$(_srv_records "_ldap._tcp.$domain")
+    DC_KRB_SRV=$(_srv_records "_kerberos._tcp.$domain")
+    DC_AD_SRV=$(_srv_records "_ldap._tcp.dc._msdcs.$domain")
+    while IFS= read -r target; do
+        [[ -n $target ]] && DC_TARGETS+=("$target")
+    done < <(printf '%s\n' "$DC_LDAP_SRV" "$DC_KRB_SRV" "$DC_AD_SRV" | _srv_targets)
+
+    result_dir=$(mktemp -d 2>/dev/null || true)
+    if [[ -n $result_dir ]]; then
+        _dc_probe_targets "$(printf '%s\n' "${DC_TARGETS[@]}")" "$result_dir"
+    fi
+    for target in "${DC_TARGETS[@]}"; do
+        index=$((index+1))
+        rc=125
+        [[ -n $result_dir && -r $result_dir/$index.88 ]] && read -r rc <"$result_dir/$index.88"
+        DC_KRB_RESULTS+=("$rc")
+        rc=125
+        [[ -n $result_dir && -r $result_dir/$index.389 ]] && read -r rc <"$result_dir/$index.389"
+        DC_LDAP_RESULTS+=("$rc")
+    done
+    [[ -n $result_dir ]] && rm -rf -- "$result_dir"
+}
+
+emit_domain_controller_checks() {
+    local section=$1 ldap_count krb_count index target krb_rc ldap_rc port
+    local reachable=0 tested=0 untested=0 budget_skipped=0
+    local dc_sev dc_display krb_text ldap_text rc
+
+    ldap_count=$(grep -c . <<<"$DC_LDAP_SRV" 2>/dev/null || true)
+    krb_count=$(grep -c . <<<"$DC_KRB_SRV" 2>/dev/null || true)
+    if ((ldap_count>0)); then add_check "$section" "dns.srv.ldap" "LDAP SRV" "$ldap_count записей" ok
+    else add_check "$section" "dns.srv.ldap" "LDAP SRV" "не найден" warn; fi
+    if ((krb_count>0)); then add_check "$section" "dns.srv.kerberos" "Kerberos SRV" "$krb_count записей" ok
+    else add_check "$section" "dns.srv.kerberos" "Kerberos SRV" "не найден" warn; fi
+
+    add_check "$section" "domain.dc.discovery" "Контроллеров по DNS" "${#DC_TARGETS[@]}" info \
+      "Все уникальные узлы из LDAP, Kerberos и AD DC SRV; это обнаруженные узлы, а не список активных соединений АРМ."
+    for index in "${!DC_TARGETS[@]}"; do
+        target=${DC_TARGETS[index]}
+        krb_rc=${DC_KRB_RESULTS[index]:-125}
+        ldap_rc=${DC_LDAP_RESULTS[index]:-125}
+        for port in "$krb_rc" "$ldap_rc"; do
+            if ((port==2 || port==125 || port==126)); then
+                untested=$((untested+1)); ((port==126)) && budget_skipped=$((budget_skipped+1))
+            else
+                tested=$((tested+1)); ((port==0)) && reachable=$((reachable+1))
+            fi
+        done
+        case $krb_rc in 0) krb_text='доступен';; 126) krb_text='не проверен (лимит времени)';; 2|125) krb_text='не проверен';; *) krb_text='недоступен';; esac
+        case $ldap_rc in 0) ldap_text='доступен';; 126) ldap_text='не проверен (лимит времени)';; 2|125) ldap_text='не проверен';; *) ldap_text='недоступен';; esac
+        if ((krb_rc==2 || krb_rc==125 || krb_rc==126 || ldap_rc==2 || ldap_rc==125 || ldap_rc==126)); then
+            dc_sev=unknown
+        elif ((krb_rc==0 && ldap_rc==0)); then
+            dc_sev=ok
+        elif ((krb_rc==0 || ldap_rc==0)); then
+            dc_sev=warn
+        else
+            dc_sev=crit
+        fi
+        if ((PRIVACY)); then dc_display='скрыто'; else dc_display=$target; fi
+        add_check "$section" "domain.dc.node.$((index+1))" "Контроллер #$((index+1))" \
+          "$dc_display — Kerberos 88: $krb_text; LDAP 389: $ldap_text" "$dc_sev"
+    done
+    if ((tested>0)); then
+        if ((reachable==tested)); then rc=ok; elif ((reachable>0)); then rc=warn; else rc=crit; fi
+        ((untested>0)) && rc=unknown
+        add_check "$section" "domain.dc.ports" "KDC/LDAP доступность" \
+          "$reachable из $tested TCP-проверок; не проверены: $untested; лимит времени: $budget_skipped" "$rc"
+    else
+        add_check "$section" "domain.dc.ports" "KDC/LDAP доступность" \
+          "не проверена; лимит времени: $budget_skipped" unknown "Нужны SRV-записи и timeout; либо исчерпан общий бюджет активных сетевых проверок."
     fi
 }
 
 check_dns_common() {
-    local section=${1:-DNS} domain=${2:-} resolv_target manager dns search_domain fqdn rc ldap_srv krb_srv ldap_count krb_count targets target reachable=0 tested=0
+    local section=${1:-DNS} domain=${2:-} resolv_target manager dns search_domain fqdn rc
     resolv_target=$(readlink -f /etc/resolv.conf 2>/dev/null || printf '/etc/resolv.conf')
     case "$resolv_target" in
         *systemd/resolve*) manager="systemd-resolved" ;;
@@ -649,6 +963,8 @@ check_dns_common() {
         *) if have nmcli; then manager="NetworkManager/статический"; else manager="статический/не определён"; fi ;;
     esac
     add_check "$section" "dns.manager" "Управление DNS" "$manager" ok "$resolv_target"
+    add_check "$section" "network.probe.policy" "Лимиты сетевой диагностики" \
+      "общий бюджет: ${ARM_INFO_NETWORK_BUDGET:-30} сек.; TCP DC: ${ARM_INFO_DC_PROBE_TIMEOUT:-3} сек.; параллельно: ${ARM_INFO_DC_JOBS:-4}" info
 
     dns=$(_dns_upstreams)
     if [[ -z $dns ]]; then
@@ -675,26 +991,8 @@ check_dns_common() {
     else add_check "$section" "dns.fqdn" "Разрешение FQDN" "FQDN не определён" warn; fi
 
     if [[ -n $domain ]]; then
-        ldap_srv=$(_srv_records "_ldap._tcp.$domain")
-        krb_srv=$(_srv_records "_kerberos._tcp.$domain")
-        ldap_count=$(grep -c . <<<"$ldap_srv" 2>/dev/null || true); krb_count=$(grep -c . <<<"$krb_srv" 2>/dev/null || true)
-        if ((ldap_count>0)); then add_check "$section" "dns.srv.ldap" "LDAP SRV" "$ldap_count записей" ok; else add_check "$section" "dns.srv.ldap" "LDAP SRV" "не найден" warn; fi
-        if ((krb_count>0)); then add_check "$section" "dns.srv.kerberos" "Kerberos SRV" "$krb_count записей" ok; else add_check "$section" "dns.srv.kerberos" "Kerberos SRV" "не найден" warn; fi
-
-        targets=$(printf '%s\n%s\n' "$ldap_srv" "$krb_srv" | awk 'NF{print $NF}' | sed 's/\.$//' | sort -u | head -n3)
-        while IFS= read -r target; do
-            [[ -n $target ]] || continue
-            for port in 88 389; do
-                if _tcp_ok "$target" "$port"; then reachable=$((reachable+1)); fi
-                tested=$((tested+1))
-            done
-        done <<<"$targets"
-        if ((tested>0)); then
-            if ((reachable==tested)); then rc=ok; elif ((reachable>0)); then rc=warn; else rc=crit; fi
-            add_check "$section" "domain.dc.ports" "KDC/LDAP доступность" "$reachable из $tested TCP-проверок" "$rc"
-        else
-            add_check "$section" "domain.dc.ports" "KDC/LDAP доступность" "не проверена" unknown "Нужны SRV-записи и nc/timeout"
-        fi
+        collect_domain_controller_inventory "$domain"
+        emit_domain_controller_checks "$section"
     else
         add_check "$section" "dns.srv" "Доменные SRV" "домен не определён" unknown
     fi
@@ -714,7 +1012,12 @@ check_domain() {
 
     if have adcli; then
         if [[ -n $d ]]; then run_timeout 10 adcli testjoin -D "$d" >/dev/null 2>&1; else run_timeout 10 adcli testjoin >/dev/null 2>&1; fi
-        case $? in 0) join_state="исправен"; sev=ok;; 124) join_state="тайм-аут проверки"; sev=warn;; *) join_state="ошибка testjoin"; sev=crit;; esac
+        case $? in
+            0) join_state="исправен"; sev=ok ;;
+            124|137) join_state="тайм-аут проверки"; sev=warn ;;
+            125) join_state="не проверен: timeout отсутствует"; sev=unknown ;;
+            *) join_state="ошибка testjoin"; sev=crit ;;
+        esac
         add_check "ДОМЕН / KERBEROS" "domain.join" "AD join" "$join_state" "$sev"
     elif have realm && realm list 2>/dev/null | grep -q '^realm-name:'; then
         add_check "ДОМЕН / KERBEROS" "domain.join" "AD join" "realm настроен, adcli отсутствует" unknown
@@ -770,7 +1073,8 @@ _cifs_desktop_user() {
 
 _cifs_exec_as() {
     local as_user=${1:-}; shift
-    if [[ -n $as_user ]]; then
+    if [[ -n $as_user && $as_user != "$(id -un 2>/dev/null)" && $as_user != "$(id -u)" ]]; then
+        ((EUID==0)) || return 125
         if have runuser; then runuser -u "$as_user" -- "$@"
         elif have sudo; then sudo -n -u "$as_user" -- "$@"
         else return 125
@@ -780,12 +1084,20 @@ _cifs_exec_as() {
     fi
 }
 
+_cifs_run_limited() {
+    local as_user=$1 seconds=$2
+    shift 2
+    have timeout || return 125
+    _cifs_exec_as "$as_user" timeout -k 1 "$seconds" "$@"
+}
+
 _cifs_classify() {
     local rc=$1 err=${2:-}
     case "$rc" in
         0) printf 'OK'; return ;;
         124|137) printf 'TIMEOUT'; return ;;
         125) printf 'INCONCLUSIVE'; return ;;
+        126) printf 'BUDGET'; return ;;
     esac
     case "$err" in
         *'Permission denied'*|*'Operation not permitted'*) printf 'DENIED' ;;
@@ -812,7 +1124,14 @@ _cifs_probe() {
 
     # Этап 1: полностью прочитать список имён в каталоге. В отличие от
     # find -print -quit это не завершается после первого cached dentry.
-    _cifs_exec_as "$as_user" env LC_ALL=C timeout 6 ls -U -A -1 -- "$mnt" >/dev/null 2>"$errfile"
+    if ! network_probe_limit 6; then
+        CIFS_PROBE_RC=126; CIFS_PROBE_STATE=BUDGET
+        CIFS_PROBE_ERR='общий лимит времени активных сетевых проверок исчерпан'
+        rm -f -- "$errfile" "$samplefile"
+        return 0
+    fi
+    _cifs_run_limited "$as_user" "$NETWORK_PROBE_LIMIT" env LC_ALL=C \
+      ls -U -A -1 -- "$mnt/" >/dev/null 2>"$errfile"
     rc=$?
     if ((rc != 0)); then
         CIFS_PROBE_RC=$rc
@@ -825,7 +1144,14 @@ _cifs_probe() {
     # Этап 2: если каталог не пустой, получить метаданные одного элемента.
     # Caja/приложения делают metadata lookup, поэтому простой readdir недостаточен.
     : >"$errfile"
-    _cifs_exec_as "$as_user" env LC_ALL=C timeout 6 find "$mnt" -mindepth 1 -maxdepth 1 -print -quit >"$samplefile" 2>"$errfile"
+    if ! network_probe_limit 6; then
+        CIFS_PROBE_RC=126; CIFS_PROBE_STATE=BUDGET
+        CIFS_PROBE_ERR='общий лимит времени активных сетевых проверок исчерпан'
+        rm -f -- "$errfile" "$samplefile"
+        return 0
+    fi
+    _cifs_run_limited "$as_user" "$NETWORK_PROBE_LIMIT" env LC_ALL=C \
+      find "$mnt" -mindepth 1 -maxdepth 1 -print -quit >"$samplefile" 2>"$errfile"
     rc=$?
     if ((rc != 0)); then
         CIFS_PROBE_RC=$rc
@@ -837,7 +1163,14 @@ _cifs_probe() {
     IFS= read -r sample <"$samplefile" || sample=''
     if [[ -n $sample ]]; then
         : >"$errfile"
-        _cifs_exec_as "$as_user" env LC_ALL=C timeout 6 stat -L -- "$sample" >/dev/null 2>"$errfile"
+        if ! network_probe_limit 6; then
+            CIFS_PROBE_RC=126; CIFS_PROBE_STATE=BUDGET
+            CIFS_PROBE_ERR='общий лимит времени активных сетевых проверок исчерпан'
+            rm -f -- "$errfile" "$samplefile"
+            return 0
+        fi
+        _cifs_run_limited "$as_user" "$NETWORK_PROBE_LIMIT" env LC_ALL=C \
+          stat -L -- "$sample" >/dev/null 2>"$errfile"
         rc=$?
         if ((rc != 0)); then
             CIFS_PROBE_RC=$rc
@@ -862,12 +1195,671 @@ _cifs_state_text() {
         IO) printf 'ошибка I/O' ;;
         MISSING) printf 'точка недоступна' ;;
         INCONCLUSIVE) printf 'не проверен' ;;
+        BUDGET) printf 'не проверен (лимит времени)' ;;
         *) printf 'ошибка' ;;
     esac
 }
 
+_autofs_map_targets() {
+    # Map data is never sourced/evaluated. Executable maps are not run.
+    local map=$1 base=$2
+    [[ -f $map && -r $map && ! -x $map ]] && have python3 || return 2
+    python3 - "$map" "$base" <<'AUTOFS_PY'
+import sys, shlex, posixpath
+path, base = sys.argv[1:]
+incomplete = False
+pending = ''
+try:
+    with open(path, encoding='utf-8') as f:
+        for physical in f:
+            line = pending + physical.rstrip('\n')
+            if line.endswith('\\'):
+                pending = line[:-1] + ' '
+                continue
+            pending = ''
+            try:
+                fields = shlex.split(line, comments=True)
+            except ValueError:
+                incomplete = True
+                continue
+            if not fields:
+                continue
+            if fields[0].startswith('+'):
+                incomplete = True
+                continue
+            if len(fields) >= 2 and fields[1].startswith('-') and 'fstype=cifs' not in fields[1].lstrip('-').split(','):
+                continue
+            if len(fields) != 3 or 'fstype=cifs' not in fields[1].lstrip('-').split(','):
+                incomplete = True
+                continue
+            key, options, source = fields
+            if any(c in key for c in '*?[]$&\n\r\t') or not source.startswith(('://', '//')):
+                incomplete = True
+                continue
+            if base == '/-':
+                valid = key.startswith('/')
+                target = posixpath.normpath(key)
+            else:
+                target = posixpath.normpath(base.rstrip('/') + '/' + key)
+                valid = not key.startswith('/') and target.startswith(base.rstrip('/') + '/')
+            if not valid:
+                incomplete = True
+                continue
+            print(target)
+    if pending:
+        incomplete = True
+except (OSError, UnicodeError):
+    incomplete = True
+sys.exit(2 if incomplete else 0)
+AUTOFS_PY
+}
+
+check_autofs_smb() {
+    local base map targets target mounted rc user state sev detail value idx=0 configured=0
+    local -A seen=()
+    AUTOFS_SMB_LAST_INDEX=${1:-0}
+    have findmnt || return 0
+    user=$(_cifs_desktop_user 2>/dev/null || true)
+    while IFS= read -r base; do
+        [[ -n $base ]] || continue
+        map=$(findmnt -C -n -M "$base" -t autofs -o SOURCE 2>/dev/null | head -n1)
+        [[ $map == /* ]] || continue
+        idx=$((idx+1))
+        targets=$(_autofs_map_targets "$map" "$base")
+        rc=$?
+        if ((rc!=0)); then
+            add_check "SMB / GVFS" "network.autofs.discovery.$idx" "Карта autofs" \
+              "$(mask_domain "$map"): список разобран не полностью" unknown \
+              "Поддерживаются статические CIFS-карты с ключом, параметрами и одним источником; нужны права чтения и python3. Исполняемые карты не запускаются."
+        fi
+        while IFS= read -r target; do
+            [[ -n $target && ${seen[$target]:-} != 1 ]] || continue
+            seen["$target"]=1
+            configured=$((configured+1))
+            mounted=$(findmnt -C -n -M "$target" -t cifs -o TARGET 2>/dev/null)
+            [[ -n $mounted ]] && continue
+            AUTOFS_SMB_LAST_INDEX=$((AUTOFS_SMB_LAST_INDEX+1))
+            state='не смонтирован; доступность не проверена'; sev=info
+            if ((PROBE_AUTOFS)); then
+                if ((EUID==0)) && [[ -z $user ]]; then
+                    state='не проверен: GUI-пользователь не определён'; sev=unknown
+                else
+                    if ((EUID==0)); then _cifs_probe "$target" "$user"
+                    else _cifs_probe "$target" ''; fi
+                    state=$(_cifs_state_text "$CIFS_PROBE_STATE")
+                    case $CIFS_PROBE_STATE in
+                        OK)
+                            mounted=$(findmnt -C -n -M "$target" -t cifs -o TARGET 2>/dev/null)
+                            if [[ -n $mounted ]]; then sev=ok; state='смонтирован по обращению; доступен'
+                            else sev=unknown; state='каталог отвечает, CIFS-монтирование не подтверждено'; fi ;;
+                        INCONCLUSIVE|BUDGET) sev=unknown ;;
+                        *) sev=warn ;;
+                    esac
+                fi
+            fi
+            value="$(mask_domain "$target"); $state"
+            detail="autofs; карта: $(mask_domain "$map")"
+            add_check "SMB / GVFS" "network.autofs.mount.$AUTOFS_SMB_LAST_INDEX" "SMB-ресурс #$AUTOFS_SMB_LAST_INDEX" "$value" "$sev" "$detail"
+        done <<<"$targets"
+    done < <(findmnt -n -l -t autofs -o TARGET 2>/dev/null)
+    if ((configured>0)); then
+        add_check "SMB / GVFS" "network.autofs" "Настроено через autofs" "$configured; уже смонтированные показаны в CIFS" info
+    fi
+}
+
+_gvfs_runtime_dirs() {
+    # Сначала перечисляем runtime-каталоги, не обращаясь к FUSE от root.
+    {
+        printf '%s\n' /run/user/[0-9]*
+        ps -eo uid=,comm= 2>/dev/null | awk '$2 == "caja" || $2 == "gvfsd" || $2 == "gvfsd-smb" {print "/run/user/" $1}'
+    } | sort -u
+}
+
+_gvfs_session_bus() {
+    local uid=$1 runtime=$2 pid address
+    # Старые desktop-сессии могут использовать отдельный abstract socket.
+    # Читается только адрес D-Bus, остальные переменные процесса не выводятся.
+    for pid in $(pgrep -u "$uid" -x 'gvfsd|caja|mate-session|gnome-session' 2>/dev/null); do
+        [[ -r /proc/$pid/environ ]] || continue
+        address=$(tr '\0' '\n' <"/proc/$pid/environ" | sed -n 's/^DBUS_SESSION_BUS_ADDRESS=//p' | head -n1)
+        if [[ $address == unix:* ]]; then printf '%s\n' "$address"; return; fi
+    done
+    if [[ -S $runtime/bus ]]; then printf 'unix:path=%s/bus\n' "$runtime"; return; fi
+    return 1
+}
+
+_smb_resource_key() {
+    local value=$1 host share part decoded='' hex
+    if [[ $value == smb://* ]]; then
+        value=${value#smb://}; host=${value%%/*}; host=${host##*@}
+        share=${value#*/}; share=${share%%/*}
+    elif [[ $value == smb-share:* ]]; then
+        value=${value#smb-share:}; host=''; share=''
+        local -a parts
+        IFS=, read -ra parts <<<"$value"
+        for part in "${parts[@]}"; do
+            case $part in server=*) host=${part#server=};; share=*) share=${part#share=};; esac
+        done
+    else printf '%s' "$value"; return; fi
+    # Decode URI percent escapes without evaluating backslashes or shell text.
+    value=$share
+    while [[ -n $value ]]; do
+        if [[ $value =~ ^%([[:xdigit:]]{2}) ]]; then
+            hex=${BASH_REMATCH[1]}; printf -v part '%b' "\\x$hex"
+            decoded+=$part; value=${value:3}
+        else decoded+=${value:0:1}; value=${value:1}; fi
+    done
+    printf '%s/%s' "${host,,}" "$decoded"
+}
+
+_gvfs_mount_entry() {
+    # Корень gvfsd-fuse обычно содержит mount descriptors вида
+    # smb-share:server=HOST,share=NAME или sftp:host=HOST. В некоторых
+    # окружениях чтение /run/user/UID/gvfs может вернуть содержимое уже
+    # открытой шары. Обычные подпапки нельзя принимать за отдельные mounts.
+    local name=$1 scheme payload
+    [[ -n $name && $name != */* && $name == *:* ]] || return 1
+    scheme=${name%%:*}; payload=${name#*:}
+    [[ $scheme =~ ^[[:alnum:]_.+-]+$ && $payload == *=* ]]
+}
+
+_gio_probe() {
+    local uri=$1 user=$2 runtime=$3 bus=$4 err rc
+    CIFS_PROBE_STATE=INCONCLUSIVE; CIFS_PROBE_RC=125; CIFS_PROBE_ERR=''
+    err=$(mktemp) || return 0
+    if ! network_probe_limit 6; then
+        CIFS_PROBE_RC=126; CIFS_PROBE_STATE=BUDGET
+        CIFS_PROBE_ERR='общий лимит времени активных сетевых проверок исчерпан'
+        rm -f -- "$err"
+        return 0
+    fi
+    _cifs_run_limited "$user" "$NETWORK_PROBE_LIMIT" env LC_ALL=C \
+      XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="$bus" \
+      gio list -a standard::name,standard::type "$uri" >/dev/null 2>"$err"
+    rc=$?
+    CIFS_PROBE_RC=$rc
+    CIFS_PROBE_ERR=$(tr '\n' ' ' <"$err" | cut -c1-240)
+    CIFS_PROBE_STATE=$(_cifs_classify "$rc" "$CIFS_PROBE_ERR")
+    rm -f -- "$err"
+}
+
+check_gvfs() {
+    local smb_index=${1:-0} runtime g uid gvfs_user dir name dirs_file errfile rc
+    local count=0 good=0 bad=0 unknown=0 discovery_unknown=0 session=0
+    local state sev label display detail
+    local bus gio_mounts uri resource_key gio_rc gio_sessions=0
+    local -A seen=()
+    while IFS= read -r runtime; do
+        uid=${runtime##*/}
+        [[ $uid =~ ^[0-9]+$ ]] || continue
+        g=$runtime/gvfs
+        session=$((session+1))
+        gvfs_user=$(id -nu "$uid" 2>/dev/null || true)
+        dirs_file=$(mktemp) || {
+            discovery_unknown=$((discovery_unknown+1))
+            add_check "SMB / GVFS" "network.gvfs.discovery.$session" "Перечисление GVFS" "нет временного файла для списка" unknown
+            continue
+        }
+        errfile=$(mktemp) || {
+            rm -f -- "$dirs_file"; discovery_unknown=$((discovery_unknown+1))
+            add_check "SMB / GVFS" "network.gvfs.discovery.$session" "Перечисление GVFS" "нет временного файла для ошибок" unknown
+            continue
+        }
+        rc=125
+        if [[ -n $gvfs_user ]] && have timeout && have ls; then
+            # ls -U без -l/-F/color перечисляет имена без stat каждого ресурса.
+            # Сломанная шара остаётся в списке. Не использовать find -type d.
+            _cifs_run_limited "$gvfs_user" 6 env LC_ALL=C \
+              ls -U -A -1 --color=never --quoting-style=literal -- "$g" >"$dirs_file" 2>"$errfile"
+            rc=$?
+        fi
+        if ((rc!=0)) && ! grep -Fq 'No such file or directory' "$errfile"; then
+            discovery_unknown=$((discovery_unknown+1))
+            display=$(mask_domain "$gvfs_user (UID $uid)")
+            add_check "SMB / GVFS" "network.gvfs.discovery.$session" "Перечисление GVFS" \
+              "$display; список не получен полностью (rc=$rc)" unknown \
+              "Проверить сессию владельца GVFS; отсутствие списка не означает отсутствие подключений."
+        fi
+        while IFS= read -r name || [[ -n $name ]]; do
+            [[ -n $name ]] || continue
+            _gvfs_mount_entry "$name" || continue
+            dir=$g/$name
+            resource_key="$uid/$(_smb_resource_key "$name")"
+            seen["$resource_key"]=1
+            count=$((count+1))
+            _cifs_probe "$dir" "$gvfs_user"
+            state=$CIFS_PROBE_STATE
+            case $state in
+                OK) good=$((good+1)); sev=ok ;;
+                INCONCLUSIVE|BUDGET) unknown=$((unknown+1)); sev=unknown ;;
+                *) bad=$((bad+1)); sev=warn ;;
+            esac
+            if [[ $name == smb-share:* ]]; then
+                smb_index=$((smb_index+1)); label="SMB-ресурс #$smb_index"
+            else label="GVFS-ресурс #$count"; fi
+            if ((PRIVACY)); then
+                display='ресурс скрыт'
+                detail="контекст: скрыто; GVFS; rc=$CIFS_PROBE_RC"
+            else
+                display=$dir
+                detail="контекст: $gvfs_user; GVFS; rc=$CIFS_PROBE_RC"
+                [[ -n $CIFS_PROBE_ERR ]] && detail+="; $CIFS_PROBE_ERR"
+            fi
+            add_check "SMB / GVFS" "network.gvfs.mount.$count" "$label" \
+              "$display; $(_cifs_state_text "$state")" "$sev" "$detail"
+        done <"$dirs_file"
+
+        bus=$(_gvfs_session_bus "$uid" "$runtime" || true)
+        if [[ -n $bus && -n $gvfs_user ]] && have gio && have timeout; then
+            gio_sessions=$((gio_sessions+1))
+            _cifs_run_limited "$gvfs_user" 6 env LC_ALL=C \
+              XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="$bus" \
+              gio mount -l >"$dirs_file" 2>"$errfile"
+            gio_rc=$?
+            if ((gio_rc!=0)) || [[ -s $errfile ]]; then
+                discovery_unknown=$((discovery_unknown+1))
+                add_check "SMB / GVFS" "network.gvfs.gio.discovery.$session" "Подключения GIO" \
+                  "список сессии не получен (rc=$gio_rc)" unknown
+            fi
+            gio_mounts=$(sed -nE 's/^[[:space:]]*Mount\([0-9]+\):.* -> (smb:\/\/.*)$/\1/p' "$dirs_file")
+            while IFS= read -r uri; do
+                [[ -n $uri ]] || continue
+                resource_key="$uid/$(_smb_resource_key "$uri")"
+                [[ ${seen[$resource_key]:-} == 1 ]] && continue
+                seen["$resource_key"]=1
+                count=$((count+1)); smb_index=$((smb_index+1))
+                _gio_probe "$uri" "$gvfs_user" "$runtime" "$bus"
+                case $CIFS_PROBE_STATE in
+                    OK) good=$((good+1)); sev=ok;;
+                    INCONCLUSIVE|BUDGET) unknown=$((unknown+1)); sev=unknown;;
+                    *) bad=$((bad+1)); sev=warn;;
+                esac
+                if ((PRIVACY)); then display='ресурс скрыт'; detail="GIO; контекст: скрыто; rc=$CIFS_PROBE_RC"
+                else display=$(sanitize_uri "$uri"); detail="GIO; контекст: $gvfs_user; rc=$CIFS_PROBE_RC"; fi
+                add_check "SMB / GVFS" "network.gvfs.mount.$count" "SMB-ресурс #$smb_index" \
+                  "$display; $(_cifs_state_text "$CIFS_PROBE_STATE")" "$sev" "$detail"
+            done <<<"$gio_mounts"
+        elif pgrep -u "$uid" -x 'gvfsd|gvfsd-smb|caja' >/dev/null 2>&1; then
+            discovery_unknown=$((discovery_unknown+1))
+            add_check "SMB / GVFS" "network.gvfs.gio.discovery.$session" "Подключения GIO" \
+              "не проверены: gio или адрес пользовательской D-Bus сессии недоступен" unknown
+        fi
+        rm -f -- "$dirs_file" "$errfile"
+    done < <(_gvfs_runtime_dirs)
+    if ((gio_sessions==0 && discovery_unknown==0)) && pgrep -x 'gvfsd|gvfsd-smb|caja' >/dev/null 2>&1; then
+        discovery_unknown=$((discovery_unknown+1))
+        add_check "SMB / GVFS" "network.gvfs.gio.discovery" "Подключения GIO" \
+          "не проверены: gio или адрес пользовательской D-Bus сессии недоступен" unknown
+    fi
+    if ((count==0 && discovery_unknown==0)); then
+        add_check "SMB / GVFS" "network.gvfs" "GVFS mounts" "нет" info
+    else
+        add_check "SMB / GVFS" "network.gvfs" "GVFS итого" \
+          "$count; доступны: $good; проблемы: $bad; не проверены: $unknown; неполных списков: $discovery_unknown" info
+    fi
+}
+
+# Stage 3 resource model. Collectors only discover normalized resources and
+# their execution context. Probes run afterwards, and rendering is the final
+# step. This is deliberately an in-memory snapshot so the shipped utility
+# remains one standalone Bash file.
+NETRES_KEYS=(); NETRES_KINDS=(); NETRES_ORIGINS=(); NETRES_SOURCES=()
+NETRES_TARGETS=(); NETRES_USERS=(); NETRES_CONTEXTS=(); NETRES_CONFIGURED=()
+NETRES_MOUNTED=(); NETRES_INITIAL_MOUNTED=(); NETRES_PROBES=()
+NETRES_RUNTIMES=(); NETRES_BUSES=(); NETRES_DETAILS=()
+NETRES_STATES=(); NETRES_RCS=(); NETRES_ERRORS=()
+NETRES_DISC_KEYS=(); NETRES_DISC_LABELS=(); NETRES_DISC_VALUES=()
+NETRES_DISC_SEVERITIES=(); NETRES_DISC_DETAILS=()
+declare -A NETRES_INDEX=()
+NETRES_CIFS_DISCOVERY=ok
+NETRES_AUTOFS_CONFIGURED=0
+NETRES_GVFS_DISCOVERY_UNKNOWN=0
+
+network_resource_inventory_reset() {
+    NETRES_KEYS=(); NETRES_KINDS=(); NETRES_ORIGINS=(); NETRES_SOURCES=()
+    NETRES_TARGETS=(); NETRES_USERS=(); NETRES_CONTEXTS=(); NETRES_CONFIGURED=()
+    NETRES_MOUNTED=(); NETRES_INITIAL_MOUNTED=(); NETRES_PROBES=()
+    NETRES_RUNTIMES=(); NETRES_BUSES=(); NETRES_DETAILS=()
+    NETRES_STATES=(); NETRES_RCS=(); NETRES_ERRORS=()
+    NETRES_DISC_KEYS=(); NETRES_DISC_LABELS=(); NETRES_DISC_VALUES=()
+    NETRES_DISC_SEVERITIES=(); NETRES_DISC_DETAILS=()
+    NETRES_INDEX=()
+    NETRES_CIFS_DISCOVERY=ok
+    NETRES_AUTOFS_CONFIGURED=0
+    NETRES_GVFS_DISCOVERY_UNKNOWN=0
+}
+
+network_resource_discovery_issue() {
+    NETRES_DISC_KEYS+=("$1"); NETRES_DISC_LABELS+=("$2"); NETRES_DISC_VALUES+=("$3")
+    NETRES_DISC_SEVERITIES+=("${4:-unknown}"); NETRES_DISC_DETAILS+=("${5:-}")
+}
+
+network_resource_add() {
+    local key=$1 kind=$2 origin=$3 source=$4 target=$5 user=$6 context=$7
+    local configured=$8 mounted=$9 probe=${10} runtime=${11} bus=${12} detail=${13:-}
+    local idx=${NETRES_INDEX[$key]:-} old
+    if [[ -n $idx ]]; then
+        idx=$((idx-1))
+        old=${NETRES_ORIGINS[idx]}
+        [[ ,$old, == *,$origin,* ]] || NETRES_ORIGINS[idx]="${old:+$old,}$origin"
+        [[ -n ${NETRES_SOURCES[idx]} ]] || NETRES_SOURCES[idx]=$source
+        if [[ ${NETRES_PROBES[idx]} == none || (${NETRES_PROBES[idx]} == gio && $probe == path) ]]; then
+            NETRES_PROBES[idx]=$probe; NETRES_TARGETS[idx]=$target
+            NETRES_USERS[idx]=$user; NETRES_CONTEXTS[idx]=$context
+            NETRES_RUNTIMES[idx]=$runtime; NETRES_BUSES[idx]=$bus
+        fi
+        [[ $configured == yes ]] && NETRES_CONFIGURED[idx]=yes
+        [[ $mounted == yes ]] && NETRES_MOUNTED[idx]=yes
+        if [[ -n $detail && ${NETRES_DETAILS[idx]} != *"$detail"* ]]; then
+            NETRES_DETAILS[idx]="${NETRES_DETAILS[idx]:+${NETRES_DETAILS[idx]}; }$detail"
+        fi
+        NETRES_LAST_INDEX=$idx
+        return 0
+    fi
+    idx=${#NETRES_KEYS[@]}
+    NETRES_INDEX[$key]=$((idx+1)); NETRES_LAST_INDEX=$idx
+    NETRES_KEYS+=("$key"); NETRES_KINDS+=("$kind"); NETRES_ORIGINS+=("$origin")
+    NETRES_SOURCES+=("$source"); NETRES_TARGETS+=("$target"); NETRES_USERS+=("$user")
+    NETRES_CONTEXTS+=("$context"); NETRES_CONFIGURED+=("$configured")
+    NETRES_MOUNTED+=("$mounted"); NETRES_INITIAL_MOUNTED+=("$mounted")
+    NETRES_PROBES+=("$probe"); NETRES_RUNTIMES+=("$runtime"); NETRES_BUSES+=("$bus")
+    NETRES_DETAILS+=("$detail"); NETRES_STATES+=(PENDING); NETRES_RCS+=(125); NETRES_ERRORS+=('')
+}
+
+collect_cifs_resources() {
+    local mnt source options multiuser desktop_user user context probe parent candidate
+    local nested_count duplicate is_nested detail
+    local -a cifs_targets=() top_level_targets=()
+    if ! have findmnt; then NETRES_CIFS_DISCOVERY=unknown; return 0; fi
+    desktop_user=$(_cifs_desktop_user 2>/dev/null || true)
+
+    # A single user-visible DFS share can create several nested CIFS mounts for
+    # referrals.  Keep the mount roots as report resources and retain nested
+    # kernel mounts only as diagnostic detail, otherwise every opened DFS
+    # subdirectory is incorrectly displayed as a separate share.
+    while IFS= read -r mnt; do
+        [[ -n $mnt ]] || continue
+        [[ $mnt == / ]] || mnt=${mnt%/}
+        duplicate=0
+        for candidate in "${cifs_targets[@]}"; do
+            [[ $candidate == "$mnt" ]] && { duplicate=1; break; }
+        done
+        ((duplicate==0)) && cifs_targets+=("$mnt")
+    done < <(findmnt -n -l -t cifs -o TARGET 2>/dev/null)
+
+    for candidate in "${cifs_targets[@]}"; do
+        is_nested=0
+        for parent in "${cifs_targets[@]}"; do
+            [[ $candidate == "$parent" ]] && continue
+            if [[ $parent == / || $candidate == "$parent"/* ]]; then
+                is_nested=1
+                break
+            fi
+        done
+        ((is_nested==0)) && top_level_targets+=("$candidate")
+    done
+
+    for mnt in "${top_level_targets[@]}"; do
+        nested_count=0
+        for candidate in "${cifs_targets[@]}"; do
+            [[ $candidate != "$mnt" && $candidate == "$mnt"/* ]] && nested_count=$((nested_count+1))
+        done
+        source=$(findmnt -n -T "$mnt" -o SOURCE 2>/dev/null | head -n1)
+        options=$(findmnt -n -T "$mnt" -o OPTIONS 2>/dev/null | head -n1)
+        multiuser=no; [[ ,$options, == *,multiuser,* ]] && multiuser=yes
+        user=''; context=$(id -un 2>/dev/null || printf 'uid=%s' "$(id -u)"); probe=path
+        if [[ $multiuser == yes && $(id -u) -eq 0 ]]; then
+            if [[ -n $desktop_user ]]; then user=$desktop_user; context=$desktop_user
+            else probe=blocked; context='GUI-пользователь не определён'; fi
+        fi
+        detail="multiuser: $multiuser"
+        ((nested_count>0)) && detail+="; вложенных CIFS/DFS mounts: $nested_count"
+        network_resource_add "path:$mnt" smb cifs "$source" "$mnt" "$user" "$context" \
+          yes yes "$probe" '' '' "$detail"
+    done
+}
+
+collect_autofs_resources() {
+    local base map targets target source rc mounted user context probe idx=0
+    have findmnt || return 0
+    user=$(_cifs_desktop_user 2>/dev/null || true)
+    context=${user:-$(id -un 2>/dev/null || printf 'uid=%s' "$(id -u)")}
+    while IFS= read -r base; do
+        [[ -n $base ]] || continue
+        map=$(findmnt -C -n -M "$base" -t autofs -o SOURCE 2>/dev/null | head -n1)
+        [[ $map == /* ]] || continue
+        idx=$((idx+1)); targets=$(_autofs_map_targets "$map" "$base"); rc=$?
+        if ((rc!=0)); then
+            network_resource_discovery_issue "network.autofs.discovery.$idx" "Карта autofs" \
+              "$(mask_domain "$map"): список разобран не полностью" unknown \
+              "Поддерживаются статические CIFS-карты с ключом, параметрами и одним источником; нужны права чтения и python3. Исполняемые карты не запускаются."
+        fi
+        while IFS= read -r target; do
+            [[ -n $target ]] || continue
+            NETRES_AUTOFS_CONFIGURED=$((NETRES_AUTOFS_CONFIGURED+1))
+            mounted=no
+            [[ -n $(findmnt -C -n -M "$target" -t cifs -o TARGET 2>/dev/null) ]] && mounted=yes
+            probe=none
+            [[ $mounted == yes || $PROBE_AUTOFS -eq 1 ]] && probe=path
+            if [[ $probe == path && $(id -u) -eq 0 && -z $user ]]; then probe=blocked; fi
+            network_resource_add "path:$target" smb autofs "$map" "$target" "$user" "$context" \
+              yes "$mounted" "$probe" '' '' "карта: $map"
+        done <<<"$targets"
+    done < <(findmnt -n -l -t autofs -o TARGET 2>/dev/null)
+}
+
+collect_gvfs_resources() {
+    local runtime g uid user dir name list_file err_file rc session=0 bus gio_rc uri key kind
+    while IFS= read -r runtime; do
+        uid=${runtime##*/}; [[ $uid =~ ^[0-9]+$ ]] || continue
+        g=$runtime/gvfs; session=$((session+1)); user=$(id -nu "$uid" 2>/dev/null || true)
+        list_file=$(mktemp) || {
+            NETRES_GVFS_DISCOVERY_UNKNOWN=$((NETRES_GVFS_DISCOVERY_UNKNOWN+1))
+            network_resource_discovery_issue "network.gvfs.discovery.$session" "Перечисление GVFS" "нет временного файла для списка" unknown
+            continue
+        }
+        err_file=$(mktemp) || {
+            rm -f -- "$list_file"; NETRES_GVFS_DISCOVERY_UNKNOWN=$((NETRES_GVFS_DISCOVERY_UNKNOWN+1))
+            network_resource_discovery_issue "network.gvfs.discovery.$session" "Перечисление GVFS" "нет временного файла для ошибок" unknown
+            continue
+        }
+        rc=125
+        if [[ -n $user ]] && have timeout && have ls; then
+            _cifs_run_limited "$user" 6 env LC_ALL=C ls -U -A -1 --color=never \
+              --quoting-style=literal -- "$g" >"$list_file" 2>"$err_file"
+            rc=$?
+        fi
+        if ((rc!=0)) && ! grep -Fq 'No such file or directory' "$err_file"; then
+            NETRES_GVFS_DISCOVERY_UNKNOWN=$((NETRES_GVFS_DISCOVERY_UNKNOWN+1))
+            network_resource_discovery_issue "network.gvfs.discovery.$session" "Перечисление GVFS" \
+              "$(mask_domain "$user (UID $uid)"); список не получен полностью (rc=$rc)" unknown \
+              "Проверить сессию владельца GVFS; отсутствие списка не означает отсутствие подключений."
+        fi
+        while IFS= read -r name || [[ -n $name ]]; do
+            [[ -n $name ]] || continue
+            _gvfs_mount_entry "$name" || continue
+            dir=$g/$name; key="$uid/$(_smb_resource_key "$name")"
+            if [[ $name == smb-share:* ]]; then kind=smb; else kind=gvfs; fi
+            network_resource_add "gvfs:$key" "$kind" gvfs "$name" "$dir" "$user" "$user" \
+              yes yes path "$runtime" '' 'GVFS'
+        done <"$list_file"
+
+        bus=$(_gvfs_session_bus "$uid" "$runtime" || true)
+        if [[ -n $bus && -n $user ]] && have gio && have timeout; then
+            : >"$list_file"; : >"$err_file"
+            _cifs_run_limited "$user" 6 env LC_ALL=C XDG_RUNTIME_DIR="$runtime" \
+              DBUS_SESSION_BUS_ADDRESS="$bus" gio mount -l >"$list_file" 2>"$err_file"
+            gio_rc=$?
+            if ((gio_rc!=0)) || [[ -s $err_file ]]; then
+                NETRES_GVFS_DISCOVERY_UNKNOWN=$((NETRES_GVFS_DISCOVERY_UNKNOWN+1))
+                network_resource_discovery_issue "network.gvfs.gio.discovery.$session" "Подключения GIO" \
+                  "список сессии не получен (rc=$gio_rc)" unknown
+            fi
+            while IFS= read -r uri; do
+                [[ -n $uri ]] || continue
+                key="$uid/$(_smb_resource_key "$uri")"
+                network_resource_add "gvfs:$key" smb gio "$uri" "$uri" "$user" "$user" \
+                  yes yes gio "$runtime" "$bus" 'GIO'
+            done < <(sed -nE 's/^[[:space:]]*Mount\([0-9]+\):.* -> (smb:\/\/.*)$/\1/p' "$list_file")
+        elif pgrep -u "$uid" -x 'gvfsd|gvfsd-smb|caja' >/dev/null 2>&1; then
+            NETRES_GVFS_DISCOVERY_UNKNOWN=$((NETRES_GVFS_DISCOVERY_UNKNOWN+1))
+            network_resource_discovery_issue "network.gvfs.gio.discovery.$session" "Подключения GIO" \
+              "не проверены: gio или адрес пользовательской D-Bus сессии недоступен" unknown
+        fi
+        rm -f -- "$list_file" "$err_file"
+    done < <(_gvfs_runtime_dirs)
+    if ((session==0)) && pgrep -x 'gvfsd|gvfsd-smb|caja' >/dev/null 2>&1; then
+        NETRES_GVFS_DISCOVERY_UNKNOWN=$((NETRES_GVFS_DISCOVERY_UNKNOWN+1))
+        network_resource_discovery_issue "network.gvfs.gio.discovery" "Подключения GIO" \
+          "не проверены: пользовательская GVFS-сессия недоступна" unknown
+    fi
+}
+
+probe_network_resources() {
+    local i probe state rc err target user origins
+    for i in "${!NETRES_KEYS[@]}"; do
+        probe=${NETRES_PROBES[i]}; target=${NETRES_TARGETS[i]}; user=${NETRES_USERS[i]}
+        origins=${NETRES_ORIGINS[i]}
+        case $probe in
+            none)
+                state=NOT_MOUNTED; rc=0; err=''
+                ;;
+            blocked)
+                state=INCONCLUSIVE; rc=125; err='активный локальный GUI-пользователь не определён'
+                ;;
+            gio)
+                _gio_probe "$target" "$user" "${NETRES_RUNTIMES[i]}" "${NETRES_BUSES[i]}"
+                state=$CIFS_PROBE_STATE; rc=$CIFS_PROBE_RC; err=$CIFS_PROBE_ERR
+                ;;
+            *)
+                _cifs_probe "$target" "$user"
+                state=$CIFS_PROBE_STATE; rc=$CIFS_PROBE_RC; err=$CIFS_PROBE_ERR
+                if [[ ,$origins, == *,autofs,* && ${NETRES_INITIAL_MOUNTED[i]} == no && $state == OK ]]; then
+                    if [[ -n $(findmnt -C -n -M "$target" -t cifs -o TARGET 2>/dev/null) ]]; then
+                        NETRES_MOUNTED[i]=yes
+                    else
+                        state=MOUNT_UNCONFIRMED
+                    fi
+                fi
+                ;;
+        esac
+        NETRES_STATES[i]=$state; NETRES_RCS[i]=$rc; NETRES_ERRORS[i]=$err
+    done
+}
+
+_network_resource_state_text() {
+    case $1 in
+        NOT_MOUNTED) printf 'не смонтирован; доступность не проверена' ;;
+        MOUNT_UNCONFIRMED) printf 'каталог отвечает, CIFS-монтирование не подтверждено' ;;
+        *) _cifs_state_text "$1" ;;
+    esac
+}
+
+_network_resource_severity() {
+    case $1 in
+        OK) printf ok;; NOT_MOUNTED) printf info;; INCONCLUSIVE|BUDGET|MOUNT_UNCONFIRMED) printf unknown;; *) printf warn;;
+    esac
+}
+
+emit_network_resource_checks() {
+    local start=${1:-0} mode=${2:-all} i origins state sev value detail source target
+    local smb_index=$start gvfs_index=0 cifs_count=0 cifs_ok=0 cifs_bad=0 cifs_unknown=0
+    local gvfs_count=0 gvfs_ok=0 gvfs_bad=0 gvfs_unknown=0 autofs_rows=0 label
+
+    for i in "${!NETRES_DISC_KEYS[@]}"; do
+        add_check "SMB / GVFS" "${NETRES_DISC_KEYS[i]}" "${NETRES_DISC_LABELS[i]}" \
+          "${NETRES_DISC_VALUES[i]}" "${NETRES_DISC_SEVERITIES[i]}" "${NETRES_DISC_DETAILS[i]}"
+    done
+
+    # Active CIFS first, preserving the established visual layout and keys.
+    if [[ $mode == all || $mode == cifs ]]; then
+        for i in "${!NETRES_KEYS[@]}"; do
+            origins=${NETRES_ORIGINS[i]}; [[ ,$origins, == *,cifs,* ]] || continue
+            cifs_count=$((cifs_count+1)); smb_index=$((smb_index+1)); state=${NETRES_STATES[i]}; sev=$(_network_resource_severity "$state")
+            case $sev in ok) cifs_ok=$((cifs_ok+1));; unknown) cifs_unknown=$((cifs_unknown+1));; *) cifs_bad=$((cifs_bad+1));; esac
+            if ((PRIVACY)); then
+                source='источник скрыт'; target='TARGET скрыт'; detail='контекст: скрыто'
+            else
+                source=${NETRES_SOURCES[i]:-не определён}; target=${NETRES_TARGETS[i]}
+                detail="контекст: ${NETRES_CONTEXTS[i]}; ${NETRES_DETAILS[i]}"
+            fi
+            [[ -n ${NETRES_ERRORS[i]} && $PRIVACY -eq 0 ]] && detail+="; ${NETRES_ERRORS[i]}"
+            value="$source → $target; $(_network_resource_state_text "$state")"
+            add_check "SMB / GVFS" "network.cifs.mount.$cifs_count" "SMB-ресурс #$smb_index" "$value" "$sev" "$detail"
+        done
+        if [[ $NETRES_CIFS_DISCOVERY == unknown ]]; then add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "findmnt отсутствует" unknown
+        elif ((cifs_count==0)); then add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "нет" info
+        else add_check "SMB / GVFS" "network.cifs" "CIFS итого" "$cifs_count; доступны: $cifs_ok; проблемы: $cifs_bad; не проверены: $cifs_unknown" info; fi
+    fi
+
+    if [[ $mode == all || $mode == autofs ]]; then
+        for i in "${!NETRES_KEYS[@]}"; do
+            origins=${NETRES_ORIGINS[i]}; [[ ,$origins, == *,autofs,* ]] || continue
+            [[ ,$origins, == *,cifs,* ]] && continue
+            # A resource already mounted before collection is represented by the
+            # active CIFS row. Compatibility wrappers therefore do not duplicate it.
+            [[ ${NETRES_INITIAL_MOUNTED[i]} == yes ]] && continue
+            autofs_rows=$((autofs_rows+1)); smb_index=$((smb_index+1)); state=${NETRES_STATES[i]}; sev=$(_network_resource_severity "$state")
+            if ((PRIVACY)); then value="скрыто; $(_network_resource_state_text "$state")"; detail='autofs; карта: скрыто'
+            else value="${NETRES_TARGETS[i]}; $(_network_resource_state_text "$state")"; detail="autofs; ${NETRES_DETAILS[i]}"; fi
+            [[ -n ${NETRES_ERRORS[i]} && $PRIVACY -eq 0 ]] && detail+="; ${NETRES_ERRORS[i]}"
+            add_check "SMB / GVFS" "network.autofs.mount.$smb_index" "SMB-ресурс #$smb_index" "$value" "$sev" "$detail"
+        done
+        if ((NETRES_AUTOFS_CONFIGURED>0)); then
+            add_check "SMB / GVFS" "network.autofs" "Настроено через autofs" "$NETRES_AUTOFS_CONFIGURED; уже смонтированные показаны в CIFS" info
+        fi
+        AUTOFS_SMB_LAST_INDEX=$smb_index
+    fi
+
+    if [[ $mode == all || $mode == gvfs ]]; then
+        for i in "${!NETRES_KEYS[@]}"; do
+            origins=${NETRES_ORIGINS[i]}; [[ ,$origins, == *,gvfs,* || ,$origins, == *,gio,* ]] || continue
+            gvfs_count=$((gvfs_count+1)); state=${NETRES_STATES[i]}; sev=$(_network_resource_severity "$state")
+            case $sev in ok) gvfs_ok=$((gvfs_ok+1));; unknown) gvfs_unknown=$((gvfs_unknown+1));; *) gvfs_bad=$((gvfs_bad+1));; esac
+            if [[ ${NETRES_KINDS[i]} == smb ]]; then smb_index=$((smb_index+1)); label="SMB-ресурс #$smb_index"; else gvfs_index=$((gvfs_index+1)); label="GVFS-ресурс #$gvfs_index"; fi
+            if ((PRIVACY)); then value="ресурс скрыт; $(_network_resource_state_text "$state")"; detail="контекст: скрыто; ${NETRES_ORIGINS[i]}; rc=${NETRES_RCS[i]}"
+            else value="${NETRES_TARGETS[i]}; $(_network_resource_state_text "$state")"; detail="контекст: ${NETRES_CONTEXTS[i]}; ${NETRES_ORIGINS[i]}; rc=${NETRES_RCS[i]}"; fi
+            [[ -n ${NETRES_ERRORS[i]} && $PRIVACY -eq 0 ]] && detail+="; ${NETRES_ERRORS[i]}"
+            add_check "SMB / GVFS" "network.gvfs.mount.$gvfs_count" "$label" "$value" "$sev" "$detail"
+        done
+        if ((gvfs_count==0 && NETRES_GVFS_DISCOVERY_UNKNOWN==0)); then add_check "SMB / GVFS" "network.gvfs" "GVFS mounts" "нет" info
+        else add_check "SMB / GVFS" "network.gvfs" "GVFS итого" "$gvfs_count; доступны: $gvfs_ok; проблемы: $gvfs_bad; не проверены: $gvfs_unknown; неполных списков: $NETRES_GVFS_DISCOVERY_UNKNOWN" info; fi
+    fi
+}
+
+check_network_resources() {
+    network_resource_inventory_reset
+    collect_cifs_resources
+    collect_autofs_resources
+    collect_gvfs_resources
+    probe_network_resources
+    emit_network_resource_checks 0 all
+}
+
+# Cache only within one check_network invocation. Call in the parent shell:
+# command substitution would discard cache updates. Empty values are cached too.
+nm_802_value() {
+    local field=$1 id=$2 key v
+    key="$id|$field"
+    if [[ ${NM_802_CACHE[$key]+present} ]]; then
+        NM_802_VALUE=${NM_802_CACHE[$key]}
+        return 0
+    fi
+    v=$(nmcli -e no -g "$field" connection show uuid "$id" 2>/dev/null | head -n1)
+    # Preserve the compatibility fallback, including empty values, from baseline.
+    if [[ -z $v ]]; then
+        v=$(nmcli -g "$field" connection show uuid "$id" 2>/dev/null | head -n1)
+        v=${v//\\:/:}
+        v=${v//\\\\/\\}
+    fi
+    NM_802_CACHE[$key]=$v
+    NM_802_VALUE=$v
+}
+
 check_network() {
-    local gw ifaces idx=0 row iface ip mac speed duplex link dns_domain cifs_count=0 cifs_ok=0 cifs_bad=0 cifs_unknown=0 mnt gvfs_count=0 gvfs_bad=0 g dir
+    local -A NM_802_CACHE=()
+    local NM_802_VALUE=''
+    local gw ifaces idx=0 row iface ip mac speed duplex link dns_domain cifs_count=0 cifs_ok=0 cifs_bad=0 cifs_unknown=0 mnt
     local cifs_source cifs_options cifs_multiuser cifs_user cifs_context cifs_state cifs_text cifs_detail cifs_sev cifs_source_display cifs_target_display
     local eap_count=0 active_eap_count=0 cert_global_min=-1 cert_unknown=0 cert_seen=0 cert_index=0 system_ca_profiles=0 uuid type eap conn_name
     local cert_spec cert_kind cert_field cert_label certref certpath cert_display cert_start cert_end start_fmt end_fmt end_epoch now days cert_cmd_path sev
@@ -892,33 +1884,23 @@ check_network() {
         done <<<"$ifaces"
     fi
 
-    dns_domain=$(_detect_domain); check_dns_common "DNS" "$dns_domain"
+    # В enterprise DNS уже собран check_domain; повтор создавал одинаковые JSON keys.
+    if [[ $PROFILE != enterprise ]]; then
+        dns_domain=$(_detect_domain); check_dns_common "DNS" "$dns_domain"
+    fi
 
     if have nmcli; then
-        # -g включает terse output; на ряде версий NetworkManager двоеточия в file://
-        # экранируются. Сначала запрашиваем --escape no, затем используем fallback.
-        nm_802_value() {
-            local field=$1 id=$2 v
-            v=$(nmcli -e no -g "$field" connection show uuid "$id" 2>/dev/null | head -n1)
-            if [[ -z $v ]]; then
-                v=$(nmcli -g "$field" connection show uuid "$id" 2>/dev/null | head -n1)
-                v=${v//\\:/:}
-                v=${v//\\\\/\\}
-            fi
-            printf '%s' "$v"
-        }
-
         active_uuid_list=$(nmcli -t -f UUID connection show --active 2>/dev/null || true)
         while IFS=: read -r uuid type; do
             [[ -n $uuid ]] || continue
             case "$type" in ethernet|802-11-wireless|wifi) ;; *) continue;; esac
-            eap=$(nm_802_value 802-1x.eap "$uuid")
-            probe_client=$(nm_802_value 802-1x.client-cert "$uuid")
-            probe_ca=$(nm_802_value 802-1x.ca-cert "$uuid")
-            probe_p2_client=$(nm_802_value 802-1x.phase2-client-cert "$uuid")
-            probe_p2_ca=$(nm_802_value 802-1x.phase2-ca-cert "$uuid")
-            probe_key=$(nm_802_value 802-1x.private-key "$uuid")
-            probe_p2_key=$(nm_802_value 802-1x.phase2-private-key "$uuid")
+            nm_802_value 802-1x.eap "$uuid"; eap=$NM_802_VALUE
+            nm_802_value 802-1x.client-cert "$uuid"; probe_client=$NM_802_VALUE
+            nm_802_value 802-1x.ca-cert "$uuid"; probe_ca=$NM_802_VALUE
+            nm_802_value 802-1x.phase2-client-cert "$uuid"; probe_p2_client=$NM_802_VALUE
+            nm_802_value 802-1x.phase2-ca-cert "$uuid"; probe_p2_ca=$NM_802_VALUE
+            nm_802_value 802-1x.private-key "$uuid"; probe_key=$NM_802_VALUE
+            nm_802_value 802-1x.phase2-private-key "$uuid"; probe_p2_key=$NM_802_VALUE
             [[ -n $eap || -n $probe_client || -n $probe_ca || -n $probe_p2_client || -n $probe_p2_ca || -n $probe_key || -n $probe_p2_key ]] || continue
 
             eap_count=$((eap_count+1))
@@ -927,18 +1909,18 @@ check_network() {
                 profile_state="активен"
                 active_eap_count=$((active_eap_count+1))
             fi
-            conn_name=$(nm_802_value connection.id "$uuid")
+            nm_802_value connection.id "$uuid"; conn_name=$NM_802_VALUE
             if ((PRIVACY)); then conn_name="профиль $eap_count (скрыто)"; fi
             add_check "802.1X" "network.8021x.profile.$eap_count" "Профиль 802.1X #$eap_count" "${conn_name:-$uuid}; $profile_state" info
             add_check "802.1X" "network.8021x.eap.$eap_count" "EAP-метод" "${eap:-не указан}" info
 
-            phase2_auth=$(nm_802_value 802-1x.phase2-auth "$uuid")
-            phase2_autheap=$(nm_802_value 802-1x.phase2-autheap "$uuid")
+            nm_802_value 802-1x.phase2-auth "$uuid"; phase2_auth=$NM_802_VALUE
+            nm_802_value 802-1x.phase2-autheap "$uuid"; phase2_autheap=$NM_802_VALUE
             [[ -n $phase2_auth ]] && add_check "802.1X" "network.8021x.phase2-auth.$eap_count" "Phase2 auth" "$phase2_auth" info
             [[ -n $phase2_autheap ]] && add_check "802.1X" "network.8021x.phase2-autheap.$eap_count" "Phase2 EAP" "$phase2_autheap" info
 
-            system_ca=$(nm_802_value 802-1x.system-ca-certs "$uuid")
-            ca_path=$(nm_802_value 802-1x.ca-path "$uuid")
+            nm_802_value 802-1x.system-ca-certs "$uuid"; system_ca=$NM_802_VALUE
+            nm_802_value 802-1x.ca-path "$uuid"; ca_path=$NM_802_VALUE
             if [[ $system_ca == yes || $system_ca == true || $system_ca == 1 ]]; then
                 system_ca_profiles=$((system_ca_profiles+1))
                 add_check "802.1X" "network.8021x.system-ca.$eap_count" "Системное хранилище CA" "используется" info
@@ -948,10 +1930,10 @@ check_network() {
                 add_check "802.1X" "network.8021x.ca-path.$eap_count" "Каталог CA" "$ca_path" info
             fi
 
-            client_ref=$(nm_802_value 802-1x.client-cert "$uuid")
-            phase2_client_ref=$(nm_802_value 802-1x.phase2-client-cert "$uuid")
-            private_key=$(nm_802_value 802-1x.private-key "$uuid")
-            phase2_private_key=$(nm_802_value 802-1x.phase2-private-key "$uuid")
+            nm_802_value 802-1x.client-cert "$uuid"; client_ref=$NM_802_VALUE
+            nm_802_value 802-1x.phase2-client-cert "$uuid"; phase2_client_ref=$NM_802_VALUE
+            nm_802_value 802-1x.private-key "$uuid"; private_key=$NM_802_VALUE
+            nm_802_value 802-1x.phase2-private-key "$uuid"; phase2_private_key=$NM_802_VALUE
 
             # Проверяем внешний и phase2 наборы сертификатов. Поддерживаются file://,
             # обычные пути, PEM и DER. PKCS#11/blob отображаются, но без интерактивного
@@ -963,7 +1945,7 @@ check_network() {
                 "phase2-ca|802-1x.phase2-ca-cert|Phase2 CA-сертификат"
             do
                 IFS='|' read -r cert_kind cert_field cert_label <<<"$cert_spec"
-                certref=$(nm_802_value "$cert_field" "$uuid")
+                nm_802_value "$cert_field" "$uuid"; certref=$NM_802_VALUE
                 [[ -n $certref ]] || continue
 
                 cert_seen=$((cert_seen+1)); cert_index=$((cert_index+1))
@@ -1123,79 +2105,418 @@ check_network() {
         fi
     fi
 
-    if have findmnt; then
-        cifs_user=$(_cifs_desktop_user 2>/dev/null || true)
-        while IFS= read -r mnt; do
-            [[ -n $mnt ]] || continue
-            cifs_count=$((cifs_count+1))
-            cifs_source=$(findmnt -n -T "$mnt" -o SOURCE 2>/dev/null | head -n1)
-            cifs_options=$(findmnt -n -T "$mnt" -o OPTIONS 2>/dev/null | head -n1)
-            cifs_multiuser=no
-            [[ ,$cifs_options, == *,multiuser,* ]] && cifs_multiuser=yes
-            cifs_context=$(id -un 2>/dev/null || printf 'uid=%s' "$(id -u)")
-
-            if [[ $cifs_multiuser == yes && $(id -u) -eq 0 ]]; then
-                if [[ -n $cifs_user ]]; then
-                    cifs_context=$cifs_user
-                    _cifs_probe "$mnt" "$cifs_user"
-                else
-                    CIFS_PROBE_STATE=INCONCLUSIVE
-                    CIFS_PROBE_RC=125
-                    CIFS_PROBE_ERR='multiuser mount: активный локальный GUI-пользователь не определён'
-                fi
-            else
-                _cifs_probe "$mnt" ''
-            fi
-
-            cifs_state=$CIFS_PROBE_STATE
-            cifs_text=$(_cifs_state_text "$cifs_state")
-            if ((PRIVACY)); then
-                cifs_detail="контекст: скрыто; multiuser: $cifs_multiuser"
-            else
-                cifs_detail="контекст: $cifs_context; multiuser: $cifs_multiuser"
-            fi
-            [[ -n $CIFS_PROBE_ERR ]] && cifs_detail="$cifs_detail; $CIFS_PROBE_ERR"
-            case "$cifs_state" in
-                OK) cifs_ok=$((cifs_ok+1)); cifs_sev=ok ;;
-                INCONCLUSIVE) cifs_unknown=$((cifs_unknown+1)); cifs_sev=unknown ;;
-                *) cifs_bad=$((cifs_bad+1)); cifs_sev=warn ;;
-            esac
-
-            if ((PRIVACY)); then
-                cifs_source_display='источник скрыт'
-                cifs_target_display='TARGET скрыт'
-            else
-                cifs_source_display=${cifs_source:-не определён}
-                cifs_target_display=$mnt
-            fi
-            add_check "SMB / GVFS" "network.cifs.mount.$cifs_count" "SMB-ресурс #$cifs_count" "$cifs_source_display → $cifs_target_display; $cifs_text" "$cifs_sev" "$cifs_detail"
-        done < <(findmnt -n -l -t cifs -o TARGET 2>/dev/null)
-
-        if ((cifs_count==0)); then
-            add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "нет" info
-        else
-            add_check "SMB / GVFS" "network.cifs" "CIFS итого" "$cifs_count; доступны: $cifs_ok; проблемы: $cifs_bad; не проверены: $cifs_unknown" info
-        fi
-    else
-        add_check "SMB / GVFS" "network.cifs" "CIFS mounts" "findmnt отсутствует" unknown
-    fi
-
-    for g in /run/user/*/gvfs; do
-        [[ -d $g ]] || continue
-        while IFS= read -r dir; do
-            [[ -n $dir ]] || continue; gvfs_count=$((gvfs_count+1))
-            if run_timeout 4 stat -f "$dir" >/dev/null 2>&1; then :; else gvfs_bad=$((gvfs_bad+1)); fi
-        done < <(find "$g" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
-    done
-    if ((gvfs_count==0)); then add_check "SMB / GVFS" "network.gvfs" "GVFS mounts" "нет" info
-    elif ((gvfs_bad==0)); then add_check "SMB / GVFS" "network.gvfs" "GVFS mounts" "$gvfs_count, доступны" ok
-    else add_check "SMB / GVFS" "network.gvfs" "GVFS mounts" "$gvfs_count, недоступны/зависли: $gvfs_bad" warn; fi
+    check_network_resources
     proc_caja=$(pgrep -xc caja 2>/dev/null || true); proc_gvfs=$(pgrep -fc 'gvfsd-smb|gvfsd-fuse' 2>/dev/null || true)
     add_check "SMB / GVFS" "network.desktop" "Caja / GVFS процессы" "caja:$proc_caja gvfs:$proc_gvfs" ok
 }
 
+_mail_reset() {
+    MAIL_PROTOCOLS=(); MAIL_HOSTS=(); MAIL_PORTS=(); MAIL_TLS_MODES=()
+    MAIL_SOURCES=(); MAIL_AUTH_HINTS=(); MAIL_DOMAINS=()
+    MAIL_DNS_CACHE_HOSTS=(); MAIL_DNS_CACHE_STATES=(); MAIL_DNS_CACHE_TEXTS=()
+    MAIL_DISCOVERY_INCOMPLETE=0
+    MAIL_DISCOVERY_TRUNCATED=0
+}
+
+_mail_add_domain() {
+    local domain=${1,,} existing
+    domain=${domain%.}
+    [[ $domain =~ ^[a-z0-9][a-z0-9._-]*[a-z0-9]$ ]] || return 1
+    [[ $domain == *.* ]] || return 1
+    for existing in "${MAIL_DOMAINS[@]}"; do [[ $existing == "$domain" ]] && return 0; done
+    if ((${#MAIL_DOMAINS[@]}>=5)); then MAIL_DISCOVERY_TRUNCATED=1; return 0; fi
+    MAIL_DOMAINS+=("$domain")
+}
+
+_mail_add_endpoint() {
+    local protocol=$1 host=${2,,} port=$3 tls=$4 source=$5 auth=${6:-} i
+    host=${host#[}; host=${host%]}; host=${host%.}
+    [[ $protocol == imap || $protocol == smtp ]] || return 1
+    if [[ $host == *:* ]]; then
+        [[ $host =~ ^[0-9a-f:]+$ ]] || return 1
+    else
+        [[ $host =~ ^[a-z0-9][a-z0-9._-]*[a-z0-9]$ || $host =~ ^[a-z0-9]$ ]] || return 1
+    fi
+    [[ $port =~ ^[0-9]+$ ]] && ((port>=1 && port<=65535)) || return 1
+    case $tls in implicit|starttls|plain) ;; *) return 1;; esac
+    for i in "${!MAIL_HOSTS[@]}"; do
+        if [[ ${MAIL_PROTOCOLS[i]} == "$protocol" && ${MAIL_HOSTS[i]} == "$host" && ${MAIL_PORTS[i]} == "$port" ]]; then
+            return 0
+        fi
+    done
+    if ((${#MAIL_HOSTS[@]}>=12)); then MAIL_DISCOVERY_TRUNCATED=1; return 0; fi
+    MAIL_PROTOCOLS+=("$protocol"); MAIL_HOSTS+=("$host"); MAIL_PORTS+=("$port")
+    MAIL_TLS_MODES+=("$tls"); MAIL_SOURCES+=("$source"); MAIL_AUTH_HINTS+=("$auth")
+}
+
+_mail_parse_endpoint_uri() {
+    local spec=$1 source=${2:-явная настройка} scheme rest host port protocol tls
+    spec=$(printf '%s' "$spec" | trim)
+    [[ $spec == *://* && $spec != *'@'* ]] || return 1
+    scheme=${spec%%://*}; rest=${spec#*://}; scheme=${scheme,,}
+    [[ $rest != */* && $rest != *\?* && $rest != *\#* ]] || return 1
+    case $scheme in
+        imaps) protocol=imap; tls=implicit; port=993 ;;
+        imap) protocol=imap; tls=starttls; port=143 ;;
+        smtps) protocol=smtp; tls=implicit; port=465 ;;
+        smtp) protocol=smtp; tls=starttls; port=587 ;;
+        *) return 1 ;;
+    esac
+    if [[ $rest =~ ^\[([0-9a-fA-F:]+)\](:([0-9]+))?$ ]]; then
+        host=${BASH_REMATCH[1]}; [[ -n ${BASH_REMATCH[3]:-} ]] && port=${BASH_REMATCH[3]}
+    elif [[ $rest =~ ^([A-Za-z0-9._-]+)(:([0-9]+))?$ ]]; then
+        host=${BASH_REMATCH[1]}; [[ -n ${BASH_REMATCH[3]:-} ]] && port=${BASH_REMATCH[3]}
+    else
+        return 1
+    fi
+    _mail_add_endpoint "$protocol" "$host" "$port" "$tls" "$source" ""
+}
+
+_mail_auth_label() {
+    case ${1:-} in
+        1) printf 'без аутентификации' ;;
+        3) printf 'пароль' ;;
+        4) printf 'защищённый пароль' ;;
+        5) printf 'GSSAPI/Kerberos' ;;
+        6) printf 'NTLM' ;;
+        10) printf 'OAuth2' ;;
+        "") printf '' ;;
+        *) printf 'метод %s' "$1" ;;
+    esac
+}
+
+_mail_tls_from_profile() {
+    local protocol=$1 port=$2 socket=${3:-}
+    if [[ $port == 993 || $port == 465 || $socket == 3 ]]; then printf 'implicit'
+    elif [[ $socket == 2 || ($protocol == imap && $port == 143) || ($protocol == smtp && $port == 587) ]]; then printf 'starttls'
+    else printf 'plain'; fi
+}
+
+MAIL_PREF_FILES=()
+_mail_collect_pref_files() {
+    local raw path user current desktop record home rows rc existing discovery_deadline remaining
+    local -a users=() homes=()
+    MAIL_PREF_FILES=()
+
+    raw=${ARM_INFO_MAIL_PREFS:-}
+    [[ -n ${MAIL_CONFIG_PREFS:-} ]] && raw="${raw:+$raw:}${MAIL_CONFIG_PREFS}"
+    if [[ -n $raw ]]; then
+        while IFS= read -r path; do
+            path=$(printf '%s' "$path" | trim); [[ -r $path && -f $path ]] || { MAIL_DISCOVERY_INCOMPLETE=1; continue; }
+            MAIL_PREF_FILES+=("$path")
+        done < <(printf '%s\n' "$raw" | tr ':' '\n')
+    fi
+
+    current=$(id -un 2>/dev/null || true)
+    if [[ -n ${SUDO_USER:-} && ${SUDO_USER:-} != root ]]; then users+=("$SUDO_USER"); fi
+    desktop=$(_cifs_desktop_user 2>/dev/null || true); [[ -n $desktop ]] && users+=("$desktop")
+    if [[ $current != root || ${#users[@]} -eq 0 ]]; then [[ -n $current ]] && users+=("$current"); fi
+
+    for user in "${users[@]}"; do
+        [[ $user =~ ^[[:alnum:]_.@-]+$ ]] || continue
+        record=''
+        if have getent; then record=$(_arm_run_limited 2 getent passwd "$user" 2>/dev/null || true)
+        elif [[ -r /etc/passwd ]]; then record=$(awk -F: -v u="$user" '$1==u{print; exit}' /etc/passwd 2>/dev/null); fi
+        home=$(printf '%s\n' "$record" | awk -F: 'NF>=6{print $6; exit}')
+        [[ $home == /* && -d $home ]] || continue
+        for existing in "${homes[@]}"; do [[ $existing == "$home" ]] && home=''; done
+        [[ -n $home ]] && homes+=("$home")
+    done
+
+    discovery_deadline=$((SECONDS+4))
+    for home in "${homes[@]}"; do
+        remaining=$((discovery_deadline-SECONDS))
+        if ((remaining<=0)); then MAIL_DISCOVERY_INCOMPLETE=1; break; fi
+        ((remaining>3)) && remaining=3
+        rows=$(_arm_run_limited "$remaining" find "$home" -xdev -maxdepth 6 -type f -name prefs.js -readable -print 2>/dev/null)
+        rc=$?
+        ((rc==0)) || MAIL_DISCOVERY_INCOMPLETE=1
+        while IFS= read -r path; do
+            [[ -n $path ]] || continue
+            for existing in "${MAIL_PREF_FILES[@]}"; do [[ $existing == "$path" ]] && path=''; done
+            [[ -n $path ]] && MAIL_PREF_FILES+=("$path")
+            if ((${#MAIL_PREF_FILES[@]}>=20)); then MAIL_DISCOVERY_TRUNCATED=1; return; fi
+        done <<<"$rows"
+    done
+}
+
+_mail_pref_clean() {
+    local value=$1
+    value=$(printf '%s' "$value" | trim)
+    if [[ $value == \"*\" ]]; then value=${value#\"}; value=${value%\"}; fi
+    printf '%s' "$value"
+}
+
+_mail_discover_from_prefs() {
+    local file size rows rc kind id field value protocol host port socket tls auth username domain
+    local -A in_host=() in_port=() in_socket=() in_type=() in_auth=() in_user=()
+    local -A out_host=() out_port=() out_socket=() out_auth=() out_user=()
+    _mail_collect_pref_files
+    for file in "${MAIL_PREF_FILES[@]}"; do
+        size=$(stat -c %s -- "$file" 2>/dev/null || printf '0')
+        [[ $size =~ ^[0-9]+$ ]] || size=0
+        if ((size>5242880)); then MAIL_DISCOVERY_INCOMPLETE=1; continue; fi
+        rows=$(_arm_run_limited 2 sed -nE \
+          -e 's/^[[:space:]]*(user_)?pref\("mail\.server\.([^".]+)\.(hostname|port|socketType|type|authMethod|userName)",[[:space:]]*(.*)\);[[:space:]]*$/incoming|\2|\3|\4/p' \
+          -e 's/^[[:space:]]*(user_)?pref\("mail\.smtpserver\.([^".]+)\.(hostname|port|try_ssl|authMethod|username)",[[:space:]]*(.*)\);[[:space:]]*$/smtp|\2|\3|\4/p' \
+          -- "$file" 2>/dev/null)
+        rc=$?
+        ((rc==0)) || { MAIL_DISCOVERY_INCOMPLETE=1; continue; }
+        in_host=(); in_port=(); in_socket=(); in_type=(); in_auth=(); in_user=()
+        out_host=(); out_port=(); out_socket=(); out_auth=(); out_user=()
+        while IFS='|' read -r kind id field value; do
+            [[ $id =~ ^[[:alnum:]_-]+$ ]] || continue
+            value=$(_mail_pref_clean "$value")
+            case "$kind.$field" in
+                incoming.hostname) in_host[$id]=$value ;;
+                incoming.port) in_port[$id]=$value ;;
+                incoming.socketType) in_socket[$id]=$value ;;
+                incoming.type) in_type[$id]=${value,,} ;;
+                incoming.authMethod) in_auth[$id]=$value ;;
+                incoming.userName) in_user[$id]=$value ;;
+                smtp.hostname) out_host[$id]=$value ;;
+                smtp.port) out_port[$id]=$value ;;
+                smtp.try_ssl) out_socket[$id]=$value ;;
+                smtp.authMethod) out_auth[$id]=$value ;;
+                smtp.username) out_user[$id]=$value ;;
+            esac
+        done <<<"$rows"
+
+        while IFS= read -r id; do
+            [[ -n $id && ${in_type[$id]:-} == imap ]] || continue
+            protocol=imap; host=${in_host[$id]:-}; socket=${in_socket[$id]:-}
+            port=${in_port[$id]:-}; [[ $port =~ ^[0-9]+$ ]] || { if [[ $socket == 3 ]]; then port=993; else port=143; fi; }
+            tls=$(_mail_tls_from_profile "$protocol" "$port" "$socket")
+            auth=$(_mail_auth_label "${in_auth[$id]:-}")
+            _mail_add_endpoint "$protocol" "$host" "$port" "$tls" "клиентский профиль" "$auth" || MAIL_DISCOVERY_INCOMPLETE=1
+            username=${in_user[$id]:-}; if [[ $username == *@* ]]; then domain=${username##*@}; _mail_add_domain "$domain" || true; fi
+        done < <(printf '%s\n' "${!in_host[@]}" | LC_ALL=C sort)
+
+        while IFS= read -r id; do
+            [[ -n $id ]] || continue
+            protocol=smtp; host=${out_host[$id]:-}; socket=${out_socket[$id]:-}
+            port=${out_port[$id]:-}; [[ $port =~ ^[0-9]+$ ]] || { if [[ $socket == 3 ]]; then port=465; else port=587; fi; }
+            tls=$(_mail_tls_from_profile "$protocol" "$port" "$socket")
+            auth=$(_mail_auth_label "${out_auth[$id]:-}")
+            _mail_add_endpoint "$protocol" "$host" "$port" "$tls" "клиентский профиль" "$auth" || MAIL_DISCOVERY_INCOMPLETE=1
+            username=${out_user[$id]:-}; if [[ $username == *@* ]]; then domain=${username##*@}; _mail_add_domain "$domain" || true; fi
+        done < <(printf '%s\n' "${!out_host[@]}" | LC_ALL=C sort)
+    done
+}
+
+MAIL_DNS_STATE=UNKNOWN
+MAIL_DNS_TEXT='не проверено'
+_mail_dns_probe() {
+    local host=$1 i output='' rc=125 address
+    for i in "${!MAIL_DNS_CACHE_HOSTS[@]}"; do
+        if [[ ${MAIL_DNS_CACHE_HOSTS[i]} == "$host" ]]; then
+            MAIL_DNS_STATE=${MAIL_DNS_CACHE_STATES[i]}; MAIL_DNS_TEXT=${MAIL_DNS_CACHE_TEXTS[i]}; return
+        fi
+    done
+    if [[ $host =~ ^[0-9]+(\.[0-9]+){3}$ || $host == *:* ]]; then
+        MAIL_DNS_STATE=OK; MAIL_DNS_TEXT='задан IP-адрес'
+    elif ! network_probe_limit 3; then
+        MAIL_DNS_STATE=BUDGET; MAIL_DNS_TEXT='не проверено: общий лимит времени'
+    elif have getent; then
+        output=$(_arm_run_limited "$NETWORK_PROBE_LIMIT" getent ahosts "$host" 2>/dev/null); rc=$?
+        address=$(printf '%s\n' "$output" | awk 'NF{print $1; exit}')
+        if ((rc==0)) && [[ -n $address ]]; then MAIL_DNS_STATE=OK; MAIL_DNS_TEXT="разрешается: $address"
+        elif ((rc==124 || rc==137)); then MAIL_DNS_STATE=FAIL; MAIL_DNS_TEXT='тайм-аут DNS'
+        elif ((rc==125)); then MAIL_DNS_STATE=UNKNOWN; MAIL_DNS_TEXT='не проверено: timeout отсутствует'
+        else MAIL_DNS_STATE=FAIL; MAIL_DNS_TEXT='имя не разрешается'; fi
+    elif have dig; then
+        output=$(_arm_run_limited "$NETWORK_PROBE_LIMIT" dig +time=2 +tries=1 +short "$host" A 2>/dev/null); rc=$?
+        address=$(printf '%s\n' "$output" | awk 'NF{print $1; exit}')
+        if ((rc==0)) && [[ -n $address ]]; then MAIL_DNS_STATE=OK; MAIL_DNS_TEXT="разрешается: $address"
+        elif ((rc==125)); then MAIL_DNS_STATE=UNKNOWN; MAIL_DNS_TEXT='не проверено: timeout отсутствует'
+        else MAIL_DNS_STATE=FAIL; MAIL_DNS_TEXT='имя не разрешается'; fi
+    else
+        MAIL_DNS_STATE=UNKNOWN; MAIL_DNS_TEXT='getent/dig отсутствуют'
+    fi
+    MAIL_DNS_CACHE_HOSTS+=("$host"); MAIL_DNS_CACHE_STATES+=("$MAIL_DNS_STATE"); MAIL_DNS_CACHE_TEXTS+=("$MAIL_DNS_TEXT")
+}
+
+MAIL_RECORD_STATE=UNKNOWN
+MAIL_RECORD_TEXT='не проверено'
+_mail_query_record() {
+    local name=$1 type=$2 output='' rc=125 count
+    if ! network_probe_limit 3; then MAIL_RECORD_STATE=BUDGET; MAIL_RECORD_TEXT='не проверено: общий лимит времени'; return; fi
+    if have dig; then
+        output=$(_arm_run_limited "$NETWORK_PROBE_LIMIT" dig +time=2 +tries=1 +short "$name" "$type" 2>/dev/null); rc=$?
+    elif have host; then
+        output=$(_arm_run_limited "$NETWORK_PROBE_LIMIT" host -W 2 -t "$type" "$name" 2>/dev/null); rc=$?
+    else
+        MAIL_RECORD_STATE=UNKNOWN; MAIL_RECORD_TEXT='dig/host отсутствуют'; return
+    fi
+    if ((rc==125)); then MAIL_RECORD_STATE=UNKNOWN; MAIL_RECORD_TEXT='не проверено: timeout отсутствует'; return; fi
+    if ((rc!=0)); then MAIL_RECORD_STATE=UNKNOWN; MAIL_RECORD_TEXT='DNS-запрос не выполнен'; return; fi
+    count=$(grep -c . <<<"$output" 2>/dev/null || true)
+    if ((count==0)); then MAIL_RECORD_STATE=EMPTY; MAIL_RECORD_TEXT='не обнаружены'
+    elif ((PRIVACY)); then MAIL_RECORD_STATE=OK; MAIL_RECORD_TEXT="обнаружено записей: $count"
+    else MAIL_RECORD_STATE=OK; MAIL_RECORD_TEXT=$(printf '%s\n' "$output" | head -n5 | paste -sd';' - | cut -c1-360); fi
+}
+
+MAIL_TLS_STATE=UNKNOWN
+MAIL_TLS_TEXT='не проверено'
+MAIL_TLS_DETAIL=''
+MAIL_TLS_AUTH='не определены'
+_mail_tls_probe() {
+    local protocol=$1 host=$2 port=$3 mode=$4 auth_hint=${5:-} target payload output='' rc=125 help cert meta end_raw end_epoch now days subject issuer advertised verify_supported=0 verify_ok=0
+    local -a args=()
+    MAIL_TLS_STATE=UNKNOWN; MAIL_TLS_TEXT='не проверено'; MAIL_TLS_DETAIL=''; MAIL_TLS_AUTH='не определены'
+    if [[ $mode == plain ]]; then
+        MAIL_TLS_STATE=INSECURE; MAIL_TLS_TEXT='TLS отключён в клиентском профиле'; MAIL_TLS_AUTH=${auth_hint:-не определены}; return
+    fi
+    if ! have openssl; then MAIL_TLS_TEXT='openssl отсутствует'; return; fi
+    if ! network_probe_limit 6; then MAIL_TLS_STATE=BUDGET; MAIL_TLS_TEXT='не проверено: общий лимит времени'; return; fi
+    if [[ $host == *:* ]]; then target="[$host]:$port"; else target="$host:$port"; fi
+    args=(s_client -connect "$target" -showcerts -verify_return_error)
+    help=$(openssl s_client -help 2>&1 || true)
+    if [[ $host =~ ^[0-9]+(\.[0-9]+){3}$ || $host == *:* ]]; then
+        if grep -q -- '-verify_ip' <<<"$help"; then args+=(-verify_ip "$host"); verify_supported=1; fi
+    else
+        args+=(-servername "$host")
+        if grep -q -- '-verify_hostname' <<<"$help"; then args+=(-verify_hostname "$host"); verify_supported=1; fi
+    fi
+    [[ $mode == starttls ]] && args+=(-starttls "$protocol")
+    if [[ $protocol == imap ]]; then payload=$'a001 CAPABILITY\r\na002 LOGOUT\r\n'
+    else payload=$'EHLO arm-info.invalid\r\nQUIT\r\n'; fi
+    output=$(_arm_run_limited "$NETWORK_PROBE_LIMIT" openssl "${args[@]}" 2>&1 <<<"$payload"); rc=$?
+    output=${output:0:131072}
+    cert=$(awk '/-----BEGIN CERTIFICATE-----/{copy=1} copy{print} /-----END CERTIFICATE-----/{exit}' <<<"$output")
+    [[ $output == *'Verify return code: 0 (ok)'* ]] && verify_ok=1
+    if [[ -z $cert ]]; then
+        case $rc in 124|137) MAIL_TLS_STATE=FAIL; MAIL_TLS_TEXT='тайм-аут TLS handshake';; 125) MAIL_TLS_STATE=UNKNOWN; MAIL_TLS_TEXT='не проверено: timeout отсутствует';; *) MAIL_TLS_STATE=FAIL; MAIL_TLS_TEXT='TLS handshake/сертификат не получен';; esac
+        return
+    fi
+    meta=$(openssl x509 -noout -subject -issuer -enddate 2>/dev/null <<<"$cert" || true)
+    end_raw=$(sed -n 's/^notAfter=//p' <<<"$meta" | head -n1)
+    subject=$(sed -n 's/^subject=//p' <<<"$meta" | head -n1)
+    issuer=$(sed -n 's/^issuer=//p' <<<"$meta" | head -n1)
+    end_epoch=$(date -d "$end_raw" +%s 2>/dev/null || true); now=$(date +%s)
+    if [[ $end_epoch =~ ^[0-9]+$ ]]; then
+        days=$(((end_epoch-now)/86400))
+        MAIL_TLS_TEXT="сертификат до $(date -d "$end_raw" '+%d.%m.%Y %H:%M:%S %Z' 2>/dev/null || printf '%s' "$end_raw"); осталось ${days} дн."
+        if ((days<0)); then MAIL_TLS_STATE=CRIT
+        elif ((days<30)); then MAIL_TLS_STATE=WARN
+        elif ((verify_supported==0)); then MAIL_TLS_STATE=UNKNOWN; MAIL_TLS_TEXT+="; имя не проверено этой версией openssl"
+        elif ((verify_ok==1 || rc==0)); then MAIL_TLS_STATE=OK; MAIL_TLS_TEXT+="; цепочка и имя подтверждены"
+        else MAIL_TLS_STATE=FAIL; MAIL_TLS_TEXT+="; проверка цепочки/имени не пройдена"; fi
+    else
+        MAIL_TLS_STATE=UNKNOWN; MAIL_TLS_TEXT='TLS доступен, срок сертификата не прочитан'
+    fi
+    if ((PRIVACY)); then MAIL_TLS_DETAIL='Subject/Issuer скрыты'
+    else MAIL_TLS_DETAIL=$(printf 'Subject: %s; Issuer: %s' "${subject:-не определён}" "${issuer:-не определён}" | cut -c1-360); fi
+
+    if [[ $protocol == imap ]]; then
+        advertised=$(grep -Eio 'AUTH=[A-Za-z0-9_-]+' <<<"$output" | sed 's/.*=//' | LC_ALL=C sort -u | paste -sd, -)
+    else
+        advertised=$(tr '\r' '\n' <<<"$output" | sed -nE 's/^250[- ]AUTH[ =]*(.*)$/\1/p' | head -n1 | tr ' ' ',')
+    fi
+    if [[ -n $auth_hint && -n $advertised ]]; then MAIL_TLS_AUTH="профиль: $auth_hint; сервер: $advertised"
+    elif [[ -n $auth_hint ]]; then MAIL_TLS_AUTH="профиль: $auth_hint; сервер не объявил методы до входа"
+    elif [[ -n $advertised ]]; then MAIL_TLS_AUTH="сервер: $advertised"
+    else MAIL_TLS_AUTH='не объявлены до аутентификации'; fi
+}
+
+check_mail() {
+    local raw spec domain invalid=0 i idx protocol host port tls source auth host_display dns_text sev rc tcp_text endpoint_value domain_display
+    _mail_reset
+    raw=${ARM_INFO_MAIL_ENDPOINTS:-}
+    [[ -n ${MAIL_CONFIG_ENDPOINTS:-} ]] && raw="${raw:+$raw,}${MAIL_CONFIG_ENDPOINTS}"
+    if [[ -n $raw ]]; then
+        while IFS= read -r spec; do [[ -n $(printf '%s' "$spec" | trim) ]] || continue; _mail_parse_endpoint_uri "$spec" "переменная окружения" || invalid=$((invalid+1)); done < <(printf '%s\n' "$raw" | tr ',;' '\n')
+    fi
+    if declare -p MAIL_ENDPOINT_SPECS >/dev/null 2>&1; then
+        for spec in "${MAIL_ENDPOINT_SPECS[@]}"; do _mail_parse_endpoint_uri "$spec" "параметр CLI" || invalid=$((invalid+1)); done
+    fi
+    raw=${ARM_INFO_MAIL_DOMAINS:-}
+    [[ -n ${MAIL_CONFIG_DOMAINS:-} ]] && raw="${raw:+$raw,}${MAIL_CONFIG_DOMAINS}"
+    if [[ -n $raw ]]; then
+        while IFS= read -r domain; do [[ -n $(printf '%s' "$domain" | trim) ]] || continue; _mail_add_domain "$(printf '%s' "$domain" | trim)" || invalid=$((invalid+1)); done < <(printf '%s\n' "$raw" | tr ',;' '\n')
+    fi
+    if declare -p MAIL_DOMAIN_SPECS >/dev/null 2>&1; then
+        for domain in "${MAIL_DOMAIN_SPECS[@]}"; do _mail_add_domain "$domain" || invalid=$((invalid+1)); done
+    fi
+    _mail_discover_from_prefs
+
+    ((invalid==0)) || add_check "ПОЧТА / MAIL" "mail.config.invalid" "Некорректные настройки" "$invalid endpoint/domain исключено" warn
+    if ((MAIL_DISCOVERY_INCOMPLETE || MAIL_DISCOVERY_TRUNCATED)); then
+        add_check "ПОЧТА / MAIL" "mail.discovery" "Обнаружение настроек" "выполнено не полностью" unknown \
+          "ограничение/ошибка чтения профилей: $MAIL_DISCOVERY_INCOMPLETE; достигнут лимит записей: $MAIL_DISCOVERY_TRUNCATED"
+    fi
+    if ((${#MAIL_HOSTS[@]}==0)); then
+        add_check "ПОЧТА / MAIL" "mail.endpoints" "Почтовые серверы" "не обнаружены; проверка транспорта не выполнялась" info \
+          "Можно повторить запуск с --mail-endpoint без передачи логина или пароля."
+    else
+        add_check "ПОЧТА / MAIL" "mail.endpoints" "Почтовые серверы" "обнаружено: ${#MAIL_HOSTS[@]}" info
+    fi
+
+    for i in "${!MAIL_HOSTS[@]}"; do
+        idx=$((i+1)); protocol=${MAIL_PROTOCOLS[i]}; host=${MAIL_HOSTS[i]}; port=${MAIL_PORTS[i]}
+        tls=${MAIL_TLS_MODES[i]}; source=${MAIL_SOURCES[i]}; auth=${MAIL_AUTH_HINTS[i]}
+        if ((PRIVACY)); then host_display="mail-host-$idx"; else host_display=$host; fi
+        case $tls in implicit) endpoint_value="${protocol^^} $host_display:$port; TLS";; starttls) endpoint_value="${protocol^^} $host_display:$port; STARTTLS";; *) endpoint_value="${protocol^^} $host_display:$port; без TLS";; esac
+        add_check "ПОЧТА / MAIL" "mail.endpoint.$idx" "Почтовый сервер #$idx" "$endpoint_value" info "Источник: $source; аутентификация не выполняется."
+
+        _mail_dns_probe "$host"; dns_text=$MAIL_DNS_TEXT; ((PRIVACY)) && [[ $MAIL_DNS_STATE == OK ]] && dns_text='имя разрешается'
+        case $MAIL_DNS_STATE in OK) sev=ok;; FAIL) sev=warn;; *) sev=unknown;; esac
+        add_check "ПОЧТА / MAIL" "mail.endpoint.$idx.dns" "DNS сервера #$idx" "$dns_text" "$sev"
+
+        if [[ $MAIL_DNS_STATE == FAIL || $MAIL_DNS_STATE == BUDGET ]]; then
+            add_check "ПОЧТА / MAIL" "mail.endpoint.$idx.tcp" "TCP сервера #$idx" "не проверен: DNS/лимит времени" info
+            add_check "ПОЧТА / MAIL" "mail.endpoint.$idx.tls.$tls" "TLS сервера #$idx" "не проверен: TCP не выполнялся" info
+            add_check "ПОЧТА / MAIL" "mail.endpoint.$idx.auth" "AUTH сервера #$idx" "не проверены" info
+            continue
+        fi
+        if ! network_probe_limit 4; then rc=126
+        else _tcp_ok "$host" "$port" "$NETWORK_PROBE_LIMIT"; rc=$?; fi
+        case $rc in
+            0) sev=ok; tcp_text='доступен' ;;
+            124|137) sev=warn; tcp_text='тайм-аут соединения' ;;
+            125) sev=unknown; tcp_text='не проверен: timeout/TCP-средство отсутствует' ;;
+            126) sev=unknown; tcp_text='не проверен: общий лимит времени' ;;
+            *) sev=warn; tcp_text='соединение не установлено' ;;
+        esac
+        add_check "ПОЧТА / MAIL" "mail.endpoint.$idx.tcp" "TCP сервера #$idx" "$tcp_text" "$sev"
+        if ((rc!=0)); then
+            add_check "ПОЧТА / MAIL" "mail.endpoint.$idx.tls.$tls" "TLS сервера #$idx" "не проверен: TCP недоступен" info
+            add_check "ПОЧТА / MAIL" "mail.endpoint.$idx.auth" "AUTH сервера #$idx" "не проверены" info
+            continue
+        fi
+        _mail_tls_probe "$protocol" "$host" "$port" "$tls" "$auth"
+        case $MAIL_TLS_STATE in OK) sev=ok;; WARN|INSECURE) sev=warn;; CRIT) sev=crit;; FAIL) sev=warn;; *) sev=unknown;; esac
+        add_check "ПОЧТА / MAIL" "mail.endpoint.$idx.tls.$tls" "TLS сервера #$idx" "$MAIL_TLS_TEXT" "$sev" "$MAIL_TLS_DETAIL"
+        add_check "ПОЧТА / MAIL" "mail.endpoint.$idx.auth" "AUTH сервера #$idx" "$MAIL_TLS_AUTH" info \
+          "Перечислены только объявленные механизмы и настройка клиента; вход в ящик не выполнялся."
+    done
+
+    # MX/SRV — дополнительная информация. Она проверяется после фактически
+    # настроенных endpoints, чтобы не расходовать общий бюджет раньше TCP/TLS.
+    if ((${#MAIL_DOMAINS[@]}==0)); then
+        add_check "ПОЧТА / MAIL" "mail.domains" "Почтовые домены" "не определены; MX/SRV не проверялись" info
+    else
+        idx=0
+        for domain in "${MAIL_DOMAINS[@]}"; do
+            idx=$((idx+1)); if ((PRIVACY)); then domain_display="mail-domain-$idx"; else domain_display=$domain; fi
+            add_check "ПОЧТА / MAIL" "mail.domain.$idx" "Почтовый домен #$idx" "$domain_display" info
+            _mail_query_record "$domain" MX
+            case $MAIL_RECORD_STATE in OK|EMPTY) sev=info;; *) sev=unknown;; esac
+            add_check "ПОЧТА / MAIL" "mail.domain.$idx.mx" "MX домена #$idx" "$MAIL_RECORD_TEXT" "$sev"
+            _mail_query_record "_imaps._tcp.$domain" SRV
+            case $MAIL_RECORD_STATE in OK|EMPTY) sev=info;; *) sev=unknown;; esac
+            add_check "ПОЧТА / MAIL" "mail.domain.$idx.srv.imap" "SRV IMAPS #$idx" "$MAIL_RECORD_TEXT" "$sev"
+            _mail_query_record "_submission._tcp.$domain" SRV
+            case $MAIL_RECORD_STATE in OK|EMPTY) sev=info;; *) sev=unknown;; esac
+            add_check "ПОЧТА / MAIL" "mail.domain.$idx.srv.smtp" "SRV submission #$idx" "$MAIL_RECORD_TEXT" "$sev"
+        done
+    fi
+    add_check "ПОЧТА / MAIL" "mail.auth.scope" "Проверка почтового ящика" "не выполнялась" info \
+      "Скрипт не читает пароли, не получает Kerberos service ticket, не отправляет письма и не проверяет содержимое ящика."
+}
+
 check_print() {
-    local state sev default qcount=0 disabled=0 jobs=0 uris errcount
+    local state sev default qcount=0 disabled=0 jobs=0 uris errcount journal_data journal_err journal_rc
     if have systemctl; then
         state=$(systemctl is-active cups 2>/dev/null || systemctl is-active cups.service 2>/dev/null || true)
         case "$state" in active) sev=ok;; inactive|failed) sev=crit;; *) sev=unknown;; esac
@@ -1205,7 +2526,7 @@ check_print() {
     if have lpstat; then
         if LC_ALL=C lpstat -r 2>/dev/null | grep -qi 'scheduler is running'; then add_check "ПЕЧАТЬ / CUPS" "print.scheduler" "CUPS scheduler" "работает" ok
         else add_check "ПЕЧАТЬ / CUPS" "print.scheduler" "CUPS scheduler" "не отвечает" crit; fi
-        default=$(LC_ALL=C lpstat -d 2>/dev/null | sed -E 's/^system default destination:[[:space:]]*//' | head -n1)
+        default=$(LC_ALL=C lpstat -d 2>/dev/null | sed -nE 's/^system default destination:[[:space:]]*//p' | head -n1)
         [[ -n $default ]] && add_check "ПЕЧАТЬ / CUPS" "print.default" "Принтер по умолчанию" "$default" ok || add_check "ПЕЧАТЬ / CUPS" "print.default" "Принтер по умолчанию" "не задан" info
         qcount=$(LC_ALL=C lpstat -p 2>/dev/null | grep -c '^printer ' || true)
         disabled=$(LC_ALL=C lpstat -p 2>/dev/null | grep -Eci 'disabled|paused|stopped' || true)
@@ -1224,9 +2545,22 @@ check_print() {
     else add_check "ПЕЧАТЬ / CUPS" "print.lpstat" "Очереди CUPS" "lpstat отсутствует" unknown; fi
 
     if have journalctl; then
-        errcount=$(journalctl -u cups -b -p warning..alert --no-pager 2>/dev/null | grep -c . || true)
-        if ((errcount>20)); then sev=warn; else sev=ok; fi
-        add_check "ПЕЧАТЬ / CUPS" "print.journal" "CUPS warning/error" "$errcount за текущую загрузку" "$sev"
+        journal_err=$(mktemp)
+        if [[ -n $journal_err ]]; then
+            journal_data=$(LC_ALL=C journalctl -q -u cups -b -p 0..4 -o json --no-pager 2>"$journal_err")
+            journal_rc=$?
+            if ((journal_rc!=0)) || [[ -s $journal_err ]]; then
+                add_check "ПЕЧАТЬ / CUPS" "print.journal" "CUPS warning/error" "журнал не прочитан полностью" unknown
+            else
+                errcount=$(grep -c '^[[:space:]]*{' <<<"$journal_data" || true)
+                if ((errcount>0)); then sev=warn; else sev=ok; fi
+                add_check "ПЕЧАТЬ / CUPS" "print.journal" "CUPS warning/error" "$errcount за текущую загрузку" "$sev" \
+                  "Исторические записи текущей загрузки; наличие записи не доказывает продолжающийся сбой."
+            fi
+            rm -f -- "$journal_err"
+        else
+            add_check "ПЕЧАТЬ / CUPS" "print.journal" "CUPS warning/error" "не удалось подготовить чтение журнала" unknown
+        fi
     else add_check "ПЕЧАТЬ / CUPS" "print.journal" "CUPS journal" "journalctl отсутствует" unknown; fi
 }
 
@@ -1261,6 +2595,7 @@ check_software() {
 emit_text() {
     local current="" i sevmark n=0 width
     width=$(report_width)
+    local REPORT_WIDTH=$width
     printf 'ARM_INFO КОРПОРАТИВНЫЙ %s\n' "$VERSION"
     if [[ $PROFILE == enterprise ]]; then
         printf 'Профиль: корпоративный\n'
@@ -1414,8 +2749,9 @@ case "$PROFILE" in
     domain) check_domain ;;
     network) check_network ;;
     print) check_print ;;
+    mail) check_mail ;;
     software) check_software ;;
-    enterprise) check_domain; check_network; check_print ;;
+    enterprise) check_domain; check_network; check_print; check_mail ;;
 esac
 
 build_recommendations
@@ -1495,14 +2831,14 @@ arm_info — диагностика технического состояния 
 Параметры:
   -h, --help              показать справку
   -V, --version           показать версию
-  --privacy               обезличить hostname, IP, MAC, DNS и имена интерфейсов
-  -s, --save             сохранить отчёт в файл
+  -p, --privacy           обезличить hostname, IP, MAC, DNS и имена интерфейсов
+  -s, --save              сохранить отчёт в файл
   -o, --output PATH       сохранить отчёт в указанный файл или каталог
   -q, --quiet             не выводить отчёт в терминал (имеет смысл с сохранением)
   --json                  вывести отчёт в JSON вместо текстового формата
   --config PATH           использовать другой конфигурационный файл
-  -c, --corp              сокращённый запуск corporate-профиля: domain+network+print
-  --profile NAME          domain|network|print|software|enterprise
+  -c, --corp              сокращённый запуск corporate-профиля: domain+network+print+mail
+  --profile NAME          domain|network|print|mail|software|enterprise
   --compare A.json B.json сравнить два JSON-отчёта АРМ
 
 Коды завершения:
@@ -1518,7 +2854,7 @@ while (($#)); do
     case "$1" in
         -h|--help) SHOW_HELP=1; shift ;;
         -V|--version) echo "arm_info $ARM_INFO_VERSION"; exit 0 ;;
-        --privacy) PRIVACY_MODE=1; shift ;;
+        -p|--privacy) PRIVACY_MODE=1; shift ;;
         -s|--save) SAVE_REPORT=1; shift ;;
         -q|--quiet) QUIET_MODE=1; shift ;;
         --json) JSON_MODE=1; shift ;;
@@ -1856,7 +3192,7 @@ base_print_rec_commands() {
 }
 
 run_smart() {
-    if command -v timeout >/dev/null 2>&1; then timeout 8 smartctl "$@"; else smartctl "$@"; fi
+    _arm_run_limited 8 smartctl "$@"
 }
 
 read_cpu_temp_once() {

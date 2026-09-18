@@ -16,7 +16,7 @@
 - файловые системы: заполнение, inode, read-only;
 - стабильность системы: failed units, аппаратные/дисковые ошибки ядра, journal `err..alert`, OOM, time sync, признаки аварийной загрузки и ECC/EDAC;
 - дополнительные read-only проверки: NTP/time sync, software RAID, ECC/EDAC, батарея, SMART self-test, SSSD/Kerberos/CUPS;
-- корпоративные профили в том же единственном файле: AD/SSSD/Kerberos/DNS, 802.1X, CIFS/GVFS и CUPS;
+- корпоративные профили в том же единственном файле: AD/SSSD/Kerberos/DNS, 802.1X, CIFS/GVFS, CUPS и доступность IMAP/SMTP;
 - сравнение JSON-отчётов двух АРМ;
 - TXT или JSON;
 - privacy-режим для публикации отчётов;
@@ -54,7 +54,7 @@ sudo bash /tmp/arm_info.sh -c
 
 По умолчанию корпоративный отчёт выводится только в терминал и файл не создаётся. Для сохранения добавьте `-s` или `--save`; при необходимости путь задаётся через `-o/--output`.
 
-`--corp` запускает `domain + network + print` и **не выполняет глобальную инвентаризацию ПО**, поэтому отчёт не раздувается сотнями строк.
+`--corp` запускает `domain + network + print + mail` и **не выполняет глобальную инвентаризацию ПО**, поэтому отчёт не раздувается сотнями строк. Почтовая проверка не входит в ящик и не отправляет письма.
 
 Начиная с **1.2.2** корпоративный TXT-отчёт выровнен по колонкам, экран очищается перед интерактивным TXT-выводом, а JSON остаётся без управляющих последовательностей. Команды в рекомендациях сопровождаются пояснением в скобках, что именно даст каждая команда.
 
@@ -67,6 +67,21 @@ sudo bash /tmp/arm_info.sh -c
 В стандартном отчёте группа `Стабильность системы` показывает оценку из 100, каждый учитываемый сигнал и его штраф. Это оценка устойчивости работы АРМ по системным событиям, а не утверждение о повреждении самой ОС.
 
 В **1.2.4** проведена ревизия всех команд из рекомендаций: исправлены некорректные варианты `nmcli`, исключены заведомо бесполезные проверки отсутствующих утилит, добавлены пользовательский контекст Kerberos, таймауты сетевых проверок, безопасные маркеры (`DOMAIN_FQDN`, `PROFILE_NAME`, `USER_NAME` и т. п.) и явное предупреждение `ИЗМЕНЯЕТ СОСТОЯНИЕ` для команд, меняющих конфигурацию/очередь. Каждая выводимая команда получает отдельное описание результата. CI дополнительно запускает `tests/test_sections.sh`, который проверяет все пользовательские разделы стандартного TXT, основные группы JSON и все секции корпоративных профилей. CIFS-проверка в 1.2.4 использует TARGET одной колонкой и фактическое минимальное чтение каталога с timeout: это исключает ложные WARN из-за пробелов/кириллицы и не считает успешный `stat -f` доказательством доступности содержимого.
+
+## Версия 1.3
+
+В **1.3.0** корпоративная диагностика переведена на нормализованный сбор инфраструктурных объектов и ограниченные по времени активные проверки без изменения single-file поставки.
+
+- корпоративный отчёт строится через конвейер `collect → normalized inventory → probe → checks → output`, не меняя single-file поставку;
+- раздел `DNS / DOMAIN` больше не дублируется; все уникальные DC из Kerberos/LDAP/AD DC SRV выводятся построчно со статусами TCP 88/389;
+- CIFS, autofs, GVFS/FUSE и GIO объединяются без дублей, но сохраняют признаки «настроен», «смонтирован» и «доступен»; неисправный ресурс не скрывает остальные;
+- статические autofs-карты читаются пассивно; `--probe-autofs` явно разрешает проверку, способную вызвать автомонтирование;
+- профиль `mail` проверяет DNS, TCP, TLS/STARTTLS, сертификаты и pre-auth capabilities IMAP/SMTP без входа в ящик и отправки письма;
+- CUPS journal больше не показывает ложный `OK`: реальные записи severity 0–4 дают `WARN`, недоступный журнал — `N/A`; рекомендации используют штатные `cancel`, `cupsenable`, `cupsaccept` и `lpr`;
+- активные проверки DC, CIFS, autofs, GIO и mail ограничены общим `--network-budget`; TCP-проверки DC имеют управляемую параллельность `--network-jobs`;
+- сокращено число внешних процессов при формировании TXT и чтении свойств NetworkManager; добавлены отдельные performance/architecture regression tests.
+
+Полный список изменений и границы проверки: [release notes 1.3.0](docs/releases/v1.3.0.md) и [pre-release checklist](docs/PRE_RELEASE_CHECKLIST.md).
 
 Если отчёт нужно передать вне внутреннего контура или использовать для сравнения АРМ:
 
@@ -93,14 +108,19 @@ sha256sum -c SHA256SUMS
 ```text
 -h, --help
 -V, --version
---privacy
+-p, --privacy
 -s, --save
 -o, --output PATH
 -q, --quiet
 --json
 --config PATH
 -c, --corp
---profile domain|network|print|software|enterprise
+--probe-autofs
+--network-budget SEC
+--network-jobs N
+--mail-endpoint URI
+--mail-domain DOMAIN
+--profile domain|network|print|mail|software|enterprise
 --compare REPORT_A.json REPORT_B.json
 ```
 
@@ -112,23 +132,29 @@ sudo arm_info --json --privacy | jq '.summary'
 sudo arm_info --save --output /var/tmp/arm-reports/
 sudo arm_info --config /etc/arm_info.conf
 sudo arm_info --profile domain --privacy
+sudo arm_info --profile mail --mail-endpoint imaps://mail.example.test:993 --mail-endpoint smtp://smtp.example.test:587
 sudo arm_info --corp --privacy --json --save -o /tmp/arm-corp.json
 arm_info --compare arm-a.json arm-b.json
 ```
 
 ## Корпоративные профили
 
-`arm_info 1.2.4` содержит встроенные профили для типовых проблем корпоративных АРМ РЕД ОС. Они **не смешиваются с базовым health score** и выводят самостоятельные статусы `OK/WARN/CRIT/N/A`.
+`arm_info` содержит встроенные профили для типовых проблем корпоративных АРМ РЕД ОС. Они **не смешиваются с базовым health score** и выводят самостоятельные статусы `OK/WARN/CRIT/N/A`.
 
 Для `WARN/CRIT/N/A` формируется максимально подробный блок рекомендаций: возможные причины → влияние → что проверить → действие → команды → контроль результата. В JSON те же данные доступны в `recommendations[]`.
 
 - `domain` — SSSD, AD join, Kerberos ticket/cache, ошибки Kerberos в текущем журнале, time sync, DNS SRV и доступность KDC/LDAP;
 - `network` — DNS/upstream, FQDN, интерфейсы, 802.1X и сроки сертификатов, CIFS/GVFS/Caja;
 - `print` — CUPS service/scheduler, default printer, paused queues, jobs, backend URI и журнал;
+- `mail` — обнаруженные IMAP/SMTP endpoints, DNS, TCP, TLS/STARTTLS, сертификаты и объявленные AUTH-механизмы без аутентификации;
 - `software` — глобальная инвентаризация всех установленных RPM-пакетов, общее число процессов и zombie-процессы;
-- `enterprise` / `-c` / `--corp` — объединяет `domain + network + print`; глобальная инвентаризация ПО **не запускается автоматически** и доступна только отдельно через `--profile software`.
+- `enterprise` / `-c` / `--corp` — объединяет `domain + network + print + mail`; глобальная инвентаризация ПО **не запускается автоматически** и доступна только отдельно через `--profile software`.
 
 Подробно: [docs/ENTERPRISE_PROFILES.md](docs/ENTERPRISE_PROFILES.md).
+
+Для ресурсов autofs обычный корпоративный отчёт читает статические CIFS-карты (нужен `python3`) без попытки подключения. Несмонтированные ресурсы показываются как настроенные. Активная проверка включается явно: `sudo arm_info -c -p --probe-autofs`; чтение каталога может вызвать автомонтирование, а root использует контекст активного GUI-пользователя.
+
+Активные проверки DC, CIFS, autofs, GIO и mail имеют общий бюджет 30 секунд; TCP-проверки DC выполняются максимум по четыре одновременно. Все обнаруженные ресурсы остаются в отчёте, а не уложившиеся в бюджет получают N/A. Для крупных инфраструктур: `sudo arm_info -c -p --network-budget 60 --network-jobs 6`.
 
 ## Сравнение двух АРМ
 
@@ -150,7 +176,9 @@ arm_info --compare arm-a.json arm-b.json
 sudo arm_info --privacy
 ```
 
-Privacy-режим скрывает hostname, MAC, DNS, SSSD-домены, маскирует IP и заменяет имена интерфейсов. В корпоративных профилях дополнительно скрываются доменные значения; printer URI всегда очищается от встроенных учётных данных. При явном сохранении автоматическое имя privacy-отчёта не содержит hostname. Подробно: [docs/PRIVACY.md](docs/PRIVACY.md).
+`-p` — короткая форма `--privacy`, действует во всех профилях.
+
+Privacy-режим скрывает hostname, MAC, DNS, SSSD/почтовые домены, имена почтовых серверов и Subject/Issuer их сертификатов, маскирует IP и заменяет имена интерфейсов. Printer URI всегда очищается от встроенных учётных данных. При явном сохранении автоматическое имя privacy-отчёта не содержит hostname. Подробно: [docs/PRIVACY.md](docs/PRIVACY.md).
 
 ## Технический индекс
 
@@ -180,7 +208,7 @@ sudo dnf install smartmontools dmidecode lm_sensors
 
 Дополнительные проверки используют установленные в системе `chronyc`, `sssctl`, `klist`, `lpstat`, `mdadm` и EDAC-интерфейсы, но не требуют их установки для базового запуска.
 
-Для максимальной полноты корпоративных профилей полезны `sssd-tools`, `adcli`, `krb5-workstation`, `bind-utils`, `NetworkManager`, `openssl`, `cups-client`, `nc`/`nmap-ncat`. `python3` нужен только для `--compare`.
+Для максимальной полноты корпоративных профилей полезны `sssd-tools`, `adcli`, `krb5-workstation`, `bind-utils`, `NetworkManager`, `openssl`, `cups-client`, `nc`/`nmap-ncat`. `openssl` используется также для TLS/STARTTLS почтовых серверов. `python3` нужен для `--compare` и безопасного разбора статических autofs-карт.
 
 ## Автоматизация
 
@@ -210,7 +238,7 @@ bash packaging/build-rpm.sh
 ## Разработка
 
 ```bash
-make version   # версия берётся из VERSION; для 1.2.4 выводит 1.2.4
+make version   # версия берётся из VERSION
 make check
 make test
 ```
@@ -232,13 +260,16 @@ CI выполняет `bash -n`, ShellCheck уровня error, базовые C
 - [Тестирование](docs/TESTING.md)
 - [Команды рекомендаций](docs/COMMANDS.md)
 - [Pre-release checklist](docs/PRE_RELEASE_CHECKLIST.md)
+- [Release notes 1.3.0](docs/releases/v1.3.0.md)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
 
 ## Версия
 
-Текущая версия: **1.2.4**.
+Текущая версия: **1.3.0**.
+
+Release notes: [arm_info 1.3.0](docs/releases/v1.3.0.md).
 
 ## Лицензия
 
