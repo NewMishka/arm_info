@@ -11,13 +11,14 @@ check:
 	@test -n "$(VERSION)"
 	@test "$(VERSION)" = "$$(sed -n 's/^ARM_INFO_VERSION="\([^"]*\)"/\1/p' arm_info.sh | head -1)"
 	@test "$(VERSION)" = "$$(awk '/^Version:/{print $$2; exit}' packaging/arm_info.spec)"
-	bash -n arm_info.sh install.sh tests/test_stage1_performance.sh tests/test_stage2_limits.sh tests/test_stage3_architecture.sh tests/test_mail_profile.sh tests/render_cases.sh tests/test_cli.sh tests/test_enterprise.sh tests/test_enterprise_discovery.sh tests/test_recommendation_commands.sh tests/test_sections.sh tests/test_cifs_probe.sh tests/cifs_field_probe.sh packaging/build-rpm.sh
-	@if command -v shellcheck >/dev/null 2>&1; then shellcheck --severity=error arm_info.sh install.sh tests/test_stage1_performance.sh tests/test_stage2_limits.sh tests/test_stage3_architecture.sh tests/test_mail_profile.sh tests/render_cases.sh tests/test_cli.sh tests/test_enterprise.sh tests/test_enterprise_discovery.sh tests/test_recommendation_commands.sh tests/test_sections.sh tests/test_cifs_probe.sh tests/cifs_field_probe.sh packaging/build-rpm.sh; fi
+	bash -n arm_info.sh install.sh tests/test_stage1_performance.sh tests/test_stage2_limits.sh tests/test_stage3_architecture.sh tests/test_stage4_base_pipeline.sh tests/test_mail_profile.sh tests/render_cases.sh tests/test_cli.sh tests/test_enterprise.sh tests/test_enterprise_discovery.sh tests/test_recommendation_commands.sh tests/test_sections.sh tests/test_cifs_probe.sh tests/cifs_field_probe.sh packaging/build-rpm.sh
+	@if command -v shellcheck >/dev/null 2>&1; then shellcheck --severity=error arm_info.sh install.sh tests/test_stage1_performance.sh tests/test_stage2_limits.sh tests/test_stage3_architecture.sh tests/test_stage4_base_pipeline.sh tests/test_mail_profile.sh tests/render_cases.sh tests/test_cli.sh tests/test_enterprise.sh tests/test_enterprise_discovery.sh tests/test_recommendation_commands.sh tests/test_sections.sh tests/test_cifs_probe.sh tests/cifs_field_probe.sh packaging/build-rpm.sh; fi
 
 test: check
 	bash tests/test_stage1_performance.sh
 	bash tests/test_stage2_limits.sh
 	bash tests/test_stage3_architecture.sh
+	bash tests/test_stage4_base_pipeline.sh
 	bash tests/test_mail_profile.sh
 	bash tests/test_enterprise_discovery.sh
 	bash tests/test_cli.sh

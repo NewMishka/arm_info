@@ -3255,6 +3255,11 @@ elif ((SAVE_REPORT==0 && QUIET_MODE==1)); then
     exec >/dev/null 2>&1
 fi
 
+collect_base_snapshot() {
+    BASE_UID=$(id -u 2>/dev/null || printf '1')
+    SMARTCTL_AVAILABLE=0
+    command -v smartctl >/dev/null 2>&1 && SMARTCTL_AVAILABLE=1
+
 # -------------------- СИСТЕМА --------------------
 if [ -r /etc/os-release ]; then . /etc/os-release; OS="${PRETTY_NAME:-$NAME}"; else OS="Не определено"; fi
 KERNEL=$(uname -r 2>/dev/null); ARCH=$(uname -m 2>/dev/null)
@@ -3312,7 +3317,7 @@ RAM_TOTAL=$(LC_ALL=C free -h 2>/dev/null | awk '/^Mem:/{print $2}'); RAM_USED=$(
 if ((MEM_TOTAL_KB>0)); then MEM_AVAIL_PCT=$((MEM_AVAIL_KB*100/MEM_TOTAL_KB)); else MEM_AVAIL_PCT=0; fi
 if ((SWAP_TOTAL_KB>0)); then SWAP_USED_PCT=$(((SWAP_TOTAL_KB-SWAP_FREE_KB)*100/SWAP_TOTAL_KB)); else SWAP_USED_PCT=0; fi
 RAM_TYPE="Не определено"; RAM_SPEED="-"; RAM_MODULES="?"
-if command -v dmidecode >/dev/null 2>&1 && [ "$(id -u)" -eq 0 ]; then
+if command -v dmidecode >/dev/null 2>&1 && ((BASE_UID==0)); then
     DMI_MEM=$(LC_ALL=C dmidecode -t memory 2>/dev/null)
     RAM_MODULES=$(printf '%s\n' "$DMI_MEM" | awk -F: '/^[[:space:]]*Size:/{x=$2;gsub(/^[ \t]+|[ \t]+$/,"",x);if(x!=""&&x!~/No Module Installed/i&&x!~/^0 /&&x!~/Unknown/i)n++}END{print n+0}')
     RAM_TYPE=$(printf '%s\n' "$DMI_MEM" | awk -F: '/^[[:space:]]*Type:/{x=$2;gsub(/^[ \t]+|[ \t]+$/,"",x);if(x~/^DDR[0-9]/)print x}' | sort -u | paste -sd '/' -); [ -z "$RAM_TYPE" ]&&RAM_TYPE="Не определено"
@@ -3548,7 +3553,7 @@ case "$DISTRO_ID" in
 esac
 
 # -------------------- ДИСКИ / SMART --------------------
-DISK_ROWS=(); DISK_SYSTEM_ROWS=(); DISK_FIXED_ROWS=(); DISK_REMOVABLE_ROWS=(); DISK_OPTICAL_ROWS=(); DISK_SELFTEST_ROWS=(); DISK_WORST_SCORE=100; SYSTEM_DISK_SCORE=100; SECONDARY_WORST_KNOWN_SCORE=100; FIXED_DISKS=0; SYSTEM_DISK_COUNT=0; SECONDARY_FIXED_DISKS=0; SECONDARY_KNOWN_COUNT=0; REMOVABLE_DISKS=0; MAX_DISK_HOURS=0; SYSTEM_MAX_DISK_HOURS=0; SMART_UNKNOWN_COUNT=0; SYSTEM_SMART_UNKNOWN_COUNT=0; SECONDARY_CRITICAL=0
+DISK_ROWS=(); DISK_SYSTEM_ROWS=(); DISK_FIXED_ROWS=(); DISK_REMOVABLE_ROWS=(); DISK_OPTICAL_ROWS=(); DISK_SELFTEST_ROWS=(); DISK_CHECK_ROWS=(); DISK_WORST_SCORE=100; SYSTEM_DISK_SCORE=100; SECONDARY_WORST_KNOWN_SCORE=100; FIXED_DISKS=0; SYSTEM_DISK_COUNT=0; SECONDARY_FIXED_DISKS=0; SECONDARY_KNOWN_COUNT=0; REMOVABLE_DISKS=0; MAX_DISK_HOURS=0; SYSTEM_MAX_DISK_HOURS=0; SMART_UNKNOWN_COUNT=0; SYSTEM_SMART_UNKNOWN_COUNT=0; SECONDARY_CRITICAL=0
 while read -r NAME TYPE SIZE ROTA MODEL; do
     case "$TYPE" in disk|rom) ;; *) continue ;; esac
     DEV="/dev/$NAME"; MODEL=$(echo "$MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'); [ -z "$MODEL" ]&&MODEL="-"; [ "${#MODEL}" -gt 28 ]&&MODEL="${MODEL:0:27}…"
@@ -3566,7 +3571,7 @@ while read -r NAME TYPE SIZE ROTA MODEL; do
     fi
     FIXED_DISKS=$((FIXED_DISKS+1)); DISK_SCORE=100; RESOURCE="-"; SMART="Н/Д"; TEMP="-"; HOURS="-"; REALLOC=0; PENDING=0; UNCORR=0; MEDIAERR=0; CRITWARN=0
     if [[ "$NAME" = nvme* ]]; then DISK_TYPE="NVMe SSD"; elif [ "$ROTA" = 0 ]; then DISK_TYPE=SSD; else DISK_TYPE=HDD; fi
-    if command -v smartctl >/dev/null 2>&1; then
+    if ((SMARTCTL_AVAILABLE==1)); then
         SMART_ALL=$(run_smart -a "$DEV" 2>/dev/null); SMART_H=$(run_smart -H "$DEV" 2>/dev/null)
         SELFTEST="Н/Д"
         _st=$(run_smart -l selftest "$DEV" 2>/dev/null | awk '/^# *1[[:space:]]/{for(i=5;i<=NF;i++){printf "%s%s",$i,(i<NF?" ":"")} exit}')
@@ -3610,19 +3615,31 @@ while read -r NAME TYPE SIZE ROTA MODEL; do
         DISK_FIXED_ROWS+=("$NAME|$DISK_ROLE|$DISK_TYPE|$SIZE|$MODEL|$RESOURCE|$SMART|$TEMP|$HOURS")
     fi
 
-    [ "$SMART" = FAIL ]&&add_rec "КРИТИЧНО" "Накопитель $NAME: SMART сообщает отказ" "Высокий риск внезапного отказа и потери данных." "Немедленно сохранить важные данные и заменить накопитель." "smartctl -a $DEV"
-    ((REALLOC>0))&&add_rec "ВНИМАНИЕ" "Накопитель $NAME: переназначенные сектора — $REALLOC" "Носитель уже имеет дефектные области; рост счётчика означает деградацию." "Проверить резервное копирование и наблюдать SMART. При росте — заменить диск." "smartctl -A $DEV | grep -i Reallocated"
-    ((PENDING>0))&&add_rec "КРИТИЧНО" "Накопитель $NAME: нестабильные сектора — $PENDING" "Возможны ошибки чтения, зависания и повреждение файлов." "Сначала сохранить данные, затем выполнить расширенный SMART-тест и планировать замену." "smartctl -A $DEV | grep -i Pending"
-    ((UNCORR>0))&&add_rec "КРИТИЧНО" "Накопитель $NAME: неисправимые сектора — $UNCORR" "Часть данных может быть невосстановима; надёжность носителя снижена." "Обеспечить резервную копию и заменить накопитель." "smartctl -A $DEV | grep -i Uncorrect"
-    ((CRITWARN>0))&&add_rec "КРИТИЧНО" "NVMe $NAME: Critical Warning=$CRITWARN" "Контроллер NVMe сообщает критическое состояние." "Сохранить данные и готовить замену накопителя." "smartctl -a $DEV"
-    ((MEDIAERR>0))&&add_rec "ВНИМАНИЕ" "NVMe $NAME: ошибок целостности данных — $MEDIAERR" "Счётчик означает зафиксированные ошибки носителя/данных." "Проверить резервное копирование и динамику счётчика. При росте — заменить накопитель." "smartctl -a $DEV"
-    if [[ "$RESOURCE" =~ ^([0-9]+)%$ ]]; then R=${BASH_REMATCH[1]}; if ((R<SSD_LIFE_CRIT)); then add_rec "КРИТИЧНО" "Накопитель $NAME: остаточный ресурс ${R}%" "Ресурс записи практически исчерпан." "Срочно сохранить данные и заменить накопитель." "smartctl -a $DEV"; elif ((R<SSD_LIFE_WARN)); then add_rec "ВНИМАНИЕ" "Накопитель $NAME: остаточный ресурс ${R}%" "Запас ресурса мал, накопитель заметно изношен." "Проверить резервное копирование и запланировать замену." "smartctl -a $DEV"; elif ((R<SSD_LIFE_PLAN)); then add_rec "ПЛАНОВО" "Накопитель $NAME: остаточный ресурс ${R}%" "Износ заметен, хотя накопитель ещё может работать штатно." "Усилить контроль SMART и включить замену в плановое обслуживание." "smartctl -a $DEV"; fi; fi
-    if [[ "$HOURS" =~ ^[0-9]+$ ]]&&((HOURS>=40000)); then add_rec "ПЛАНОВО" "Накопитель $NAME: большая наработка — ${HOURS} ч" "Большая наработка сама по себе не означает отказ, но повышает возрастной риск." "Поддерживать актуальный бэкап и включить диск в плановый контроль." "smartctl -a $DEV"; fi
-    if [[ "$TEMP" =~ ^[0-9]+$ ]]; then TW=0; [ "$DISK_TYPE" = HDD ]&&((TEMP>=HDD_TEMP_WARN))&&TW=1; [ "$DISK_TYPE" = SSD ]&&((TEMP>=SSD_TEMP_WARN))&&TW=1; [ "$DISK_TYPE" = "NVMe SSD" ]&&((TEMP>=NVME_TEMP_WARN))&&TW=1; ((TW==1))&&add_rec "ВНИМАНИЕ" "Накопитель $NAME: повышенная температура ${TEMP}°C" "Уменьшается тепловой запас, возможны троттлинг и ускорение износа." "Проверить пыль, вентиляцию корпуса и охлаждение накопителя." "smartctl -a $DEV | grep -i Temperature"; fi
+    DISK_CHECK_ROWS+=("$NAME|$DEV|$DISK_TYPE|$SMART|$REALLOC|$PENDING|$UNCORR|$CRITWARN|$MEDIAERR|$RESOURCE|$HOURS|$TEMP")
 
 done < <(lsblk -dn -o NAME,TYPE,SIZE,ROTA,MODEL 2>/dev/null)
 DISK_ROWS=("${DISK_SYSTEM_ROWS[@]}" "${DISK_FIXED_ROWS[@]}" "${DISK_REMOVABLE_ROWS[@]}" "${DISK_OPTICAL_ROWS[@]}")
 ((FIXED_DISKS==0))&&DISK_WORST_SCORE=70
+}
+
+evaluate_base_disk_findings() {
+    local row NAME DEV DISK_TYPE SMART REALLOC PENDING UNCORR CRITWARN MEDIAERR RESOURCE HOURS TEMP R TW
+    for row in "${DISK_CHECK_ROWS[@]}"; do
+        IFS='|' read -r NAME DEV DISK_TYPE SMART REALLOC PENDING UNCORR CRITWARN MEDIAERR RESOURCE HOURS TEMP <<< "$row"
+        [ "$SMART" = FAIL ]&&add_rec "КРИТИЧНО" "Накопитель $NAME: SMART сообщает отказ" "Высокий риск внезапного отказа и потери данных." "Немедленно сохранить важные данные и заменить накопитель." "smartctl -a $DEV"
+        ((REALLOC>0))&&add_rec "ВНИМАНИЕ" "Накопитель $NAME: переназначенные сектора — $REALLOC" "Носитель уже имеет дефектные области; рост счётчика означает деградацию." "Проверить резервное копирование и наблюдать SMART. При росте — заменить диск." "smartctl -A $DEV | grep -i Reallocated"
+        ((PENDING>0))&&add_rec "КРИТИЧНО" "Накопитель $NAME: нестабильные сектора — $PENDING" "Возможны ошибки чтения, зависания и повреждение файлов." "Сначала сохранить данные, затем выполнить расширенный SMART-тест и планировать замену." "smartctl -A $DEV | grep -i Pending"
+        ((UNCORR>0))&&add_rec "КРИТИЧНО" "Накопитель $NAME: неисправимые сектора — $UNCORR" "Часть данных может быть невосстановима; надёжность носителя снижена." "Обеспечить резервную копию и заменить накопитель." "smartctl -A $DEV | grep -i Uncorrect"
+        ((CRITWARN>0))&&add_rec "КРИТИЧНО" "NVMe $NAME: Critical Warning=$CRITWARN" "Контроллер NVMe сообщает критическое состояние." "Сохранить данные и готовить замену накопителя." "smartctl -a $DEV"
+        ((MEDIAERR>0))&&add_rec "ВНИМАНИЕ" "NVMe $NAME: ошибок целостности данных — $MEDIAERR" "Счётчик означает зафиксированные ошибки носителя/данных." "Проверить резервное копирование и динамику счётчика. При росте — заменить накопитель." "smartctl -a $DEV"
+        if [[ "$RESOURCE" =~ ^([0-9]+)%$ ]]; then R=${BASH_REMATCH[1]}; if ((R<SSD_LIFE_CRIT)); then add_rec "КРИТИЧНО" "Накопитель $NAME: остаточный ресурс ${R}%" "Ресурс записи практически исчерпан." "Срочно сохранить данные и заменить накопитель." "smartctl -a $DEV"; elif ((R<SSD_LIFE_WARN)); then add_rec "ВНИМАНИЕ" "Накопитель $NAME: остаточный ресурс ${R}%" "Запас ресурса мал, накопитель заметно изношен." "Проверить резервное копирование и запланировать замену." "smartctl -a $DEV"; elif ((R<SSD_LIFE_PLAN)); then add_rec "ПЛАНОВО" "Накопитель $NAME: остаточный ресурс ${R}%" "Износ заметен, хотя накопитель ещё может работать штатно." "Усилить контроль SMART и включить замену в плановое обслуживание." "smartctl -a $DEV"; fi; fi
+        if [[ "$HOURS" =~ ^[0-9]+$ ]]&&((HOURS>=40000)); then add_rec "ПЛАНОВО" "Накопитель $NAME: большая наработка — ${HOURS} ч" "Большая наработка сама по себе не означает отказ, но повышает возрастной риск." "Поддерживать актуальный бэкап и включить диск в плановый контроль." "smartctl -a $DEV"; fi
+        if [[ "$TEMP" =~ ^[0-9]+$ ]]; then TW=0; [ "$DISK_TYPE" = HDD ]&&((TEMP>=HDD_TEMP_WARN))&&TW=1; [ "$DISK_TYPE" = SSD ]&&((TEMP>=SSD_TEMP_WARN))&&TW=1; [ "$DISK_TYPE" = "NVMe SSD" ]&&((TEMP>=NVME_TEMP_WARN))&&TW=1; ((TW==1))&&add_rec "ВНИМАНИЕ" "Накопитель $NAME: повышенная температура ${TEMP}°C" "Уменьшается тепловой запас, возможны троттлинг и ускорение износа." "Проверить пыль, вентиляцию корпуса и охлаждение накопителя." "smartctl -a $DEV | grep -i Temperature"; fi
+    done
+}
+
+evaluate_base_snapshot() {
+    evaluate_base_disk_findings
 
 # Системный накопитель задаёт основную оценку storage. Известный дополнительный
 # внутренний накопитель влияет только на 20% storage-группы. Съёмные носители
@@ -3786,9 +3803,9 @@ fi
 # а полнота диагностики отдельно показывает ограничение.
 STORAGE_KNOWN=1
 if ((SYSTEM_DISK_COUNT>0)); then
-    if ! command -v smartctl >/dev/null 2>&1 || ((SYSTEM_SMART_UNKNOWN_COUNT>0)); then STORAGE_KNOWN=0; fi
+    if ((SMARTCTL_AVAILABLE==0 || SYSTEM_SMART_UNKNOWN_COUNT>0)); then STORAGE_KNOWN=0; fi
 else
-    if ! command -v smartctl >/dev/null 2>&1 && ((FIXED_DISKS>0)); then STORAGE_KNOWN=0; fi
+    if ((SMARTCTL_AVAILABLE==0 && FIXED_DISKS>0)); then STORAGE_KNOWN=0; fi
     ((SMART_UNKNOWN_COUNT>0))&&STORAGE_KNOWN=0
 fi
 AGE_KNOWN=1; ((SYSTEM_AGE_MONTHS<0))&&AGE_KNOWN=0
@@ -3801,7 +3818,7 @@ TOTAL_SCORE=$(clamp_score "$TOTAL_SCORE")
 
 # -------------------- ПОЛНОТА --------------------
 CONFIDENCE=100; CONFIDENCE_NOTES=()
-if ! command -v smartctl >/dev/null 2>&1 && ((FIXED_DISKS>0)); then
+if ((SMARTCTL_AVAILABLE==0 && FIXED_DISKS>0)); then
     CONFIDENCE=$((CONFIDENCE-25)); CONFIDENCE_NOTES+=("нет smartctl для внутренних накопителей")
 elif ((SYSTEM_DISK_COUNT>0 && SYSTEM_SMART_UNKNOWN_COUNT>0)); then
     CONFIDENCE=$((CONFIDENCE-15)); CONFIDENCE_NOTES+=("SMART системного накопителя недоступен")
@@ -3815,7 +3832,7 @@ fi
 ((JOURNAL_AVAILABLE==0))&&{ CONFIDENCE=$((CONFIDENCE-10)); CONFIDENCE_NOTES+=("journal недоступен"); }
 ((SYSTEMD_AVAILABLE==0))&&{ CONFIDENCE=$((CONFIDENCE-5)); CONFIDENCE_NOTES+=("службы не проверены"); }
 [ "$RAM_MODULES" = "?" ]&&{ CONFIDENCE=$((CONFIDENCE-5)); CONFIDENCE_NOTES+=("DMI ОЗУ недоступен"); }
-[ "$(id -u)" -ne 0 ]&&{ CONFIDENCE=$((CONFIDENCE-10)); CONFIDENCE_NOTES+=("запуск не от root"); }
+((BASE_UID!=0))&&{ CONFIDENCE=$((CONFIDENCE-10)); CONFIDENCE_NOTES+=("запуск не от root"); }
 ((CONFIDENCE<40))&&CONFIDENCE=40
 CONFIDENCE_NOTE="-"; ((${#CONFIDENCE_NOTES[@]}>0))&&CONFIDENCE_NOTE=$(printf '%s, ' "${CONFIDENCE_NOTES[@]}"); CONFIDENCE_NOTE=${CONFIDENCE_NOTE%, }
 
@@ -3826,7 +3843,7 @@ STATE_DISPLAY="$STATE"; ((CONFIDENCE<80))&&STATE_DISPLAY="ПРЕДВАРИТЕЛ
 # -------------------- РЕКОМЕНДАЦИИ --------------------
 printf -v FS_WORST_USE_Q '%q' "$FS_WORST_USE_MOUNT"
 printf -v FS_WORST_INODE_Q '%q' "$FS_WORST_INODE_MOUNT"
-if ! command -v smartctl >/dev/null 2>&1 && ((FIXED_DISKS>0)); then add_rec "ПРОВЕРКА" "SMART внутренних накопителей не проверен" "Без SMART нельзя достоверно оценить системный SSD/NVMe/HDD." "Установить smartmontools и повторить диагностику." "dnf install smartmontools"; elif ((SYSTEM_SMART_UNKNOWN_COUNT>0)); then add_rec "ПРОВЕРКА" "SMART системного накопителя недоступен" "Основной накопитель АРМ оценён не полностью; съёмные носители на этот статус не влияют." "Проверить поддержку SMART системного устройства и повторить диагностику." "smartctl --scan-open"; elif ((SMART_UNKNOWN_COUNT>0)); then add_rec "ПРОВЕРКА" "SMART дополнительных накопителей частично недоступен" "Системный накопитель имеет приоритет; неполные данные относятся к дополнительным внутренним дискам." "При необходимости проверить дополнительные диски отдельно." "smartctl --scan-open"; fi
+if ((SMARTCTL_AVAILABLE==0 && FIXED_DISKS>0)); then add_rec "ПРОВЕРКА" "SMART внутренних накопителей не проверен" "Без SMART нельзя достоверно оценить системный SSD/NVMe/HDD." "Установить smartmontools и повторить диагностику." "dnf install smartmontools"; elif ((SYSTEM_SMART_UNKNOWN_COUNT>0)); then add_rec "ПРОВЕРКА" "SMART системного накопителя недоступен" "Основной накопитель АРМ оценён не полностью; съёмные носители на этот статус не влияют." "Проверить поддержку SMART системного устройства и повторить диагностику." "smartctl --scan-open"; elif ((SMART_UNKNOWN_COUNT>0)); then add_rec "ПРОВЕРКА" "SMART дополнительных накопителей частично недоступен" "Системный накопитель имеет приоритет; неполные данные относятся к дополнительным внутренним дискам." "При необходимости проверить дополнительные диски отдельно." "smartctl --scan-open"; fi
 if ((FS_WORST_USE>=FS_CRIT)); then add_rec "КРИТИЧНО" "ФС $FS_WORST_USE_MOUNT заполнена на ${FS_WORST_USE}%" "Может прекратиться запись журналов, временных файлов и работа служб." "Срочно освободить минимум 10–15% объёма." "du -xhd1 $FS_WORST_USE_Q 2>/dev/null | sort -h | tail -20"; elif ((FS_WORST_USE>=FS_HIGH)); then add_rec "ВНИМАНИЕ" "ФС $FS_WORST_USE_MOUNT заполнена на ${FS_WORST_USE}%" "Мало места для обновлений, журналов и рабочих файлов." "Освободить место до уровня ниже 80%." "du -xhd1 $FS_WORST_USE_Q 2>/dev/null | sort -h | tail -20"; elif ((FS_WORST_USE>=FS_WARN)); then add_rec "ПЛАНОВО" "ФС $FS_WORST_USE_MOUNT заполнена на ${FS_WORST_USE}%" "Снижается резерв свободного места." "Выполнить плановую очистку и держать заполнение ниже 80%." "df -h $FS_WORST_USE_Q"; fi
 ((FS_WORST_INODE>=INODE_WARN))&&add_rec "ВНИМАНИЕ" "Inode на $FS_WORST_INODE_MOUNT использованы на ${FS_WORST_INODE}%" "При исчерпании inode новые файлы создать нельзя даже при наличии свободного места." "Найти каталоги с большим количеством мелких файлов и очистить ненужные кэши/временные данные." "df -i $FS_WORST_INODE_Q; du --inodes -x -d1 $FS_WORST_INODE_Q 2>/dev/null | sort -n | tail -20"
 ((ROOT_RO==1))&&add_rec "КРИТИЧНО" "Корневая ФС смонтирована read-only" "Запись данных, обновления и часть служб могут не работать." "Проверить журнал ядра; fsck выполнять только на размонтированной ФС из rescue/live." "findmnt -no SOURCE,FSTYPE,OPTIONS /; journalctl -k -b -p warning..alert --no-pager"
@@ -3860,6 +3877,7 @@ if ((TOTAL_SCORE>=80))&&[[ "$STATE" != КРИТИЧЕСКОЕ ]]; then if ((CONF
 elif ((TOTAL_SCORE>=65))&&[[ "$STATE" != КРИТИЧЕСКОЕ ]]; then CONCLUSION="АРМ работоспособен и может использоваться для текущих задач, однако выявлены факторы, требующие планового обслуживания."
 elif ((TOTAL_SCORE>=50))&&[[ "$STATE" != КРИТИЧЕСКОЕ ]]; then CONCLUSION="Работоспособность АРМ сохранена, но техническое состояние неудовлетворительно; рекомендуется устранить выявленные замечания."
 else CONCLUSION="Техническое состояние АРМ не позволяет считать его надёжно работоспособным; требуется диагностика и устранение критических замечаний."; fi
+}
 
 # -------------------- ПРИВАТНОСТЬ / ФОРМАТЫ --------------------
 mask_ipv4() {
@@ -3879,6 +3897,7 @@ json_escape() {
     v=${v//$'\t'/\\t}
     printf '%s' "$v"
 }
+prepare_base_output_view() {
 if ((PRIVACY_MODE==1)); then
     HOST_DISPLAY="ARM-REDACTED"
     GW_DISPLAY=$([ "$GW" = - ] && echo - || mask_ipv4 "$GW")
@@ -3886,9 +3905,10 @@ if ((PRIVACY_MODE==1)); then
 else
     HOST_DISPLAY="$HOST"; GW_DISPLAY="$GW"; DNS_DISPLAY="$DNS"
 fi
+}
 
 # -------------------- ВЫВОД --------------------
-if ((JSON_MODE==0)); then
+emit_base_text() {
 echo "ДИАГНОСТИЧЕСКИЙ ОТЧЁТ АРМ"
 echo "Дата: $(date '+%d.%m.%Y %H:%M:%S')"
 if ((SAVE_REPORT==1)); then echo "Отчёт: $REPORT_FILE"; fi
@@ -4057,7 +4077,7 @@ AGE_SCORE_TEXT="$AGE_SCORE / 100"; ((AGE_KNOWN==0))&&AGE_SCORE_TEXT="Н/Д"
 { echo "Показатель|Состояние|Вес в индексе"; echo "Накопители / износ|$STORAGE_SCORE_TEXT|40%"; echo "Файловая система|$FS_SCORE / 100|15%"; echo "Стабильность системы|$STAB_SCORE / 100|15%"; echo "Оперативная память|$MEM_SCORE / 100|10%"; echo "Процессор / температура|$CPU_SCORE / 100|10%"; echo "Возраст / наработка|$AGE_SCORE_TEXT|5%"; echo "Сеть|$NET_SCORE / 100|5%"; } | table
 
 section "КЛЮЧЕВЫЕ ПОКАЗАТЕЛИ"
-SMART_SUMMARY=OK; if ((FIXED_DISKS==0)); then SMART_SUMMARY="Н/Д"; elif ! command -v smartctl >/dev/null 2>&1; then SMART_SUMMARY="Н/Д (smartctl отсутствует)"; elif ((SYSTEM_DISK_COUNT>0 && SYSTEM_DISK_SCORE==0)); then SMART_SUMMARY=FAIL; elif ((SYSTEM_DISK_COUNT>0 && SYSTEM_SMART_UNKNOWN_COUNT>0)); then SMART_SUMMARY="Н/Д (системный)"; elif ((SYSTEM_DISK_COUNT==0 && SMART_UNKNOWN_COUNT>0)); then SMART_SUMMARY="Частично / Н/Д"; fi
+SMART_SUMMARY=OK; if ((FIXED_DISKS==0)); then SMART_SUMMARY="Н/Д"; elif ((SMARTCTL_AVAILABLE==0)); then SMART_SUMMARY="Н/Д (smartctl отсутствует)"; elif ((SYSTEM_DISK_COUNT>0 && SYSTEM_DISK_SCORE==0)); then SMART_SUMMARY=FAIL; elif ((SYSTEM_DISK_COUNT>0 && SYSTEM_SMART_UNKNOWN_COUNT>0)); then SMART_SUMMARY="Н/Д (системный)"; elif ((SYSTEM_DISK_COUNT==0 && SMART_UNKNOWN_COUNT>0)); then SMART_SUMMARY="Частично / Н/Д"; fi
 ((OOM_DETECTED==1))&&OOM_TEXT="ОБНАРУЖЕНО"||OOM_TEXT="Не обнаружено"
 { echo "SMART системного накопителя|$SMART_SUMMARY"; echo "Съёмных накопителей вне индекса|$REMOVABLE_DISKS"; echo "Файловые системы|макс. ${FS_WORST_USE}% на $FS_WORST_USE_MOUNT; inode ${FS_WORST_INODE}% на $FS_WORST_INODE_MOUNT"; echo "ОЗУ доступно|${MEM_AVAIL_PCT}%"; echo "Swap использовано|${SWAP_USED_PCT}%"; echo "Failed-служб|$FAILED_COUNT"; echo "Аппаратных/дисковых ошибок|$HW_ERR_COUNT"; if ((JOURNAL_AVAILABLE==1)); then echo "Уникальных journal error+|$JOURNAL_ERR_COUNT"; else echo "Journal текущей загрузки|Н/Д"; fi; echo "OOM за текущую загрузку|$OOM_TEXT"; echo "Синхронизация времени|$TIME_SYNC"; echo "Software RAID|$RAID_STATUS"; echo "ECC / EDAC|$ECC_STATUS"; [[ "$CPU_TEMP" =~ ^[0-9]+$ ]]&&echo "CPU температура|${CPU_TEMP}°C"; } | table
 
@@ -4084,15 +4104,17 @@ else
  done
 fi
 
-if ! command -v smartctl >/dev/null 2>&1; then echo; echo "Примечание: smartctl не установлен — оценка накопителей ограничена."; echo "Установка: dnf install smartmontools"; fi
-[ "$(id -u)" -ne 0 ]&&{ echo; echo "Примечание: для полного SMART/dmidecode запускайте скрипт от root."; }
+if ((SMARTCTL_AVAILABLE==0)); then echo; echo "Примечание: smartctl не установлен — оценка накопителей ограничена."; echo "Установка: dnf install smartmontools"; fi
+((BASE_UID!=0))&&{ echo; echo "Примечание: для полного SMART/dmidecode запускайте скрипт от root."; }
 
 echo; line
 echo "Индекс отражает текущее техническое состояние, износ накопителей, заполненность,"
 echo "стабильность, ресурсную нагрузку и эксплуатационный ориентир. Вес — вклад показателя"
 echo "в общий балл, а не процент износа. Индекс не прогнозирует срок службы."
 if ((SAVE_REPORT==1)); then echo "Отчёт сохранён: $REPORT_FILE"; fi
-else
+}
+
+emit_base_json() {
     # JSON предназначен для автоматизации. В privacy-режиме сетевые идентификаторы обезличены.
     printf '{\n'
     printf '  "schema_version": 1,\n'
@@ -4132,7 +4154,20 @@ else
     done
     ((_first==0)) && printf '\n  '
     printf ']\n}\n'
-fi
+}
+
+run_base_pipeline() {
+    collect_base_snapshot
+    evaluate_base_snapshot
+    prepare_base_output_view
+    if ((JSON_MODE==0)); then
+        emit_base_text
+    else
+        emit_base_json
+    fi
+}
+
+run_base_pipeline
 
 if ((SAVE_REPORT==1)); then
     chmod 0644 "$REPORT_FILE" 2>/dev/null || true
