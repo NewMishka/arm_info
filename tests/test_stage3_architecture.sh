@@ -55,7 +55,11 @@ _gvfs_session_bus() { printf 'unix:path=/fixture/bus'; }
 _autofs_map_targets() { printf '%s\n' '/mnt/Общий_(X)' '/mnt/Internet_(N)'; }
 findmnt() {
     case "$*" in
-        '-n -l -t cifs -o TARGET') printf '%s\n' '/mnt/Общий_(X)' '/mnt/Home Folder_(Z)' ;;
+        '-n -l -t cifs -o TARGET') printf '%s\n' \
+            '/mnt/Общий_(X)' \
+            '/mnt/Общий_(X)/DFS/Отдел' \
+            '/mnt/Общий_(X)/DFS/Архив документов' \
+            '/mnt/Home Folder_(Z)' ;;
         '-n -T /mnt/Общий_(X) -o SOURCE') echo '//files.example.test/common' ;;
         '-n -T /mnt/Home Folder_(Z) -o SOURCE') echo '//files.example.test/home' ;;
         '-n -T /mnt/Общий_(X) -o OPTIONS'|'-n -T /mnt/Home Folder_(Z) -o OPTIONS') echo 'rw,multiuser,sec=krb5' ;;
@@ -83,13 +87,16 @@ collect_autofs_resources
 collect_gvfs_resources
 [[ ${#NETRES_KEYS[@]} == 5 ]] || fail "normalized inventory has ${#NETRES_KEYS[@]} resources, expected 5"
 [[ ${NETRES_KEYS[*]} != *Документы* && ${NETRES_KEYS[*]} != *Проекты* ]] || fail 'share subdirectories were reported as GVFS mounts'
+[[ ${NETRES_KEYS[*]} != *'/DFS/'* ]] || fail 'nested CIFS/DFS mounts were reported as separate shares'
 [[ ${NETRES_ORIGINS[${NETRES_INDEX['path:/mnt/Общий_(X)']}-1]} == 'cifs,autofs' ]] || fail 'CIFS/autofs resource was not merged'
+[[ ${NETRES_DETAILS[${NETRES_INDEX['path:/mnt/Общий_(X)']}-1]} == *'вложенных CIFS/DFS mounts: 2'* ]] || fail 'nested CIFS/DFS mount count was not retained'
 [[ ${NETRES_CONFIGURED[${NETRES_INDEX['path:/mnt/Internet_(N)']}-1]} == yes ]] || fail 'configured flag lost'
 [[ ${NETRES_MOUNTED[${NETRES_INDEX['path:/mnt/Internet_(N)']}-1]} == no ]] || fail 'inactive autofs resource reported mounted'
 
 probe_network_resources
 [[ ${NETRES_STATES[${NETRES_INDEX['path:/mnt/Internet_(N)']}-1]} == NOT_MOUNTED ]] || fail 'inactive autofs resource did not stay visible'
 ! grep -Fq '/mnt/Internet_(N)' "$TMP/probe-calls" || fail 'passive inventory triggered autofs mount'
+! grep -Fq '/DFS/' "$TMP/probe-calls" || fail 'nested CIFS/DFS mount was probed as a separate share'
 [[ $(grep -c '^gio:' "$TMP/probe-calls") == 1 ]] || fail 'FUSE/GIO duplicate was probed twice'
 
 reset_checks

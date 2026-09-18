@@ -1567,11 +1567,43 @@ network_resource_add() {
 }
 
 collect_cifs_resources() {
-    local mnt source options multiuser desktop_user user context probe
+    local mnt source options multiuser desktop_user user context probe parent candidate
+    local nested_count duplicate is_nested detail
+    local -a cifs_targets=() top_level_targets=()
     if ! have findmnt; then NETRES_CIFS_DISCOVERY=unknown; return 0; fi
     desktop_user=$(_cifs_desktop_user 2>/dev/null || true)
+
+    # A single user-visible DFS share can create several nested CIFS mounts for
+    # referrals.  Keep the mount roots as report resources and retain nested
+    # kernel mounts only as diagnostic detail, otherwise every opened DFS
+    # subdirectory is incorrectly displayed as a separate share.
     while IFS= read -r mnt; do
         [[ -n $mnt ]] || continue
+        [[ $mnt == / ]] || mnt=${mnt%/}
+        duplicate=0
+        for candidate in "${cifs_targets[@]}"; do
+            [[ $candidate == "$mnt" ]] && { duplicate=1; break; }
+        done
+        ((duplicate==0)) && cifs_targets+=("$mnt")
+    done < <(findmnt -n -l -t cifs -o TARGET 2>/dev/null)
+
+    for candidate in "${cifs_targets[@]}"; do
+        is_nested=0
+        for parent in "${cifs_targets[@]}"; do
+            [[ $candidate == "$parent" ]] && continue
+            if [[ $parent == / || $candidate == "$parent"/* ]]; then
+                is_nested=1
+                break
+            fi
+        done
+        ((is_nested==0)) && top_level_targets+=("$candidate")
+    done
+
+    for mnt in "${top_level_targets[@]}"; do
+        nested_count=0
+        for candidate in "${cifs_targets[@]}"; do
+            [[ $candidate != "$mnt" && $candidate == "$mnt"/* ]] && nested_count=$((nested_count+1))
+        done
         source=$(findmnt -n -T "$mnt" -o SOURCE 2>/dev/null | head -n1)
         options=$(findmnt -n -T "$mnt" -o OPTIONS 2>/dev/null | head -n1)
         multiuser=no; [[ ,$options, == *,multiuser,* ]] && multiuser=yes
@@ -1580,9 +1612,11 @@ collect_cifs_resources() {
             if [[ -n $desktop_user ]]; then user=$desktop_user; context=$desktop_user
             else probe=blocked; context='GUI-пользователь не определён'; fi
         fi
+        detail="multiuser: $multiuser"
+        ((nested_count>0)) && detail+="; вложенных CIFS/DFS mounts: $nested_count"
         network_resource_add "path:$mnt" smb cifs "$source" "$mnt" "$user" "$context" \
-          yes yes "$probe" '' '' "multiuser: $multiuser"
-    done < <(findmnt -n -l -t cifs -o TARGET 2>/dev/null)
+          yes yes "$probe" '' '' "$detail"
+    done
 }
 
 collect_autofs_resources() {
