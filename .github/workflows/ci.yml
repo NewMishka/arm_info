@@ -19,6 +19,11 @@ jobs:
         run: bash -n arm_info.sh install.sh tests/test_cli.sh tests/test_enterprise.sh tests/test_recommendation_commands.sh tests/test_sections.sh tests/test_cifs_probe.sh packaging/build-rpm.sh
       - name: ShellCheck
         run: shellcheck --severity=error arm_info.sh install.sh tests/test_cli.sh tests/test_enterprise.sh tests/test_recommendation_commands.sh tests/test_sections.sh tests/test_cifs_probe.sh packaging/build-rpm.sh
+      - name: Rendering and query-cache regression tests
+        run: |
+          bash -n tests/test_stage1_performance.sh tests/render_cases.sh
+          shellcheck --severity=error tests/test_stage1_performance.sh tests/render_cases.sh
+          bash tests/test_stage1_performance.sh
       - name: Base CLI tests
         run: bash tests/test_cli.sh
       - name: Enterprise profile tests

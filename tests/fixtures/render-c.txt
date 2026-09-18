@@ -1,0 +1,120 @@
+WIDTH 50
+Параметр             [INFO]     Короткое значение
+                                        
+Certificate with a very      [WARN]     file:///etc/pki/a certificate with 
+long descriptive label                  spaces.pem; remaining: 125 days
+Сетевой               [N/A]      Не проверен: 
+ресурс №12 с                   недостаточно прав; 
+длинным                          пользователь user@example.test
+названием                      
+a	bcd                      [OK]       first
+                                        second
+                                        
+                                        last
+                                        
+文字🙂                   [INFO]     路径/文件/данные
+   Что проверить: Проверить DNS, Kerberos и доступность 
+                           сетевого ресурса в контексте 
+                           пользователя.
+                           
+   Длинная метка рекомендации one	two
+                           three
+WIDTH 86
+Параметр             [INFO]     Короткое значение
+                                        
+Certificate with a very      [WARN]     file:///etc/pki/a certificate with 
+long descriptive label                  spaces.pem; remaining: 125 days
+Сетевой               [N/A]      Не проверен: 
+ресурс №12 с                   недостаточно прав; 
+длинным                          пользователь user@example.test
+названием                      
+a	bcd                      [OK]       first
+                                        second
+                                        
+                                        last
+                                        
+文字🙂                   [INFO]     路径/文件/данные
+   Что проверить: Проверить DNS, Kerberos и доступность 
+                           сетевого ресурса в контексте 
+                           пользователя.
+                           
+   Длинная метка рекомендации one	two
+                           three
+WIDTH 95
+Параметр             [INFO]     Короткое значение
+                                        
+Certificate with a very      [WARN]     file:///etc/pki/a certificate with spaces.pem; 
+long descriptive label                  remaining: 125 days
+Сетевой               [N/A]      Не проверен: недостаточно 
+ресурс №12 с                   прав; пользователь user@example.test
+длинным                          
+названием                      
+a	bcd                      [OK]       first
+                                        second
+                                        
+                                        last
+                                        
+文字🙂                   [INFO]     路径/文件/данные
+   Что проверить: Проверить DNS, Kerberos и доступность 
+                           сетевого ресурса в контексте 
+                           пользователя.
+                           
+   Длинная метка рекомендации one	two
+                           three
+WIDTH 110
+Параметр                 [INFO]     Короткое значение
+                                            
+Certificate with a very long     [WARN]     file:///etc/pki/a certificate with spaces.pem; remaining: 125 days
+descriptive label                           
+Сетевой ресурс      [N/A]      Не проверен: недостаточно прав; 
+№12 с длинным                     пользователь user@example.test
+названием                          
+a	bcd                          [OK]       first
+                                            second
+                                            
+                                            last
+                                            
+文字🙂                       [INFO]     路径/文件/данные
+   Что проверить: Проверить DNS, Kerberos и доступность сетевого 
+                           ресурса в контексте пользователя.
+                           
+   Длинная метка рекомендации one	two
+                           three
+WIDTH 132
+Параметр                 [INFO]     Короткое значение
+                                            
+Certificate with a very long     [WARN]     file:///etc/pki/a certificate with spaces.pem; remaining: 125 days
+descriptive label                           
+Сетевой ресурс      [N/A]      Не проверен: недостаточно прав; пользователь 
+№12 с длинным                     user@example.test
+названием                          
+a	bcd                          [OK]       first
+                                            second
+                                            
+                                            last
+                                            
+文字🙂                       [INFO]     路径/文件/данные
+   Что проверить: Проверить DNS, Kerberos и доступность сетевого ресурса в 
+                           контексте пользователя.
+                           
+   Длинная метка рекомендации one	two
+                           three
+WIDTH 180
+Параметр                 [INFO]     Короткое значение
+                                            
+Certificate with a very long     [WARN]     file:///etc/pki/a certificate with spaces.pem; remaining: 125 days
+descriptive label                           
+Сетевой ресурс      [N/A]      Не проверен: недостаточно прав; пользователь 
+№12 с длинным                     user@example.test
+названием                          
+a	bcd                          [OK]       first
+                                            second
+                                            
+                                            last
+                                            
+文字🙂                       [INFO]     路径/文件/данные
+   Что проверить: Проверить DNS, Kerberos и доступность сетевого ресурса в 
+                           контексте пользователя.
+                           
+   Длинная метка рекомендации one	two
+                           three

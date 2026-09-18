@@ -446,16 +446,26 @@ pad_right() {
     ((len<width)) && printf '%*s' "$((width-len))" ''
 }
 
+# Conservative byte bound: short printable text cannot wrap in fold. Keep fold
+# for long/multiline/control text so legacy wrapping and locale behavior survive.
+_report_fits() {
+    local LC_ALL=C
+    [[ $1 != *[[:cntrl:]]* && ${#1} -le $2 ]]
+}
+
 print_check_row() {
     local label=$1 status=$2 value=$3 total label_w=31 status_w=9 gap=2 value_w i max
     local -a label_lines=() value_lines=()
-    total=$(report_width)
+    total=${REPORT_WIDTH:-}
+    [[ -n $total ]] || total=$(report_width)
     ((total<96)) && label_w=27
     value_w=$((total-label_w-status_w-(gap*2)))
     ((value_w<24)) && value_w=24
 
-    mapfile -t label_lines < <(printf '%s\n' "$label" | fold -s -w "$label_w")
-    mapfile -t value_lines < <(printf '%s\n' "$value" | fold -s -w "$value_w")
+    if _report_fits "$label" "$label_w"; then label_lines=("$label")
+    else mapfile -t label_lines < <(printf '%s\n' "$label" | fold -s -w "$label_w"); fi
+    if _report_fits "$value" "$value_w"; then value_lines=("$value")
+    else mapfile -t value_lines < <(printf '%s\n' "$value" | fold -s -w "$value_w"); fi
     ((${#label_lines[@]})) || label_lines=("")
     ((${#value_lines[@]})) || value_lines=("")
     max=${#label_lines[@]}; ((${#value_lines[@]}>max)) && max=${#value_lines[@]}
@@ -463,22 +473,26 @@ print_check_row() {
     for ((i=0; i<max; i++)); do
         local l=${label_lines[i]:-} s='' v=${value_lines[i]:-}
         ((i==0)) && s=$status
-        printf '%s%*s%s%*s%s\n' \
-            "$(pad_right "$l" "$label_w")" "$gap" '' \
-            "$(pad_right "$s" "$status_w")" "$gap" '' "$v"
+        pad_right "$l" "$label_w"
+        printf '%*s' "$gap" ''
+        pad_right "$s" "$status_w"
+        printf '%*s%s\n' "$gap" '' "$v"
     done
 }
 
 print_rec_field() {
     local label=$1 text=$2 total label_w=23 indent=3 gap=1 value_w i=0 line
-    total=$(report_width)
+    total=${REPORT_WIDTH:-}
+    [[ -n $total ]] || total=$(report_width)
     value_w=$((total-indent-label_w-gap))
     ((value_w<32)) && value_w=32
     while IFS= read -r line || [[ -n $line ]]; do
         if ((i==0)); then
-            printf '%*s%s %s\n' "$indent" '' "$(pad_right "$label" "$label_w")" "$line"
+            printf '%*s' "$indent" ''
+            pad_right "$label" "$label_w"
+            printf ' %s\n' "$line"
         else
-            printf '%*s%s %s\n' "$indent" '' "$(pad_right '' "$label_w")" "$line"
+            printf '%*s %s\n' "$((indent+label_w))" '' "$line"
         fi
         i=$((i+1))
     done < <(printf '%s\n' "$text" | fold -s -w "$value_w")
@@ -1186,7 +1200,29 @@ check_gvfs() {
     fi
 }
 
+# Cache only within one check_network invocation. Call in the parent shell:
+# command substitution would discard cache updates. Empty values are cached too.
+nm_802_value() {
+    local field=$1 id=$2 key v
+    key="$id|$field"
+    if [[ ${NM_802_CACHE[$key]+present} ]]; then
+        NM_802_VALUE=${NM_802_CACHE[$key]}
+        return 0
+    fi
+    v=$(nmcli -e no -g "$field" connection show uuid "$id" 2>/dev/null | head -n1)
+    # Preserve the compatibility fallback, including empty values, from baseline.
+    if [[ -z $v ]]; then
+        v=$(nmcli -g "$field" connection show uuid "$id" 2>/dev/null | head -n1)
+        v=${v//\\:/:}
+        v=${v//\\\\/\\}
+    fi
+    NM_802_CACHE[$key]=$v
+    NM_802_VALUE=$v
+}
+
 check_network() {
+    local -A NM_802_CACHE=()
+    local NM_802_VALUE=''
     local gw ifaces idx=0 row iface ip mac speed duplex link dns_domain cifs_count=0 cifs_ok=0 cifs_bad=0 cifs_unknown=0 mnt
     local cifs_source cifs_options cifs_multiuser cifs_user cifs_context cifs_state cifs_text cifs_detail cifs_sev cifs_source_display cifs_target_display
     local eap_count=0 active_eap_count=0 cert_global_min=-1 cert_unknown=0 cert_seen=0 cert_index=0 system_ca_profiles=0 uuid type eap conn_name
@@ -1218,30 +1254,17 @@ check_network() {
     fi
 
     if have nmcli; then
-        # -g включает terse output; на ряде версий NetworkManager двоеточия в file://
-        # экранируются. Сначала запрашиваем --escape no, затем используем fallback.
-        nm_802_value() {
-            local field=$1 id=$2 v
-            v=$(nmcli -e no -g "$field" connection show uuid "$id" 2>/dev/null | head -n1)
-            if [[ -z $v ]]; then
-                v=$(nmcli -g "$field" connection show uuid "$id" 2>/dev/null | head -n1)
-                v=${v//\\:/:}
-                v=${v//\\\\/\\}
-            fi
-            printf '%s' "$v"
-        }
-
         active_uuid_list=$(nmcli -t -f UUID connection show --active 2>/dev/null || true)
         while IFS=: read -r uuid type; do
             [[ -n $uuid ]] || continue
             case "$type" in ethernet|802-11-wireless|wifi) ;; *) continue;; esac
-            eap=$(nm_802_value 802-1x.eap "$uuid")
-            probe_client=$(nm_802_value 802-1x.client-cert "$uuid")
-            probe_ca=$(nm_802_value 802-1x.ca-cert "$uuid")
-            probe_p2_client=$(nm_802_value 802-1x.phase2-client-cert "$uuid")
-            probe_p2_ca=$(nm_802_value 802-1x.phase2-ca-cert "$uuid")
-            probe_key=$(nm_802_value 802-1x.private-key "$uuid")
-            probe_p2_key=$(nm_802_value 802-1x.phase2-private-key "$uuid")
+            nm_802_value 802-1x.eap "$uuid"; eap=$NM_802_VALUE
+            nm_802_value 802-1x.client-cert "$uuid"; probe_client=$NM_802_VALUE
+            nm_802_value 802-1x.ca-cert "$uuid"; probe_ca=$NM_802_VALUE
+            nm_802_value 802-1x.phase2-client-cert "$uuid"; probe_p2_client=$NM_802_VALUE
+            nm_802_value 802-1x.phase2-ca-cert "$uuid"; probe_p2_ca=$NM_802_VALUE
+            nm_802_value 802-1x.private-key "$uuid"; probe_key=$NM_802_VALUE
+            nm_802_value 802-1x.phase2-private-key "$uuid"; probe_p2_key=$NM_802_VALUE
             [[ -n $eap || -n $probe_client || -n $probe_ca || -n $probe_p2_client || -n $probe_p2_ca || -n $probe_key || -n $probe_p2_key ]] || continue
 
             eap_count=$((eap_count+1))
@@ -1250,18 +1273,18 @@ check_network() {
                 profile_state="активен"
                 active_eap_count=$((active_eap_count+1))
             fi
-            conn_name=$(nm_802_value connection.id "$uuid")
+            nm_802_value connection.id "$uuid"; conn_name=$NM_802_VALUE
             if ((PRIVACY)); then conn_name="профиль $eap_count (скрыто)"; fi
             add_check "802.1X" "network.8021x.profile.$eap_count" "Профиль 802.1X #$eap_count" "${conn_name:-$uuid}; $profile_state" info
             add_check "802.1X" "network.8021x.eap.$eap_count" "EAP-метод" "${eap:-не указан}" info
 
-            phase2_auth=$(nm_802_value 802-1x.phase2-auth "$uuid")
-            phase2_autheap=$(nm_802_value 802-1x.phase2-autheap "$uuid")
+            nm_802_value 802-1x.phase2-auth "$uuid"; phase2_auth=$NM_802_VALUE
+            nm_802_value 802-1x.phase2-autheap "$uuid"; phase2_autheap=$NM_802_VALUE
             [[ -n $phase2_auth ]] && add_check "802.1X" "network.8021x.phase2-auth.$eap_count" "Phase2 auth" "$phase2_auth" info
             [[ -n $phase2_autheap ]] && add_check "802.1X" "network.8021x.phase2-autheap.$eap_count" "Phase2 EAP" "$phase2_autheap" info
 
-            system_ca=$(nm_802_value 802-1x.system-ca-certs "$uuid")
-            ca_path=$(nm_802_value 802-1x.ca-path "$uuid")
+            nm_802_value 802-1x.system-ca-certs "$uuid"; system_ca=$NM_802_VALUE
+            nm_802_value 802-1x.ca-path "$uuid"; ca_path=$NM_802_VALUE
             if [[ $system_ca == yes || $system_ca == true || $system_ca == 1 ]]; then
                 system_ca_profiles=$((system_ca_profiles+1))
                 add_check "802.1X" "network.8021x.system-ca.$eap_count" "Системное хранилище CA" "используется" info
@@ -1271,10 +1294,10 @@ check_network() {
                 add_check "802.1X" "network.8021x.ca-path.$eap_count" "Каталог CA" "$ca_path" info
             fi
 
-            client_ref=$(nm_802_value 802-1x.client-cert "$uuid")
-            phase2_client_ref=$(nm_802_value 802-1x.phase2-client-cert "$uuid")
-            private_key=$(nm_802_value 802-1x.private-key "$uuid")
-            phase2_private_key=$(nm_802_value 802-1x.phase2-private-key "$uuid")
+            nm_802_value 802-1x.client-cert "$uuid"; client_ref=$NM_802_VALUE
+            nm_802_value 802-1x.phase2-client-cert "$uuid"; phase2_client_ref=$NM_802_VALUE
+            nm_802_value 802-1x.private-key "$uuid"; private_key=$NM_802_VALUE
+            nm_802_value 802-1x.phase2-private-key "$uuid"; phase2_private_key=$NM_802_VALUE
 
             # Проверяем внешний и phase2 наборы сертификатов. Поддерживаются file://,
             # обычные пути, PEM и DER. PKCS#11/blob отображаются, но без интерактивного
@@ -1286,7 +1309,7 @@ check_network() {
                 "phase2-ca|802-1x.phase2-ca-cert|Phase2 CA-сертификат"
             do
                 IFS='|' read -r cert_kind cert_field cert_label <<<"$cert_spec"
-                certref=$(nm_802_value "$cert_field" "$uuid")
+                nm_802_value "$cert_field" "$uuid"; certref=$NM_802_VALUE
                 [[ -n $certref ]] || continue
 
                 cert_seen=$((cert_seen+1)); cert_index=$((cert_index+1))
@@ -1590,6 +1613,7 @@ check_software() {
 emit_text() {
     local current="" i sevmark n=0 width
     width=$(report_width)
+    local REPORT_WIDTH=$width
     printf 'ARM_INFO КОРПОРАТИВНЫЙ %s\n' "$VERSION"
     if [[ $PROFILE == enterprise ]]; then
         printf 'Профиль: корпоративный\n'
