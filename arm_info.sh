@@ -14,6 +14,16 @@ fi
 
 ARM_INFO_VERSION="1.2.4"
 
+# Единый безопасный запуск потенциально зависающих внешних команд. Если GNU
+# timeout отсутствует, команда не запускается без ограничения: код 125 означает
+# неполную проверку, а не ошибку диагностируемого сервиса.
+_arm_run_limited() {
+    local seconds=$1
+    shift
+    command -v timeout >/dev/null 2>&1 || return 125
+    timeout -k 1 "$seconds" "$@"
+}
+
 ARM_INFO_SELF_SOURCE=${BASH_SOURCE[0]:-$0}
 if [[ -f $ARM_INFO_SELF_SOURCE ]]; then
     ARM_INFO_SELF_PATH=$(readlink -f -- "$ARM_INFO_SELF_SOURCE" 2>/dev/null || printf '%s' "$ARM_INFO_SELF_SOURCE")
@@ -41,6 +51,14 @@ SAVE_REPORT=0
 OUTPUT_PATH=""
 COMPARE_A=""
 COMPARE_B=""
+ARM_INFO_NETWORK_BUDGET=${ARM_INFO_NETWORK_BUDGET:-30}
+ARM_INFO_DC_JOBS=${ARM_INFO_DC_JOBS:-4}
+ARM_INFO_DC_PROBE_TIMEOUT=${ARM_INFO_DC_PROBE_TIMEOUT:-3}
+NETWORK_PROBE_DEADLINE=0
+
+[[ $ARM_INFO_NETWORK_BUDGET =~ ^[0-9]+$ ]] && ((ARM_INFO_NETWORK_BUDGET>=1 && ARM_INFO_NETWORK_BUDGET<=300)) || ARM_INFO_NETWORK_BUDGET=30
+[[ $ARM_INFO_DC_JOBS =~ ^[0-9]+$ ]] && ((ARM_INFO_DC_JOBS>=1 && ARM_INFO_DC_JOBS<=16)) || ARM_INFO_DC_JOBS=4
+[[ $ARM_INFO_DC_PROBE_TIMEOUT =~ ^[0-9]+$ ]] && ((ARM_INFO_DC_PROBE_TIMEOUT>=1 && ARM_INFO_DC_PROBE_TIMEOUT<=30)) || ARM_INFO_DC_PROBE_TIMEOUT=3
 
 usage() {
     cat <<'USAGE'
@@ -65,6 +83,8 @@ arm_info enterprise profiles 1.2.4
 
 Параметры:
   --probe-autofs          проверить также несмонтированные ресурсы autofs (может вызвать монтирование)
+  --network-budget SEC   общий лимит активных DC/SMB/GIO-проверок, 1–300 сек. (по умолчанию 30)
+  --network-jobs N       число параллельных TCP-проверок DC, 1–16 (по умолчанию 4)
   -p, --privacy           обезличить отчёт
   -s, --save              сохранить отчёт в файл
   -o, --output PATH       указать файл или каталог сохранения
@@ -90,6 +110,20 @@ while (($#)); do
             [[ $# -ge 3 ]] || { echo "Ошибка: --compare требует два JSON-файла" >&2; exit 64; }
             COMPARE_A=$2; COMPARE_B=$3; shift 3 ;;
         --probe-autofs) PROBE_AUTOFS=1; shift ;;
+        --network-budget)
+            [[ $# -ge 2 && $2 =~ ^[0-9]+$ && $2 -ge 1 && $2 -le 300 ]] || { echo "Ошибка: --network-budget требует число от 1 до 300" >&2; exit 64; }
+            ARM_INFO_NETWORK_BUDGET=$2; shift 2 ;;
+        --network-budget=*)
+            _arm_value=${1#*=}
+            [[ $_arm_value =~ ^[0-9]+$ && $_arm_value -ge 1 && $_arm_value -le 300 ]] || { echo "Ошибка: --network-budget требует число от 1 до 300" >&2; exit 64; }
+            ARM_INFO_NETWORK_BUDGET=$_arm_value; shift ;;
+        --network-jobs)
+            [[ $# -ge 2 && $2 =~ ^[0-9]+$ && $2 -ge 1 && $2 -le 16 ]] || { echo "Ошибка: --network-jobs требует число от 1 до 16" >&2; exit 64; }
+            ARM_INFO_DC_JOBS=$2; shift 2 ;;
+        --network-jobs=*)
+            _arm_value=${1#*=}
+            [[ $_arm_value =~ ^[0-9]+$ && $_arm_value -ge 1 && $_arm_value -le 16 ]] || { echo "Ошибка: --network-jobs требует число от 1 до 16" >&2; exit 64; }
+            ARM_INFO_DC_JOBS=$_arm_value; shift ;;
         -p|--privacy) PRIVACY=1; shift ;;
         --json) JSON_MODE=1; shift ;;
         -s|--save) SAVE_REPORT=1; shift ;;
@@ -179,7 +213,24 @@ fi
 have() { command -v "$1" >/dev/null 2>&1; }
 run_timeout() {
     local sec=$1; shift
-    if have timeout; then timeout "$sec" "$@"; else "$@"; fi
+    _arm_run_limited "$sec" "$@"
+}
+
+network_budget_start() {
+    local budget=${ARM_INFO_NETWORK_BUDGET:-30}
+    NETWORK_PROBE_DEADLINE=${NETWORK_PROBE_DEADLINE:-0}
+    ((NETWORK_PROBE_DEADLINE>0)) || NETWORK_PROBE_DEADLINE=$((SECONDS+budget))
+}
+
+# Sets NETWORK_PROBE_LIMIT to min(requested, remaining). Returns 1 when the
+# common active-probe budget is exhausted.
+network_probe_limit() {
+    local requested=$1 remaining
+    network_budget_start
+    remaining=$((NETWORK_PROBE_DEADLINE-SECONDS))
+    if ((remaining<=0)); then NETWORK_PROBE_LIMIT=0; return 1; fi
+    if ((requested<remaining)); then NETWORK_PROBE_LIMIT=$requested; else NETWORK_PROBE_LIMIT=$remaining; fi
+    return 0
 }
 trim() { sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
 join_by() { local IFS=$1; shift; printf '%s' "$*"; }
@@ -664,16 +715,57 @@ _srv_targets() {
 }
 
 _tcp_ok() {
-    local host=$1 port=$2
+    local host=$1 port=$2 seconds=${3:-${ARM_INFO_DC_PROBE_TIMEOUT:-3}}
     host=${host%.}
-    have timeout || return 2
-    if have nc; then timeout -k 1 3 nc -z "$host" "$port" >/dev/null 2>&1
-    else timeout -k 1 3 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$host" "$port" >/dev/null 2>&1
+    if have nc; then _arm_run_limited "$seconds" nc -z "$host" "$port" >/dev/null 2>&1
+    else _arm_run_limited "$seconds" bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$host" "$port" >/dev/null 2>&1
     fi
 }
 
+_dc_probe_one() {
+    local target=$1 port=$2 seconds=$3 result=$4 rc=0
+    _tcp_ok "$target" "$port" "$seconds" || rc=$?
+    printf '%s\n' "$rc" >"$result"
+}
+
+# Probe every discovered endpoint with bounded concurrency. Result files keep
+# collection order deterministic even though probes finish out of order.
+_dc_probe_targets() {
+    local targets=$1 result_dir=$2 total next=0 active=0 target port index
+    local jobs=${ARM_INFO_DC_JOBS:-4} probe_timeout=${ARM_INFO_DC_PROBE_TIMEOUT:-3}
+    local -a target_list=() pids=()
+    while IFS= read -r target; do
+        [[ -n $target ]] && target_list+=("$target")
+    done <<<"$targets"
+    total=$((${#target_list[@]}*2))
+    while ((next<total || active>0)); do
+        while ((next<total && active<jobs)); do
+            index=$((next/2)); target=${target_list[index]}
+            if ((next%2==0)); then port=88; else port=389; fi
+            if ! network_probe_limit "$probe_timeout"; then
+                while ((next<total)); do
+                    index=$((next/2))
+                    if ((next%2==0)); then port=88; else port=389; fi
+                    printf '126\n' >"$result_dir/$((index+1)).$port"
+                    next=$((next+1))
+                done
+                break
+            fi
+            _dc_probe_one "$target" "$port" "$NETWORK_PROBE_LIMIT" \
+              "$result_dir/$((index+1)).$port" &
+            pids+=("$!")
+            active=$((active+1)); next=$((next+1))
+        done
+        if ((active>0)); then
+            wait "${pids[0]}" 2>/dev/null || true
+            pids=("${pids[@]:1}")
+            active=$((active-1))
+        fi
+    done
+}
+
 check_dns_common() {
-    local section=${1:-DNS} domain=${2:-} resolv_target manager dns search_domain fqdn rc ldap_srv krb_srv dc_srv ldap_count krb_count targets target reachable=0 tested=0 untested=0
+    local section=${1:-DNS} domain=${2:-} resolv_target manager dns search_domain fqdn rc ldap_srv krb_srv dc_srv ldap_count krb_count targets target reachable=0 tested=0 untested=0 budget_skipped=0
     resolv_target=$(readlink -f /etc/resolv.conf 2>/dev/null || printf '/etc/resolv.conf')
     case "$resolv_target" in
         *systemd/resolve*) manager="systemd-resolved" ;;
@@ -681,6 +773,8 @@ check_dns_common() {
         *) if have nmcli; then manager="NetworkManager/статический"; else manager="статический/не определён"; fi ;;
     esac
     add_check "$section" "dns.manager" "Управление DNS" "$manager" ok "$resolv_target"
+    add_check "$section" "network.probe.policy" "Лимиты сетевой диагностики" \
+      "общий бюджет: ${ARM_INFO_NETWORK_BUDGET:-30} сек.; TCP DC: ${ARM_INFO_DC_PROBE_TIMEOUT:-3} сек.; параллельно: ${ARM_INFO_DC_JOBS:-4}" info
 
     dns=$(_dns_upstreams)
     if [[ -z $dns ]]; then
@@ -717,20 +811,24 @@ check_dns_common() {
         targets=$(printf '%s\n' "$ldap_srv" "$krb_srv" "$dc_srv" | _srv_targets)
         add_check "$section" "domain.dc.discovery" "Контроллеров по DNS" "$(grep -c . <<<"$targets" || true)" info \
           "Все уникальные узлы из LDAP, Kerberos и AD DC SRV; это обнаруженные узлы, а не список активных соединений АРМ."
-        local dc_index=0 krb_rc ldap_rc dc_sev dc_display krb_text ldap_text port
+        local dc_index=0 krb_rc ldap_rc dc_sev dc_display krb_text ldap_text port dc_results
+        dc_results=$(mktemp -d 2>/dev/null || true)
+        if [[ -n $dc_results ]]; then _dc_probe_targets "$targets" "$dc_results"
+        fi
         while IFS= read -r target; do
             [[ -n $target ]] || continue
             dc_index=$((dc_index+1))
-            krb_rc=0; ldap_rc=0
-            _tcp_ok "$target" 88 || krb_rc=$?
-            _tcp_ok "$target" 389 || ldap_rc=$?
+            krb_rc=125; ldap_rc=125
+            [[ -n $dc_results && -r $dc_results/$dc_index.88 ]] && read -r krb_rc <"$dc_results/$dc_index.88"
+            [[ -n $dc_results && -r $dc_results/$dc_index.389 ]] && read -r ldap_rc <"$dc_results/$dc_index.389"
             for port in "$krb_rc" "$ldap_rc"; do
-                if ((port==2)); then untested=$((untested+1))
+                if ((port==2 || port==125 || port==126)); then
+                    untested=$((untested+1)); ((port==126)) && budget_skipped=$((budget_skipped+1))
                 else tested=$((tested+1)); ((port==0)) && reachable=$((reachable+1)); fi
             done
-            case $krb_rc in 0) krb_text='доступен';; 2) krb_text='не проверен';; *) krb_text='недоступен';; esac
-            case $ldap_rc in 0) ldap_text='доступен';; 2) ldap_text='не проверен';; *) ldap_text='недоступен';; esac
-            if ((krb_rc==2 || ldap_rc==2)); then
+            case $krb_rc in 0) krb_text='доступен';; 126) krb_text='не проверен (лимит времени)';; 2|125) krb_text='не проверен';; *) krb_text='недоступен';; esac
+            case $ldap_rc in 0) ldap_text='доступен';; 126) ldap_text='не проверен (лимит времени)';; 2|125) ldap_text='не проверен';; *) ldap_text='недоступен';; esac
+            if ((krb_rc==2 || krb_rc==125 || krb_rc==126 || ldap_rc==2 || ldap_rc==125 || ldap_rc==126)); then
                 dc_sev=unknown
             elif ((krb_rc==0 && ldap_rc==0)); then
                 dc_sev=ok
@@ -743,11 +841,15 @@ check_dns_common() {
             add_check "$section" "domain.dc.node.$dc_index" "Контроллер #$dc_index" \
               "$dc_display — Kerberos 88: $krb_text; LDAP 389: $ldap_text" "$dc_sev"
         done <<<"$targets"
+        [[ -n $dc_results ]] && rm -rf -- "$dc_results"
         if ((tested>0)); then
             if ((reachable==tested)); then rc=ok; elif ((reachable>0)); then rc=warn; else rc=crit; fi
-            add_check "$section" "domain.dc.ports" "KDC/LDAP доступность" "$reachable из $tested TCP-проверок; не проверены: $untested" "$rc"
+            ((untested>0)) && rc=unknown
+            add_check "$section" "domain.dc.ports" "KDC/LDAP доступность" \
+              "$reachable из $tested TCP-проверок; не проверены: $untested; лимит времени: $budget_skipped" "$rc"
         else
-            add_check "$section" "domain.dc.ports" "KDC/LDAP доступность" "не проверена" unknown "Нужны SRV-записи и nc/timeout"
+            add_check "$section" "domain.dc.ports" "KDC/LDAP доступность" \
+              "не проверена; лимит времени: $budget_skipped" unknown "Нужны SRV-записи и timeout; либо исчерпан общий бюджет активных сетевых проверок."
         fi
     else
         add_check "$section" "dns.srv" "Доменные SRV" "домен не определён" unknown
@@ -768,7 +870,12 @@ check_domain() {
 
     if have adcli; then
         if [[ -n $d ]]; then run_timeout 10 adcli testjoin -D "$d" >/dev/null 2>&1; else run_timeout 10 adcli testjoin >/dev/null 2>&1; fi
-        case $? in 0) join_state="исправен"; sev=ok;; 124) join_state="тайм-аут проверки"; sev=warn;; *) join_state="ошибка testjoin"; sev=crit;; esac
+        case $? in
+            0) join_state="исправен"; sev=ok ;;
+            124|137) join_state="тайм-аут проверки"; sev=warn ;;
+            125) join_state="не проверен: timeout отсутствует"; sev=unknown ;;
+            *) join_state="ошибка testjoin"; sev=crit ;;
+        esac
         add_check "ДОМЕН / KERBEROS" "domain.join" "AD join" "$join_state" "$sev"
     elif have realm && realm list 2>/dev/null | grep -q '^realm-name:'; then
         add_check "ДОМЕН / KERBEROS" "domain.join" "AD join" "realm настроен, adcli отсутствует" unknown
@@ -835,12 +942,20 @@ _cifs_exec_as() {
     fi
 }
 
+_cifs_run_limited() {
+    local as_user=$1 seconds=$2
+    shift 2
+    have timeout || return 125
+    _cifs_exec_as "$as_user" timeout -k 1 "$seconds" "$@"
+}
+
 _cifs_classify() {
     local rc=$1 err=${2:-}
     case "$rc" in
         0) printf 'OK'; return ;;
         124|137) printf 'TIMEOUT'; return ;;
         125) printf 'INCONCLUSIVE'; return ;;
+        126) printf 'BUDGET'; return ;;
     esac
     case "$err" in
         *'Permission denied'*|*'Operation not permitted'*) printf 'DENIED' ;;
@@ -867,7 +982,14 @@ _cifs_probe() {
 
     # Этап 1: полностью прочитать список имён в каталоге. В отличие от
     # find -print -quit это не завершается после первого cached dentry.
-    _cifs_exec_as "$as_user" env LC_ALL=C timeout -k 1 6 ls -U -A -1 -- "$mnt/" >/dev/null 2>"$errfile"
+    if ! network_probe_limit 6; then
+        CIFS_PROBE_RC=126; CIFS_PROBE_STATE=BUDGET
+        CIFS_PROBE_ERR='общий лимит времени активных сетевых проверок исчерпан'
+        rm -f -- "$errfile" "$samplefile"
+        return 0
+    fi
+    _cifs_run_limited "$as_user" "$NETWORK_PROBE_LIMIT" env LC_ALL=C \
+      ls -U -A -1 -- "$mnt/" >/dev/null 2>"$errfile"
     rc=$?
     if ((rc != 0)); then
         CIFS_PROBE_RC=$rc
@@ -880,7 +1002,14 @@ _cifs_probe() {
     # Этап 2: если каталог не пустой, получить метаданные одного элемента.
     # Caja/приложения делают metadata lookup, поэтому простой readdir недостаточен.
     : >"$errfile"
-    _cifs_exec_as "$as_user" env LC_ALL=C timeout -k 1 6 find "$mnt" -mindepth 1 -maxdepth 1 -print -quit >"$samplefile" 2>"$errfile"
+    if ! network_probe_limit 6; then
+        CIFS_PROBE_RC=126; CIFS_PROBE_STATE=BUDGET
+        CIFS_PROBE_ERR='общий лимит времени активных сетевых проверок исчерпан'
+        rm -f -- "$errfile" "$samplefile"
+        return 0
+    fi
+    _cifs_run_limited "$as_user" "$NETWORK_PROBE_LIMIT" env LC_ALL=C \
+      find "$mnt" -mindepth 1 -maxdepth 1 -print -quit >"$samplefile" 2>"$errfile"
     rc=$?
     if ((rc != 0)); then
         CIFS_PROBE_RC=$rc
@@ -892,7 +1021,14 @@ _cifs_probe() {
     IFS= read -r sample <"$samplefile" || sample=''
     if [[ -n $sample ]]; then
         : >"$errfile"
-        _cifs_exec_as "$as_user" env LC_ALL=C timeout -k 1 6 stat -L -- "$sample" >/dev/null 2>"$errfile"
+        if ! network_probe_limit 6; then
+            CIFS_PROBE_RC=126; CIFS_PROBE_STATE=BUDGET
+            CIFS_PROBE_ERR='общий лимит времени активных сетевых проверок исчерпан'
+            rm -f -- "$errfile" "$samplefile"
+            return 0
+        fi
+        _cifs_run_limited "$as_user" "$NETWORK_PROBE_LIMIT" env LC_ALL=C \
+          stat -L -- "$sample" >/dev/null 2>"$errfile"
         rc=$?
         if ((rc != 0)); then
             CIFS_PROBE_RC=$rc
@@ -917,6 +1053,7 @@ _cifs_state_text() {
         IO) printf 'ошибка I/O' ;;
         MISSING) printf 'точка недоступна' ;;
         INCONCLUSIVE) printf 'не проверен' ;;
+        BUDGET) printf 'не проверен (лимит времени)' ;;
         *) printf 'ошибка' ;;
     esac
 }
@@ -1013,7 +1150,7 @@ check_autofs_smb() {
                             mounted=$(findmnt -C -n -M "$target" -t cifs -o TARGET 2>/dev/null)
                             if [[ -n $mounted ]]; then sev=ok; state='смонтирован по обращению; доступен'
                             else sev=unknown; state='каталог отвечает, CIFS-монтирование не подтверждено'; fi ;;
-                        INCONCLUSIVE) sev=unknown ;;
+                        INCONCLUSIVE|BUDGET) sev=unknown ;;
                         *) sev=warn ;;
                     esac
                 fi
@@ -1077,8 +1214,15 @@ _gio_probe() {
     local uri=$1 user=$2 runtime=$3 bus=$4 err rc
     CIFS_PROBE_STATE=INCONCLUSIVE; CIFS_PROBE_RC=125; CIFS_PROBE_ERR=''
     err=$(mktemp) || return 0
-    _cifs_exec_as "$user" env LC_ALL=C XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="$bus" \
-      timeout -k 1 6 gio list -a standard::name,standard::type "$uri" >/dev/null 2>"$err"
+    if ! network_probe_limit 6; then
+        CIFS_PROBE_RC=126; CIFS_PROBE_STATE=BUDGET
+        CIFS_PROBE_ERR='общий лимит времени активных сетевых проверок исчерпан'
+        rm -f -- "$err"
+        return 0
+    fi
+    _cifs_run_limited "$user" "$NETWORK_PROBE_LIMIT" env LC_ALL=C \
+      XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="$bus" \
+      gio list -a standard::name,standard::type "$uri" >/dev/null 2>"$err"
     rc=$?
     CIFS_PROBE_RC=$rc
     CIFS_PROBE_ERR=$(tr '\n' ' ' <"$err" | cut -c1-240)
@@ -1112,7 +1256,7 @@ check_gvfs() {
         if [[ -n $gvfs_user ]] && have timeout && have ls; then
             # ls -U без -l/-F/color перечисляет имена без stat каждого ресурса.
             # Сломанная шара остаётся в списке. Не использовать find -type d.
-            _cifs_exec_as "$gvfs_user" env LC_ALL=C timeout -k 1 6 \
+            _cifs_run_limited "$gvfs_user" 6 env LC_ALL=C \
               ls -U -A -1 --color=never --quoting-style=literal -- "$g" >"$dirs_file" 2>"$errfile"
             rc=$?
         fi
@@ -1133,7 +1277,7 @@ check_gvfs() {
             state=$CIFS_PROBE_STATE
             case $state in
                 OK) good=$((good+1)); sev=ok ;;
-                INCONCLUSIVE) unknown=$((unknown+1)); sev=unknown ;;
+                INCONCLUSIVE|BUDGET) unknown=$((unknown+1)); sev=unknown ;;
                 *) bad=$((bad+1)); sev=warn ;;
             esac
             if [[ $name == smb-share:* ]]; then
@@ -1154,8 +1298,9 @@ check_gvfs() {
         bus=$(_gvfs_session_bus "$uid" "$runtime" || true)
         if [[ -n $bus && -n $gvfs_user ]] && have gio && have timeout; then
             gio_sessions=$((gio_sessions+1))
-            _cifs_exec_as "$gvfs_user" env LC_ALL=C XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="$bus" \
-              timeout -k 1 6 gio mount -l >"$dirs_file" 2>"$errfile"
+            _cifs_run_limited "$gvfs_user" 6 env LC_ALL=C \
+              XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="$bus" \
+              gio mount -l >"$dirs_file" 2>"$errfile"
             gio_rc=$?
             if ((gio_rc!=0)) || [[ -s $errfile ]]; then
                 discovery_unknown=$((discovery_unknown+1))
@@ -1172,7 +1317,7 @@ check_gvfs() {
                 _gio_probe "$uri" "$gvfs_user" "$runtime" "$bus"
                 case $CIFS_PROBE_STATE in
                     OK) good=$((good+1)); sev=ok;;
-                    INCONCLUSIVE) unknown=$((unknown+1)); sev=unknown;;
+                    INCONCLUSIVE|BUDGET) unknown=$((unknown+1)); sev=unknown;;
                     *) bad=$((bad+1)); sev=warn;;
                 esac
                 if ((PRIVACY)); then display='ресурс скрыт'; detail="GIO; контекст: скрыто; rc=$CIFS_PROBE_RC"
@@ -1504,7 +1649,7 @@ check_network() {
             if [[ -n $CIFS_PROBE_ERR ]] && ((PRIVACY==0)); then cifs_detail="$cifs_detail; $CIFS_PROBE_ERR"; fi
             case "$cifs_state" in
                 OK) cifs_ok=$((cifs_ok+1)); cifs_sev=ok ;;
-                INCONCLUSIVE) cifs_unknown=$((cifs_unknown+1)); cifs_sev=unknown ;;
+                INCONCLUSIVE|BUDGET) cifs_unknown=$((cifs_unknown+1)); cifs_sev=unknown ;;
                 *) cifs_bad=$((cifs_bad+1)); cifs_sev=warn ;;
             esac
 
@@ -2209,7 +2354,7 @@ base_print_rec_commands() {
 }
 
 run_smart() {
-    if command -v timeout >/dev/null 2>&1; then timeout 8 smartctl "$@"; else smartctl "$@"; fi
+    _arm_run_limited 8 smartctl "$@"
 }
 
 read_cpu_temp_once() {

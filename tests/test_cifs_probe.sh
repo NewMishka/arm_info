@@ -6,8 +6,8 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 
 grep -Fq 'findmnt -n -l -t cifs -o TARGET 2>/dev/null' "$SCRIPT" || fail 'TARGET-only findmnt enumeration missing'
 grep -Fq '_cifs_desktop_user()' "$SCRIPT" || fail 'user-aware CIFS context helper missing'
-grep -Fq 'timeout -k 1 6 ls -U -A -1 -- "$mnt/"' "$SCRIPT" || fail 'full directory enumeration CIFS probe missing'
-grep -Fq 'timeout -k 1 6 stat -L -- "$sample"' "$SCRIPT" || fail 'metadata lookup CIFS probe missing'
+grep -Fq 'ls -U -A -1 -- "$mnt/"' "$SCRIPT" || fail 'full directory enumeration CIFS probe missing'
+grep -Fq 'stat -L -- "$sample"' "$SCRIPT" || fail 'metadata lookup CIFS probe missing'
 grep -Fq 'network.cifs.mount.$cifs_count' "$SCRIPT" || fail 'per-share report rows missing'
 grep -Fq 'cifs_detail="контекст: скрыто; multiuser: $cifs_multiuser"' "$SCRIPT" || fail 'CIFS privacy context masking missing'
 ! grep -Fq 'run_timeout 5 find "$mnt" -mindepth 1 -maxdepth 1 -print -quit' "$SCRIPT" || fail 'old first-entry-only probe remains'

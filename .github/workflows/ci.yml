@@ -24,6 +24,11 @@ jobs:
           bash -n tests/test_stage1_performance.sh tests/render_cases.sh
           shellcheck --severity=error tests/test_stage1_performance.sh tests/render_cases.sh
           bash tests/test_stage1_performance.sh
+      - name: Bounded network and concurrency regression tests
+        run: |
+          bash -n tests/test_stage2_limits.sh
+          shellcheck --severity=error tests/test_stage2_limits.sh
+          bash tests/test_stage2_limits.sh
       - name: Base CLI tests
         run: bash tests/test_cli.sh
       - name: Enterprise profile tests
