@@ -147,7 +147,8 @@ unset -f findmnt
 source "$TMP/functions.sh"
 PRIVACY=1
 RUNTIME="$TMP/gio/$(id -u)"
-mkdir -p "$RUNTIME/gvfs/smb-share:server=files.example.test,share=Sales Space"
+mkdir -p "$RUNTIME/gvfs/smb-share:server=files.example.test,share=Sales Space" \
+    "$RUNTIME/gvfs/Обычная подпапка"
 _gvfs_runtime_dirs() { printf '%s\n' "$RUNTIME"; }
 _gvfs_session_bus() { printf 'unix:path=/fixture/bus'; }
 gio() {
@@ -173,6 +174,7 @@ export TMP
 reset_checks
 check_gvfs 1
 [[ ${VALUES[*]} == *'3; доступны: 2; проблемы: 1'* ]] || fail 'GIO/FUSE union or deduplication'
+[[ ${VALUES[*]} != *'Обычная подпапка'* ]] || fail 'ordinary share directory reported as a mount'
 [[ $(wc -l <"$TMP/gio-calls") == 2 ]] || fail 'GIO should probe only resources absent from FUSE'
 [[ ${LABELS[*]} == *'SMB-ресурс #4'* && $WARN_COUNT == 1 ]] || fail 'GIO report rows'
 [[ ${VALUES[*]} != *example.test* && ${DETAILS[*]} != *example.test* ]] || fail 'GIO privacy'

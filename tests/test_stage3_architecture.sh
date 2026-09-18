@@ -30,8 +30,10 @@ ARM_INFO_NETWORK_BUDGET=30
 NETWORK_PROBE_DEADLINE=0
 
 RUNTIME="$TMP/runtime/$(id -u)"
-mkdir -p "$RUNTIME/gvfs/smb-share:server=files.example.test,share=Sales" "$TMP/bin"
+mkdir -p "$RUNTIME/gvfs/smb-share:server=files.example.test,share=Sales" \
+    "$RUNTIME/gvfs/Документы" "$RUNTIME/gvfs/Проекты" "$TMP/bin"
 touch "$RUNTIME/gvfs/smb-share:server=files.example.test,share=Sales/data.txt"
+touch "$RUNTIME/gvfs/Документы/вложенный-файл.txt"
 cat >"$TMP/bin/gio" <<'GIO'
 #!/usr/bin/env bash
 case "$1" in
@@ -80,6 +82,7 @@ collect_cifs_resources
 collect_autofs_resources
 collect_gvfs_resources
 [[ ${#NETRES_KEYS[@]} == 5 ]] || fail "normalized inventory has ${#NETRES_KEYS[@]} resources, expected 5"
+[[ ${NETRES_KEYS[*]} != *Документы* && ${NETRES_KEYS[*]} != *Проекты* ]] || fail 'share subdirectories were reported as GVFS mounts'
 [[ ${NETRES_ORIGINS[${NETRES_INDEX['path:/mnt/Общий_(X)']}-1]} == 'cifs,autofs' ]] || fail 'CIFS/autofs resource was not merged'
 [[ ${NETRES_CONFIGURED[${NETRES_INDEX['path:/mnt/Internet_(N)']}-1]} == yes ]] || fail 'configured flag lost'
 [[ ${NETRES_MOUNTED[${NETRES_INDEX['path:/mnt/Internet_(N)']}-1]} == no ]] || fail 'inactive autofs resource reported mounted'

@@ -91,7 +91,7 @@ arm_info enterprise profiles 1.2.4
 
 Параметры:
   --probe-autofs          проверить также несмонтированные ресурсы autofs (может вызвать монтирование)
-  --network-budget SEC   общий лимит активных DC/SMB/GIO/MAIL-проверок, 1–300 сек. (по умолчанию 30)
+  --network-budget SEC   общий лимит активных DC/SMB/autofs/GIO/MAIL-проверок, 1–300 сек. (по умолчанию 30)
   --network-jobs N       число параллельных TCP-проверок DC, 1–16 (по умолчанию 4)
   --mail-endpoint URI    добавить IMAP/SMTP endpoint; можно повторять
                          imaps://host:993, imap://host:143,
@@ -1352,6 +1352,17 @@ _smb_resource_key() {
     printf '%s/%s' "${host,,}" "$decoded"
 }
 
+_gvfs_mount_entry() {
+    # Корень gvfsd-fuse обычно содержит mount descriptors вида
+    # smb-share:server=HOST,share=NAME или sftp:host=HOST. В некоторых
+    # окружениях чтение /run/user/UID/gvfs может вернуть содержимое уже
+    # открытой шары. Обычные подпапки нельзя принимать за отдельные mounts.
+    local name=$1 scheme payload
+    [[ -n $name && $name != */* && $name == *:* ]] || return 1
+    scheme=${name%%:*}; payload=${name#*:}
+    [[ $scheme =~ ^[[:alnum:]_.+-]+$ && $payload == *=* ]]
+}
+
 _gio_probe() {
     local uri=$1 user=$2 runtime=$3 bus=$4 err rc
     CIFS_PROBE_STATE=INCONCLUSIVE; CIFS_PROBE_RC=125; CIFS_PROBE_ERR=''
@@ -1411,6 +1422,7 @@ check_gvfs() {
         fi
         while IFS= read -r name || [[ -n $name ]]; do
             [[ -n $name ]] || continue
+            _gvfs_mount_entry "$name" || continue
             dir=$g/$name
             resource_key="$uid/$(_smb_resource_key "$name")"
             seen["$resource_key"]=1
@@ -1631,6 +1643,7 @@ collect_gvfs_resources() {
         fi
         while IFS= read -r name || [[ -n $name ]]; do
             [[ -n $name ]] || continue
+            _gvfs_mount_entry "$name" || continue
             dir=$g/$name; key="$uid/$(_smb_resource_key "$name")"
             if [[ $name == smb-share:* ]]; then kind=smb; else kind=gvfs; fi
             network_resource_add "gvfs:$key" "$kind" gvfs "$name" "$dir" "$user" "$user" \
