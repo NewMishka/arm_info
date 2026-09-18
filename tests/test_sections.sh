@@ -133,14 +133,15 @@ PY
 check_profile_json domain "ДОМЕН / KERBEROS|DNS / DOMAIN"
 check_profile_json network "СЕТЬ|DNS|802.1X|SMB / GVFS"
 check_profile_json print "ПЕЧАТЬ / CUPS"
+check_profile_json mail "ПОЧТА / MAIL"
 check_profile_json software "ИНВЕНТАРИЗАЦИЯ ПО|ПРОЦЕССЫ"
-check_profile_json enterprise "ДОМЕН / KERBEROS|DNS / DOMAIN|СЕТЬ|802.1X|SMB / GVFS|ПЕЧАТЬ / CUPS"
+check_profile_json enterprise "ДОМЕН / KERBEROS|DNS / DOMAIN|СЕТЬ|802.1X|SMB / GVFS|ПЕЧАТЬ / CUPS|ПОЧТА / MAIL"
 
 CORP_TXT="$TMPDIR/corp.txt"
 run_diag "$CORP_TXT" --corp --privacy
 assert_contains "$CORP_TXT" "ARM_INFO КОРПОРАТИВНЫЙ"
 assert_contains "$CORP_TXT" "Профиль: корпоративный"
-for section in "ДОМЕН / KERBEROS" "DNS / DOMAIN" "СЕТЬ" "802.1X" "SMB / GVFS" "ПЕЧАТЬ / CUPS" "СВОДКА" "РЕКОМЕНДАЦИИ"; do
+for section in "ДОМЕН / KERBEROS" "DNS / DOMAIN" "СЕТЬ" "802.1X" "SMB / GVFS" "ПЕЧАТЬ / CUPS" "ПОЧТА / MAIL" "СВОДКА" "РЕКОМЕНДАЦИИ"; do
     assert_section_once "$CORP_TXT" "$section"
 done
 assert_contains "$CORP_TXT" "Параметр"
@@ -165,6 +166,7 @@ grep -Fq 'network.cifs.mount.$cifs_count' "$SCRIPT" || die "enterprise: per-shar
 ! grep -Fq 'run_timeout 5 find "$mnt" -mindepth 1 -maxdepth 1 -print -quit' "$SCRIPT" || die "enterprise: old first-entry-only CIFS probe returned"
 ! grep -Fq "findmnt -n -l -t cifs -o TARGET,SOURCE 2>/dev/null | awk" "$SCRIPT" || die "enterprise: whitespace-splitting CIFS parser returned"
 grep -q 'check_print()' "$SCRIPT" || die "enterprise: print checker missing"
+grep -q 'check_mail()' "$SCRIPT" || die "enterprise: mail checker missing"
 grep -q 'check_software()' "$SCRIPT" || die "enterprise: software checker missing"
 
 echo "OK: all standard and corporate report sections are covered"

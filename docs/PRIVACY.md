@@ -16,7 +16,8 @@ sudo arm_info --corp --privacy
 - MAC заменяется на `xx:xx:xx:xx:xx:xx`;
 - DNS и SSSD-домены скрываются;
 - интерфейсы выводятся как `net1`, `net2`, ...;
-- enterprise-профили скрывают инфраструктурные значения и используют placeholders вроде `<DOMAIN>`, `<DC>`, `<MOUNT>`, `<QUEUE>`, `<CERT>` в диагностических командах там, где это необходимо;
+- enterprise-профили скрывают инфраструктурные значения и используют безопасные placeholders вроде `DOMAIN_FQDN`, `DC_FQDN`, `MOUNT_PATH`, `QUEUE_NAME`, `CERT_PATH` в рекомендациях там, где это необходимо;
+- почтовый профиль заменяет server/domain на `mail-host-N`/`mail-domain-N` и скрывает Subject/Issuer сертификата; логины и пароли в отчёт не собираются;
 - printer URI очищается от встроенных логина/пароля независимо от privacy-режима;
 - автоматически сформированное имя TXT/JSON файла не содержит hostname.
 

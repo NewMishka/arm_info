@@ -5,8 +5,8 @@
 ## Режимы
 
 - стандартный анализ — аппаратное/системное состояние с техническим индексом;
-- `--profile domain|network|print|software` — отдельные корпоративные read-only профили;
-- `--corp` / `--profile enterprise` — объединение `domain + network + print` без глобальной инвентаризации ПО;
+- `--profile domain|network|print|mail|software` — отдельные корпоративные read-only профили;
+- `--corp` / `--profile enterprise` — объединение `domain + network + print + mail` без глобальной инвентаризации ПО;
 - `--compare A.json B.json` — сравнение двух сохранённых JSON-отчётов.
 
 Корпоративные профили не смешиваются с базовым health score: они формируют собственные `OK/INFO/WARN/CRIT/N/A` проверки и рекомендации.
@@ -25,6 +25,7 @@
 - `/proc/mdstat`, `/sys/devices/system/edac`, `/sys/class/power_supply`;
 - `timedatectl`/`chronyc`, `realm`, `sssctl`, `adcli`, `klist`;
 - DNS `dig`/`host`, `openssl`, CIFS/GVFS/GIO, CUPS/`lpstat`;
+- Thunderbird-совместимые `prefs.js` активного пользователя и явно заданные IMAP/SMTP URI без учётных данных;
 - `rpm` и `ps` для отдельного software-профиля.
 
 ## Принципы
@@ -39,6 +40,12 @@
 9. Privacy применяется к пользовательскому выводу, инфраструктурным идентификаторам и автоматически сформированному имени отчёта.
 10. Конфигурация парсится whitelist-механизмом, без `source`.
 10. `Makefile` не содержит отдельной версии: значение читается из `VERSION`, а `make check` сверяет его с `arm_info.sh` и RPM spec.
+
+## Почтовая диагностика
+
+Профиль `mail` обнаруживает IMAP/SMTP endpoints из Thunderbird-совместимых `prefs.js` активного/invoking пользователя и принимает явные URI через `--mail-endpoint`. Значения проходят строгую проверку и не могут содержать логин или пароль. DNS, TCP и TLS/STARTTLS используют общий сетевой бюджет корпоративного отчёта.
+
+TLS-проверка выполняет hostname/chain verification средствами установленного OpenSSL, читает только leaf-сертификат и без аутентификации запрашивает доступные IMAP/SMTP capabilities. Скрипт не читает пароль, не получает Kerberos service ticket, не открывает ящик и не отправляет письмо. Поэтому успешный транспортный тест подтверждает путь до сервера и TLS, но не гарантирует успешный вход пользователя или доставку письма.
 
 ## Температура CPU
 

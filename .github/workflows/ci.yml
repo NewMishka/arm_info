@@ -16,9 +16,9 @@ jobs:
       - name: Install ShellCheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Syntax
-        run: bash -n arm_info.sh install.sh tests/test_cli.sh tests/test_enterprise.sh tests/test_recommendation_commands.sh tests/test_sections.sh tests/test_cifs_probe.sh packaging/build-rpm.sh
+        run: bash -n arm_info.sh install.sh tests/test_cli.sh tests/test_enterprise.sh tests/test_mail_profile.sh tests/test_recommendation_commands.sh tests/test_sections.sh tests/test_cifs_probe.sh packaging/build-rpm.sh
       - name: ShellCheck
-        run: shellcheck --severity=error arm_info.sh install.sh tests/test_cli.sh tests/test_enterprise.sh tests/test_recommendation_commands.sh tests/test_sections.sh tests/test_cifs_probe.sh packaging/build-rpm.sh
+        run: shellcheck --severity=error arm_info.sh install.sh tests/test_cli.sh tests/test_enterprise.sh tests/test_mail_profile.sh tests/test_recommendation_commands.sh tests/test_sections.sh tests/test_cifs_probe.sh packaging/build-rpm.sh
       - name: Rendering and query-cache regression tests
         run: |
           bash -n tests/test_stage1_performance.sh tests/render_cases.sh
@@ -29,6 +29,8 @@ jobs:
           bash -n tests/test_stage2_limits.sh
           shellcheck --severity=error tests/test_stage2_limits.sh
           bash tests/test_stage2_limits.sh
+      - name: Mail profile regression tests
+        run: bash tests/test_mail_profile.sh
       - name: Base CLI tests
         run: bash tests/test_cli.sh
       - name: Enterprise profile tests
@@ -88,7 +90,7 @@ jobs:
           V=$(tr -d '[:space:]' < VERSION)
           test ! -e arm_info-enterprise.sh
           grep -q "enterprise-profile-dispatch-v${V}" arm_info.sh
-          grep -q 'enterprise) check_domain; check_network; check_print ;;' arm_info.sh
+          grep -q 'enterprise) check_domain; check_network; check_print; check_mail ;;' arm_info.sh
           ! grep -Eiq '(r7|remmina|freerdp|icaclient|citrix|basis|workplace|bsscrypto|cryptopro|cprocsp|jacarta|snx)' arm_info.sh
           ! grep -Eq 'Kerberos 6/7/15|c6=|c7=|c15=' arm_info.sh
       - name: Report and documentation contract

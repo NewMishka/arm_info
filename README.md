@@ -16,7 +16,7 @@
 - файловые системы: заполнение, inode, read-only;
 - стабильность системы: failed units, аппаратные/дисковые ошибки ядра, journal `err..alert`, OOM, time sync, признаки аварийной загрузки и ECC/EDAC;
 - дополнительные read-only проверки: NTP/time sync, software RAID, ECC/EDAC, батарея, SMART self-test, SSSD/Kerberos/CUPS;
-- корпоративные профили в том же единственном файле: AD/SSSD/Kerberos/DNS, 802.1X, CIFS/GVFS и CUPS;
+- корпоративные профили в том же единственном файле: AD/SSSD/Kerberos/DNS, 802.1X, CIFS/GVFS, CUPS и доступность IMAP/SMTP;
 - сравнение JSON-отчётов двух АРМ;
 - TXT или JSON;
 - privacy-режим для публикации отчётов;
@@ -54,7 +54,7 @@ sudo bash /tmp/arm_info.sh -c
 
 По умолчанию корпоративный отчёт выводится только в терминал и файл не создаётся. Для сохранения добавьте `-s` или `--save`; при необходимости путь задаётся через `-o/--output`.
 
-`--corp` запускает `domain + network + print` и **не выполняет глобальную инвентаризацию ПО**, поэтому отчёт не раздувается сотнями строк.
+`--corp` запускает `domain + network + print + mail` и **не выполняет глобальную инвентаризацию ПО**, поэтому отчёт не раздувается сотнями строк. Почтовая проверка не входит в ящик и не отправляет письма.
 
 Начиная с **1.2.2** корпоративный TXT-отчёт выровнен по колонкам, экран очищается перед интерактивным TXT-выводом, а JSON остаётся без управляющих последовательностей. Команды в рекомендациях сопровождаются пояснением в скобках, что именно даст каждая команда.
 
@@ -100,7 +100,7 @@ sha256sum -c SHA256SUMS
 --json
 --config PATH
 -c, --corp
---profile domain|network|print|software|enterprise
+--profile domain|network|print|mail|software|enterprise
 --compare REPORT_A.json REPORT_B.json
 ```
 
@@ -112,6 +112,7 @@ sudo arm_info --json --privacy | jq '.summary'
 sudo arm_info --save --output /var/tmp/arm-reports/
 sudo arm_info --config /etc/arm_info.conf
 sudo arm_info --profile domain --privacy
+sudo arm_info --profile mail --mail-endpoint imaps://mail.example.test:993 --mail-endpoint smtp://smtp.example.test:587
 sudo arm_info --corp --privacy --json --save -o /tmp/arm-corp.json
 arm_info --compare arm-a.json arm-b.json
 ```
@@ -125,8 +126,9 @@ arm_info --compare arm-a.json arm-b.json
 - `domain` — SSSD, AD join, Kerberos ticket/cache, ошибки Kerberos в текущем журнале, time sync, DNS SRV и доступность KDC/LDAP;
 - `network` — DNS/upstream, FQDN, интерфейсы, 802.1X и сроки сертификатов, CIFS/GVFS/Caja;
 - `print` — CUPS service/scheduler, default printer, paused queues, jobs, backend URI и журнал;
+- `mail` — обнаруженные IMAP/SMTP endpoints, DNS, TCP, TLS/STARTTLS, сертификаты и объявленные AUTH-механизмы без аутентификации;
 - `software` — глобальная инвентаризация всех установленных RPM-пакетов, общее число процессов и zombie-процессы;
-- `enterprise` / `-c` / `--corp` — объединяет `domain + network + print`; глобальная инвентаризация ПО **не запускается автоматически** и доступна только отдельно через `--profile software`.
+- `enterprise` / `-c` / `--corp` — объединяет `domain + network + print + mail`; глобальная инвентаризация ПО **не запускается автоматически** и доступна только отдельно через `--profile software`.
 
 Подробно: [docs/ENTERPRISE_PROFILES.md](docs/ENTERPRISE_PROFILES.md).
 
@@ -152,7 +154,7 @@ sudo arm_info --privacy
 
 `-p` — короткая форма `--privacy`, действует во всех профилях.
 
-Privacy-режим скрывает hostname, MAC, DNS, SSSD-домены, маскирует IP и заменяет имена интерфейсов. В корпоративных профилях дополнительно скрываются доменные значения; printer URI всегда очищается от встроенных учётных данных. При явном сохранении автоматическое имя privacy-отчёта не содержит hostname. Подробно: [docs/PRIVACY.md](docs/PRIVACY.md).
+Privacy-режим скрывает hostname, MAC, DNS, SSSD/почтовые домены, имена почтовых серверов и Subject/Issuer их сертификатов, маскирует IP и заменяет имена интерфейсов. Printer URI всегда очищается от встроенных учётных данных. При явном сохранении автоматическое имя privacy-отчёта не содержит hostname. Подробно: [docs/PRIVACY.md](docs/PRIVACY.md).
 
 ## Технический индекс
 
@@ -182,7 +184,7 @@ sudo dnf install smartmontools dmidecode lm_sensors
 
 Дополнительные проверки используют установленные в системе `chronyc`, `sssctl`, `klist`, `lpstat`, `mdadm` и EDAC-интерфейсы, но не требуют их установки для базового запуска.
 
-Для максимальной полноты корпоративных профилей полезны `sssd-tools`, `adcli`, `krb5-workstation`, `bind-utils`, `NetworkManager`, `openssl`, `cups-client`, `nc`/`nmap-ncat`. `python3` нужен только для `--compare`.
+Для максимальной полноты корпоративных профилей полезны `sssd-tools`, `adcli`, `krb5-workstation`, `bind-utils`, `NetworkManager`, `openssl`, `cups-client`, `nc`/`nmap-ncat`. `openssl` используется также для TLS/STARTTLS почтовых серверов. `python3` нужен для `--compare` и безопасного разбора статических autofs-карт.
 
 ## Автоматизация
 

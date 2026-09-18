@@ -61,7 +61,7 @@ ARM_INFO_PRIVATE_YYYY-MM-DD_HH-MM-SS.txt
 sudo arm_info -c
 ```
 
-`-c` — алиас `--corp`; оба варианта эквивалентны `--profile enterprise` и выполняет `domain + network + print`. Глобальная инвентаризация ПО в него не входит.
+`-c` — алиас `--corp`; оба варианта эквивалентны `--profile enterprise` и выполняют `domain + network + print + mail`. Глобальная инвентаризация ПО в него не входит.
 
 Для ограничения времени активных сетевых проверок используются `--network-budget SEC` (1–300, по умолчанию 30) и `--network-jobs N` (1–16, по умолчанию 4 параллельные TCP-проверки DC). Например: `sudo arm_info -c -p --network-budget 60 --network-jobs 6`. Все обнаруженные ресурсы сохраняются в отчёте; не уложившиеся в бюджет получают N/A.
 
@@ -74,7 +74,36 @@ ARM_INFO_CORP_PRIVATE_YYYYMMDD_HHMMSS.txt   # --privacy
 
 Для корпоративного JSON расширение меняется на `.json`.
 
-Отдельные профили `domain`, `network`, `print` и `software` также выводятся только в терминал; файл создаётся только при явном `-s/--save`, а `-o/--output` используется вместе с ним.
+Отдельные профили `domain`, `network`, `print`, `mail` и `software` также выводятся только в терминал; файл создаётся только при явном `-s/--save`, а `-o/--output` используется вместе с ним.
+
+## Проверка почтовых серверов
+
+Обычный запуск пытается найти IMAP/SMTP в Thunderbird-совместимых `prefs.js` активного или invoking пользователя:
+
+```bash
+sudo arm_info --profile mail
+```
+
+Endpoints можно задать явно и повторять параметр:
+
+```bash
+sudo arm_info --profile mail \
+  --mail-endpoint imaps://imap.example.test:993 \
+  --mail-endpoint smtp://smtp.example.test:587 \
+  --mail-domain example.test
+```
+
+`imaps://` и `smtps://` означают implicit TLS; `imap://` и `smtp://` — STARTTLS. URI с логином/паролем отклоняются. Для централизованного запуска поддерживаются `ARM_INFO_MAIL_ENDPOINTS` (URI через запятую/точку с запятой), `ARM_INFO_MAIL_DOMAINS` и `ARM_INFO_MAIL_PREFS` (явные `prefs.js` через двоеточие).
+
+Те же whitelist-ключи можно сохранить в `/etc/arm_info.conf` или передать другой файл через `--config PATH`:
+
+```ini
+ARM_INFO_MAIL_ENDPOINTS=imaps://imap.example.test:993,smtp://smtp.example.test:587
+ARM_INFO_MAIL_DOMAINS=example.test
+# ARM_INFO_MAIL_PREFS=/home/user/.client/profile/prefs.js
+```
+
+Проверяются DNS, TCP, TLS/STARTTLS, hostname/цепочка/срок сертификата и AUTH-механизмы, объявленные сервером до входа. Проверка не читает пароль, не меняет Kerberos cache, не открывает почтовый ящик и не отправляет письмо. Все сетевые операции входят в `--network-budget`.
 
 ## Выбор места сохранения
 

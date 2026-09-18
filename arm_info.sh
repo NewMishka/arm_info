@@ -51,6 +51,12 @@ SAVE_REPORT=0
 OUTPUT_PATH=""
 COMPARE_A=""
 COMPARE_B=""
+MAIL_ENDPOINT_SPECS=()
+MAIL_DOMAIN_SPECS=()
+ENTERPRISE_CONFIG_FILE="/etc/arm_info.conf"
+MAIL_CONFIG_ENDPOINTS=""
+MAIL_CONFIG_DOMAINS=""
+MAIL_CONFIG_PREFS=""
 ARM_INFO_NETWORK_BUDGET=${ARM_INFO_NETWORK_BUDGET:-30}
 ARM_INFO_DC_JOBS=${ARM_INFO_DC_JOBS:-4}
 ARM_INFO_DC_PROBE_TIMEOUT=${ARM_INFO_DC_PROBE_TIMEOUT:-3}
@@ -68,6 +74,7 @@ arm_info enterprise profiles 1.2.4
   arm_info --profile domain [-p|--privacy] [--json] [-s|--save] [-o FILE]
   arm_info --profile network [-p|--privacy] [--json] [-s|--save] [-o FILE]
   arm_info --profile print [-p|--privacy] [--json] [-s|--save] [-o FILE]
+  arm_info --profile mail [-p|--privacy] [--json] [-s|--save] [-o FILE]
   arm_info --profile software [-p|--privacy] [--json] [-s|--save] [-o FILE]
   arm_info -c [-p|--privacy] [--json] [-s|--save] [-o FILE]
   arm_info --corp [-p|--privacy] [--json] [-s|--save] [-o FILE]
@@ -78,13 +85,19 @@ arm_info enterprise profiles 1.2.4
   domain       AD/SSSD/Kerberos, DNS SRV, KDC/LDAP, синхронизация времени
   network      DNS, интерфейсы, 802.1X, CIFS/SMB, GVFS/Caja
   print        CUPS, очереди, задания, backend URI, ошибки журнала
+  mail         IMAP/SMTP: DNS, TCP, TLS/STARTTLS, сертификаты и AUTH без входа
   software     глобальная инвентаризация всех RPM-пакетов и общие процессы
-  enterprise   domain + network + print (без инвентаризации ПО)
+  enterprise   domain + network + print + mail (без инвентаризации ПО)
 
 Параметры:
   --probe-autofs          проверить также несмонтированные ресурсы autofs (может вызвать монтирование)
-  --network-budget SEC   общий лимит активных DC/SMB/GIO-проверок, 1–300 сек. (по умолчанию 30)
+  --network-budget SEC   общий лимит активных DC/SMB/GIO/MAIL-проверок, 1–300 сек. (по умолчанию 30)
   --network-jobs N       число параллельных TCP-проверок DC, 1–16 (по умолчанию 4)
+  --mail-endpoint URI    добавить IMAP/SMTP endpoint; можно повторять
+                         imaps://host:993, imap://host:143,
+                         smtps://host:465 или smtp://host:587
+  --mail-domain DOMAIN   добавить почтовый домен для проверки MX/SRV; можно повторять
+  --config PATH          использовать другой конфигурационный файл
   -p, --privacy           обезличить отчёт
   -s, --save              сохранить отчёт в файл
   -o, --output PATH       указать файл или каталог сохранения
@@ -124,6 +137,18 @@ while (($#)); do
             _arm_value=${1#*=}
             [[ $_arm_value =~ ^[0-9]+$ && $_arm_value -ge 1 && $_arm_value -le 16 ]] || { echo "Ошибка: --network-jobs требует число от 1 до 16" >&2; exit 64; }
             ARM_INFO_DC_JOBS=$_arm_value; shift ;;
+        --mail-endpoint)
+            [[ $# -ge 2 ]] || { echo "Ошибка: --mail-endpoint требует URI" >&2; exit 64; }
+            MAIL_ENDPOINT_SPECS+=("$2"); shift 2 ;;
+        --mail-endpoint=*) MAIL_ENDPOINT_SPECS+=("${1#*=}"); shift ;;
+        --mail-domain)
+            [[ $# -ge 2 ]] || { echo "Ошибка: --mail-domain требует домен" >&2; exit 64; }
+            MAIL_DOMAIN_SPECS+=("$2"); shift 2 ;;
+        --mail-domain=*) MAIL_DOMAIN_SPECS+=("${1#*=}"); shift ;;
+        --config)
+            [[ $# -ge 2 ]] || { echo "Ошибка: --config требует путь" >&2; exit 64; }
+            ENTERPRISE_CONFIG_FILE=$2; shift 2 ;;
+        --config=*) ENTERPRISE_CONFIG_FILE=${1#*=}; shift ;;
         -p|--privacy) PRIVACY=1; shift ;;
         --json) JSON_MODE=1; shift ;;
         -s|--save) SAVE_REPORT=1; shift ;;
@@ -137,6 +162,22 @@ while (($#)); do
     esac
 done
 
+# Корпоративный профиль читает только три mail-ключа. Файл никогда не source-ится.
+load_enterprise_config() {
+    local file=$1 key val
+    [[ -r $file ]] || return 0
+    while IFS='=' read -r key val; do
+        key=$(printf '%s' "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        val=${val%%#*}; val=$(printf '%s' "$val" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        case $key in
+            ARM_INFO_MAIL_ENDPOINTS) MAIL_CONFIG_ENDPOINTS=$val ;;
+            ARM_INFO_MAIL_DOMAINS) MAIL_CONFIG_DOMAINS=$val ;;
+            ARM_INFO_MAIL_PREFS) MAIL_CONFIG_PREFS=$val ;;
+        esac
+    done <"$file"
+}
+load_enterprise_config "$ENTERPRISE_CONFIG_FILE"
+
 if [[ -n $OUTPUT_PATH && $SAVE_REPORT -ne 1 ]]; then
     echo "Ошибка: -o/--output используется только вместе с -s/--save" >&2
     exit 64
@@ -146,7 +187,7 @@ if [[ -n $COMPARE_A || -n $COMPARE_B ]]; then
     [[ -n $COMPARE_A && -n $COMPARE_B ]] || { echo "Ошибка: укажите два файла для сравнения" >&2; exit 64; }
 else
     case "$PROFILE" in
-        domain|network|print|software|enterprise) ;;
+        domain|network|print|mail|software|enterprise) ;;
         "") echo "Ошибка: требуется --profile или --compare" >&2; usage >&2; exit 64 ;;
         *) echo "Ошибка: неизвестный профиль: $PROFILE" >&2; exit 64 ;;
     esac
@@ -266,6 +307,14 @@ add_check() {
 # максимум контекста: причины, влияние, проверки, действия и команды.
 REC_KEYS=(); REC_LEVELS=(); REC_TITLES=(); REC_CAUSES=(); REC_IMPACTS=()
 REC_CHECKS=(); REC_ACTIONS=(); REC_COMMANDS=(); REC_VERIFIES=(); REC_SOURCES=()
+
+# Обнаруженные почтовые endpoints существуют только в рамках одного запуска.
+# Пароли и содержимое писем не читаются и не сохраняются.
+MAIL_PROTOCOLS=(); MAIL_HOSTS=(); MAIL_PORTS=(); MAIL_TLS_MODES=()
+MAIL_SOURCES=(); MAIL_AUTH_HINTS=(); MAIL_DOMAINS=()
+MAIL_DNS_CACHE_HOSTS=(); MAIL_DNS_CACHE_STATES=(); MAIL_DNS_CACHE_TEXTS=()
+MAIL_DISCOVERY_INCOMPLETE=0
+MAIL_DISCOVERY_TRUNCATED=0
 
 recommendation_for() {
     local key=$1 severity=$2 value=$3 detail=${4:-}
@@ -390,6 +439,51 @@ recommendation_for() {
             REC_CHECK="Проверить gio mounts, процессы gvfs/caja и доступность конкретного каталога с timeout."
             REC_ACTION="После фиксации диагностики перезапустить только проблемные пользовательские gvfs/caja процессы либо переподключить ресурс."
             REC_COMMAND="loginctl list-sessions --no-legend|ps -ef | grep -E 'caja|gvfsd' | grep -v grep|find /run/user/*/gvfs -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null"
+            ;;
+        mail.config.invalid)
+            REC_CAUSE="Один или несколько явно заданных почтовых URI имеют неподдерживаемый формат, недопустимое имя узла или порт."
+            REC_IMPACT="Соответствующий сервер исключён из проверки, поэтому отчёт о почтовой инфраструктуре неполон."
+            REC_CHECK="Проверить URI без логина и пароля: imaps://HOST:993, imap://HOST:143, smtps://HOST:465 или smtp://HOST:587."
+            REC_ACTION="Исправить параметры --mail-endpoint либо ARM_INFO_MAIL_ENDPOINTS и повторить профиль mail."
+            REC_COMMAND="$ARM_INFO_SELF_CMD --profile mail --mail-endpoint imaps://MAIL_HOST:993 --mail-endpoint smtps://MAIL_HOST:465"
+            ;;
+        mail.discovery)
+            REC_CAUSE="Не все локальные профили почтового клиента удалось безопасно прочитать за ограниченное время."
+            REC_IMPACT="Часть настроенных IMAP/SMTP-серверов могла не попасть в отчёт."
+            REC_CHECK="Определить активного desktop-пользователя и доступность его Thunderbird-совместимых prefs.js."
+            REC_ACTION="Запустить профиль в контексте нужного АРМ либо явно передать endpoints без учётных данных."
+            REC_COMMAND="loginctl list-sessions --no-legend|$ARM_INFO_SELF_CMD --profile mail --mail-endpoint imaps://MAIL_HOST:993 --mail-endpoint smtps://MAIL_HOST:465"
+            ;;
+        mail.endpoint.*.dns)
+            REC_CAUSE="Имя настроенного почтового сервера не разрешается либо DNS-проверка не завершилась в общий лимит времени."
+            REC_IMPACT="Почтовый клиент не сможет установить соединение с IMAP/SMTP по этому имени."
+            REC_CHECK="Проверить системный resolver, A/AAAA записи и DNS-настройки активного сетевого профиля."
+            REC_ACTION="Восстановить штатное DNS-разрешение; не подменять корпоративный DNS постоянной записью /etc/hosts без согласования."
+            REC_COMMAND="getent ahosts MAIL_HOST|resolvectl query MAIL_HOST|nmcli -f GENERAL.CONNECTION,IP4.DNS,IP4.DOMAIN device show"
+            ;;
+        mail.endpoint.*.tcp)
+            REC_CAUSE="DNS-имя разрешается, но настроенный TCP-порт IMAP/SMTP недоступен, отвергает соединение либо проверка ограничена по времени."
+            REC_IMPACT="Получение или отправка почты через этот endpoint будет недоступна."
+            REC_CHECK="Проверить маршрут, firewall/proxy, доступность сервера и фактически настроенный порт."
+            REC_ACTION="Исправить сетевую доступность или конфигурацию клиента; не переключать порт наугад без параметров почтовой инфраструктуры."
+            REC_COMMAND="getent ahosts MAIL_HOST|timeout 5 nc -vz MAIL_HOST MAIL_PORT|ip route get MAIL_IP"
+            ;;
+        mail.endpoint.*.tls.*)
+            REC_CAUSE="TLS/STARTTLS не подтверждён: возможны ошибка handshake, недоверенная цепочка, несовпадение имени, истёкший/истекающий сертификат либо небезопасный plain-режим."
+            REC_IMPACT="Почтовый клиент может блокировать соединение, показывать предупреждение или передавать данные без требуемой защиты."
+            REC_CHECK="Проверить режим TLS, цепочку, имя сервера и срок leaf-сертификата без выполнения аутентификации."
+            REC_ACTION="Исправить сертификат/цепочку или параметры клиента. Не отключать проверку сертификата как постоянное решение."
+            case $key in
+                *.implicit) REC_COMMAND="openssl s_client -connect MAIL_HOST:MAIL_PORT -servername MAIL_HOST -verify_hostname MAIL_HOST -verify_return_error -showcerts </dev/null|date" ;;
+                *) REC_COMMAND="openssl s_client -connect MAIL_HOST:MAIL_PORT -servername MAIL_HOST -starttls MAIL_PROTOCOL -verify_hostname MAIL_HOST -verify_return_error -showcerts </dev/null|date" ;;
+            esac
+            ;;
+        mail.domain.*)
+            REC_CAUSE="DNS-записи почтового домена не удалось проверить установленными средствами или в доступный сетевой бюджет."
+            REC_IMPACT="Автоматическое обнаружение почтовых служб остаётся непроверенным; это не доказывает недоступность настроенных endpoints."
+            REC_CHECK="Проверить MX и SRV через корпоративный DNS. Отсутствие SRV допустимо, если клиенты настраиваются централизованно."
+            REC_ACTION="Сопоставить записи с документацией почтовой инфраструктуры и фактическими настройками клиента."
+            REC_COMMAND="dig +short MAIL_DOMAIN MX|dig +short _imaps._tcp.MAIL_DOMAIN SRV|dig +short _submission._tcp.MAIL_DOMAIN SRV"
             ;;
         print.cups.service)
             REC_CAUSE="Служба CUPS не активна либо её состояние не определено."
@@ -583,13 +677,14 @@ command_description() {
         nmcli\ -f\ NAME,UUID,TYPE\ connection\ show*) desc="покажет сохранённые NetworkManager-профили, чтобы выбрать нужный PROFILE_NAME" ;;
         nmcli\ connection\ show*) desc="покажет параметры выбранного NetworkManager-профиля; фильтр оставляет только 802.1X-поля" ;;
         nmcli*) desc="покажет состояние сетевых устройств и профилей NetworkManager" ;;
+        openssl\ s_client*) desc="выполнит TLS/STARTTLS handshake без входа в почтовый ящик и покажет цепочку/ошибки проверки сертификата" ;;
         openssl\ x509*) desc="прочитает X.509-сертификат и покажет Subject, Issuer, начало и окончание срока действия; для DER добавьте -inform DER" ;;
         getent*) desc="проверит разрешение имени через системные NSS/DNS-настройки" ;;
         ip\ -br\ link*) desc="покажет краткое состояние сетевых интерфейсов и link" ;;
         ip\ -br\ addr*) desc="покажет краткий список адресов сетевых интерфейсов" ;;
         ip\ -4\ route*) desc="покажет IPv4-маршруты и маршрут по умолчанию" ;;
         ip\ route\ get*) desc="покажет, через какой интерфейс и шлюз система пойдёт к указанному IP" ;;
-        timeout*nc*) desc="проверит установление TCP-соединения с указанным DC/портом и ограничит ожидание 5 секундами" ;;
+        timeout*nc*) desc="проверит установление TCP-соединения с указанным узлом/портом и ограничит ожидание 5 секундами" ;;
         findmnt\ -n\ -l\ -t\ cifs\ -o\ TARGET*) desc="покажет локальные TARGET CIFS; arm_info дополнительно выполняет полный readdir и metadata lookup с таймаутом в пользовательском контексте для multiuser" ;;
         findmnt\ -t\ cifs*) desc="покажет активные CIFS-точки монтирования, источник и параметры mount" ;;
         timeout*stat*) desc="проверит доступность конкретной точки монтирования без длительного зависания" ;;
@@ -618,7 +713,7 @@ command_description() {
         *) desc="выполнит диагностическую проверку, связанную с указанной рекомендацией" ;;
     esac
 
-    if [[ $cmd =~ (DOMAIN_FQDN|DC_FQDN|DC_IP|USER_NAME|PROFILE_NAME|CERT_PATH|QUEUE_NAME|JOB_ID|PARENT_PID|UNIT_NAME|DEVICE_PATH|MD_DEVICE|IFACE_NAME) ]]; then
+    if [[ $cmd =~ (DOMAIN_FQDN|DC_FQDN|DC_IP|USER_NAME|PROFILE_NAME|CERT_PATH|QUEUE_NAME|JOB_ID|PARENT_PID|UNIT_NAME|DEVICE_PATH|MD_DEVICE|IFACE_NAME|MAIL_HOST|MAIL_PORT|MAIL_IP|MAIL_PROTOCOL|MAIL_DOMAIN) ]]; then
         desc="$desc Перед выполнением замените служебный маркер на фактическое значение из отчёта/системы."
     fi
     case "$cmd" in
@@ -1683,6 +1778,411 @@ check_network() {
     add_check "SMB / GVFS" "network.desktop" "Caja / GVFS процессы" "caja:$proc_caja gvfs:$proc_gvfs" ok
 }
 
+_mail_reset() {
+    MAIL_PROTOCOLS=(); MAIL_HOSTS=(); MAIL_PORTS=(); MAIL_TLS_MODES=()
+    MAIL_SOURCES=(); MAIL_AUTH_HINTS=(); MAIL_DOMAINS=()
+    MAIL_DNS_CACHE_HOSTS=(); MAIL_DNS_CACHE_STATES=(); MAIL_DNS_CACHE_TEXTS=()
+    MAIL_DISCOVERY_INCOMPLETE=0
+    MAIL_DISCOVERY_TRUNCATED=0
+}
+
+_mail_add_domain() {
+    local domain=${1,,} existing
+    domain=${domain%.}
+    [[ $domain =~ ^[a-z0-9][a-z0-9._-]*[a-z0-9]$ ]] || return 1
+    [[ $domain == *.* ]] || return 1
+    for existing in "${MAIL_DOMAINS[@]}"; do [[ $existing == "$domain" ]] && return 0; done
+    if ((${#MAIL_DOMAINS[@]}>=5)); then MAIL_DISCOVERY_TRUNCATED=1; return 0; fi
+    MAIL_DOMAINS+=("$domain")
+}
+
+_mail_add_endpoint() {
+    local protocol=$1 host=${2,,} port=$3 tls=$4 source=$5 auth=${6:-} i
+    host=${host#[}; host=${host%]}; host=${host%.}
+    [[ $protocol == imap || $protocol == smtp ]] || return 1
+    if [[ $host == *:* ]]; then
+        [[ $host =~ ^[0-9a-f:]+$ ]] || return 1
+    else
+        [[ $host =~ ^[a-z0-9][a-z0-9._-]*[a-z0-9]$ || $host =~ ^[a-z0-9]$ ]] || return 1
+    fi
+    [[ $port =~ ^[0-9]+$ ]] && ((port>=1 && port<=65535)) || return 1
+    case $tls in implicit|starttls|plain) ;; *) return 1;; esac
+    for i in "${!MAIL_HOSTS[@]}"; do
+        if [[ ${MAIL_PROTOCOLS[i]} == "$protocol" && ${MAIL_HOSTS[i]} == "$host" && ${MAIL_PORTS[i]} == "$port" ]]; then
+            return 0
+        fi
+    done
+    if ((${#MAIL_HOSTS[@]}>=12)); then MAIL_DISCOVERY_TRUNCATED=1; return 0; fi
+    MAIL_PROTOCOLS+=("$protocol"); MAIL_HOSTS+=("$host"); MAIL_PORTS+=("$port")
+    MAIL_TLS_MODES+=("$tls"); MAIL_SOURCES+=("$source"); MAIL_AUTH_HINTS+=("$auth")
+}
+
+_mail_parse_endpoint_uri() {
+    local spec=$1 source=${2:-явная настройка} scheme rest host port protocol tls
+    spec=$(printf '%s' "$spec" | trim)
+    [[ $spec == *://* && $spec != *'@'* ]] || return 1
+    scheme=${spec%%://*}; rest=${spec#*://}; scheme=${scheme,,}
+    [[ $rest != */* && $rest != *\?* && $rest != *\#* ]] || return 1
+    case $scheme in
+        imaps) protocol=imap; tls=implicit; port=993 ;;
+        imap) protocol=imap; tls=starttls; port=143 ;;
+        smtps) protocol=smtp; tls=implicit; port=465 ;;
+        smtp) protocol=smtp; tls=starttls; port=587 ;;
+        *) return 1 ;;
+    esac
+    if [[ $rest =~ ^\[([0-9a-fA-F:]+)\](:([0-9]+))?$ ]]; then
+        host=${BASH_REMATCH[1]}; [[ -n ${BASH_REMATCH[3]:-} ]] && port=${BASH_REMATCH[3]}
+    elif [[ $rest =~ ^([A-Za-z0-9._-]+)(:([0-9]+))?$ ]]; then
+        host=${BASH_REMATCH[1]}; [[ -n ${BASH_REMATCH[3]:-} ]] && port=${BASH_REMATCH[3]}
+    else
+        return 1
+    fi
+    _mail_add_endpoint "$protocol" "$host" "$port" "$tls" "$source" ""
+}
+
+_mail_auth_label() {
+    case ${1:-} in
+        1) printf 'без аутентификации' ;;
+        3) printf 'пароль' ;;
+        4) printf 'защищённый пароль' ;;
+        5) printf 'GSSAPI/Kerberos' ;;
+        6) printf 'NTLM' ;;
+        10) printf 'OAuth2' ;;
+        "") printf '' ;;
+        *) printf 'метод %s' "$1" ;;
+    esac
+}
+
+_mail_tls_from_profile() {
+    local protocol=$1 port=$2 socket=${3:-}
+    if [[ $port == 993 || $port == 465 || $socket == 3 ]]; then printf 'implicit'
+    elif [[ $socket == 2 || ($protocol == imap && $port == 143) || ($protocol == smtp && $port == 587) ]]; then printf 'starttls'
+    else printf 'plain'; fi
+}
+
+MAIL_PREF_FILES=()
+_mail_collect_pref_files() {
+    local raw path user current desktop record home rows rc existing discovery_deadline remaining
+    local -a users=() homes=()
+    MAIL_PREF_FILES=()
+
+    raw=${ARM_INFO_MAIL_PREFS:-}
+    [[ -n ${MAIL_CONFIG_PREFS:-} ]] && raw="${raw:+$raw:}${MAIL_CONFIG_PREFS}"
+    if [[ -n $raw ]]; then
+        while IFS= read -r path; do
+            path=$(printf '%s' "$path" | trim); [[ -r $path && -f $path ]] || { MAIL_DISCOVERY_INCOMPLETE=1; continue; }
+            MAIL_PREF_FILES+=("$path")
+        done < <(printf '%s\n' "$raw" | tr ':' '\n')
+    fi
+
+    current=$(id -un 2>/dev/null || true)
+    if [[ -n ${SUDO_USER:-} && ${SUDO_USER:-} != root ]]; then users+=("$SUDO_USER"); fi
+    desktop=$(_cifs_desktop_user 2>/dev/null || true); [[ -n $desktop ]] && users+=("$desktop")
+    if [[ $current != root || ${#users[@]} -eq 0 ]]; then [[ -n $current ]] && users+=("$current"); fi
+
+    for user in "${users[@]}"; do
+        [[ $user =~ ^[[:alnum:]_.@-]+$ ]] || continue
+        record=''
+        if have getent; then record=$(_arm_run_limited 2 getent passwd "$user" 2>/dev/null || true)
+        elif [[ -r /etc/passwd ]]; then record=$(awk -F: -v u="$user" '$1==u{print; exit}' /etc/passwd 2>/dev/null); fi
+        home=$(printf '%s\n' "$record" | awk -F: 'NF>=6{print $6; exit}')
+        [[ $home == /* && -d $home ]] || continue
+        for existing in "${homes[@]}"; do [[ $existing == "$home" ]] && home=''; done
+        [[ -n $home ]] && homes+=("$home")
+    done
+
+    discovery_deadline=$((SECONDS+4))
+    for home in "${homes[@]}"; do
+        remaining=$((discovery_deadline-SECONDS))
+        if ((remaining<=0)); then MAIL_DISCOVERY_INCOMPLETE=1; break; fi
+        ((remaining>3)) && remaining=3
+        rows=$(_arm_run_limited "$remaining" find "$home" -xdev -maxdepth 6 -type f -name prefs.js -readable -print 2>/dev/null)
+        rc=$?
+        ((rc==0)) || MAIL_DISCOVERY_INCOMPLETE=1
+        while IFS= read -r path; do
+            [[ -n $path ]] || continue
+            for existing in "${MAIL_PREF_FILES[@]}"; do [[ $existing == "$path" ]] && path=''; done
+            [[ -n $path ]] && MAIL_PREF_FILES+=("$path")
+            if ((${#MAIL_PREF_FILES[@]}>=20)); then MAIL_DISCOVERY_TRUNCATED=1; return; fi
+        done <<<"$rows"
+    done
+}
+
+_mail_pref_clean() {
+    local value=$1
+    value=$(printf '%s' "$value" | trim)
+    if [[ $value == \"*\" ]]; then value=${value#\"}; value=${value%\"}; fi
+    printf '%s' "$value"
+}
+
+_mail_discover_from_prefs() {
+    local file size rows rc kind id field value protocol host port socket tls auth username domain
+    local -A in_host=() in_port=() in_socket=() in_type=() in_auth=() in_user=()
+    local -A out_host=() out_port=() out_socket=() out_auth=() out_user=()
+    _mail_collect_pref_files
+    for file in "${MAIL_PREF_FILES[@]}"; do
+        size=$(stat -c %s -- "$file" 2>/dev/null || printf '0')
+        [[ $size =~ ^[0-9]+$ ]] || size=0
+        if ((size>5242880)); then MAIL_DISCOVERY_INCOMPLETE=1; continue; fi
+        rows=$(_arm_run_limited 2 sed -nE \
+          -e 's/^[[:space:]]*(user_)?pref\("mail\.server\.([^".]+)\.(hostname|port|socketType|type|authMethod|userName)",[[:space:]]*(.*)\);[[:space:]]*$/incoming|\2|\3|\4/p' \
+          -e 's/^[[:space:]]*(user_)?pref\("mail\.smtpserver\.([^".]+)\.(hostname|port|try_ssl|authMethod|username)",[[:space:]]*(.*)\);[[:space:]]*$/smtp|\2|\3|\4/p' \
+          -- "$file" 2>/dev/null)
+        rc=$?
+        ((rc==0)) || { MAIL_DISCOVERY_INCOMPLETE=1; continue; }
+        in_host=(); in_port=(); in_socket=(); in_type=(); in_auth=(); in_user=()
+        out_host=(); out_port=(); out_socket=(); out_auth=(); out_user=()
+        while IFS='|' read -r kind id field value; do
+            [[ $id =~ ^[[:alnum:]_-]+$ ]] || continue
+            value=$(_mail_pref_clean "$value")
+            case "$kind.$field" in
+                incoming.hostname) in_host[$id]=$value ;;
+                incoming.port) in_port[$id]=$value ;;
+                incoming.socketType) in_socket[$id]=$value ;;
+                incoming.type) in_type[$id]=${value,,} ;;
+                incoming.authMethod) in_auth[$id]=$value ;;
+                incoming.userName) in_user[$id]=$value ;;
+                smtp.hostname) out_host[$id]=$value ;;
+                smtp.port) out_port[$id]=$value ;;
+                smtp.try_ssl) out_socket[$id]=$value ;;
+                smtp.authMethod) out_auth[$id]=$value ;;
+                smtp.username) out_user[$id]=$value ;;
+            esac
+        done <<<"$rows"
+
+        while IFS= read -r id; do
+            [[ -n $id && ${in_type[$id]:-} == imap ]] || continue
+            protocol=imap; host=${in_host[$id]:-}; socket=${in_socket[$id]:-}
+            port=${in_port[$id]:-}; [[ $port =~ ^[0-9]+$ ]] || { if [[ $socket == 3 ]]; then port=993; else port=143; fi; }
+            tls=$(_mail_tls_from_profile "$protocol" "$port" "$socket")
+            auth=$(_mail_auth_label "${in_auth[$id]:-}")
+            _mail_add_endpoint "$protocol" "$host" "$port" "$tls" "клиентский профиль" "$auth" || MAIL_DISCOVERY_INCOMPLETE=1
+            username=${in_user[$id]:-}; if [[ $username == *@* ]]; then domain=${username##*@}; _mail_add_domain "$domain" || true; fi
+        done < <(printf '%s\n' "${!in_host[@]}" | LC_ALL=C sort)
+
+        while IFS= read -r id; do
+            [[ -n $id ]] || continue
+            protocol=smtp; host=${out_host[$id]:-}; socket=${out_socket[$id]:-}
+            port=${out_port[$id]:-}; [[ $port =~ ^[0-9]+$ ]] || { if [[ $socket == 3 ]]; then port=465; else port=587; fi; }
+            tls=$(_mail_tls_from_profile "$protocol" "$port" "$socket")
+            auth=$(_mail_auth_label "${out_auth[$id]:-}")
+            _mail_add_endpoint "$protocol" "$host" "$port" "$tls" "клиентский профиль" "$auth" || MAIL_DISCOVERY_INCOMPLETE=1
+            username=${out_user[$id]:-}; if [[ $username == *@* ]]; then domain=${username##*@}; _mail_add_domain "$domain" || true; fi
+        done < <(printf '%s\n' "${!out_host[@]}" | LC_ALL=C sort)
+    done
+}
+
+MAIL_DNS_STATE=UNKNOWN
+MAIL_DNS_TEXT='не проверено'
+_mail_dns_probe() {
+    local host=$1 i output='' rc=125 address
+    for i in "${!MAIL_DNS_CACHE_HOSTS[@]}"; do
+        if [[ ${MAIL_DNS_CACHE_HOSTS[i]} == "$host" ]]; then
+            MAIL_DNS_STATE=${MAIL_DNS_CACHE_STATES[i]}; MAIL_DNS_TEXT=${MAIL_DNS_CACHE_TEXTS[i]}; return
+        fi
+    done
+    if [[ $host =~ ^[0-9]+(\.[0-9]+){3}$ || $host == *:* ]]; then
+        MAIL_DNS_STATE=OK; MAIL_DNS_TEXT='задан IP-адрес'
+    elif ! network_probe_limit 3; then
+        MAIL_DNS_STATE=BUDGET; MAIL_DNS_TEXT='не проверено: общий лимит времени'
+    elif have getent; then
+        output=$(_arm_run_limited "$NETWORK_PROBE_LIMIT" getent ahosts "$host" 2>/dev/null); rc=$?
+        address=$(printf '%s\n' "$output" | awk 'NF{print $1; exit}')
+        if ((rc==0)) && [[ -n $address ]]; then MAIL_DNS_STATE=OK; MAIL_DNS_TEXT="разрешается: $address"
+        elif ((rc==124 || rc==137)); then MAIL_DNS_STATE=FAIL; MAIL_DNS_TEXT='тайм-аут DNS'
+        elif ((rc==125)); then MAIL_DNS_STATE=UNKNOWN; MAIL_DNS_TEXT='не проверено: timeout отсутствует'
+        else MAIL_DNS_STATE=FAIL; MAIL_DNS_TEXT='имя не разрешается'; fi
+    elif have dig; then
+        output=$(_arm_run_limited "$NETWORK_PROBE_LIMIT" dig +time=2 +tries=1 +short "$host" A 2>/dev/null); rc=$?
+        address=$(printf '%s\n' "$output" | awk 'NF{print $1; exit}')
+        if ((rc==0)) && [[ -n $address ]]; then MAIL_DNS_STATE=OK; MAIL_DNS_TEXT="разрешается: $address"
+        elif ((rc==125)); then MAIL_DNS_STATE=UNKNOWN; MAIL_DNS_TEXT='не проверено: timeout отсутствует'
+        else MAIL_DNS_STATE=FAIL; MAIL_DNS_TEXT='имя не разрешается'; fi
+    else
+        MAIL_DNS_STATE=UNKNOWN; MAIL_DNS_TEXT='getent/dig отсутствуют'
+    fi
+    MAIL_DNS_CACHE_HOSTS+=("$host"); MAIL_DNS_CACHE_STATES+=("$MAIL_DNS_STATE"); MAIL_DNS_CACHE_TEXTS+=("$MAIL_DNS_TEXT")
+}
+
+MAIL_RECORD_STATE=UNKNOWN
+MAIL_RECORD_TEXT='не проверено'
+_mail_query_record() {
+    local name=$1 type=$2 output='' rc=125 count
+    if ! network_probe_limit 3; then MAIL_RECORD_STATE=BUDGET; MAIL_RECORD_TEXT='не проверено: общий лимит времени'; return; fi
+    if have dig; then
+        output=$(_arm_run_limited "$NETWORK_PROBE_LIMIT" dig +time=2 +tries=1 +short "$name" "$type" 2>/dev/null); rc=$?
+    elif have host; then
+        output=$(_arm_run_limited "$NETWORK_PROBE_LIMIT" host -W 2 -t "$type" "$name" 2>/dev/null); rc=$?
+    else
+        MAIL_RECORD_STATE=UNKNOWN; MAIL_RECORD_TEXT='dig/host отсутствуют'; return
+    fi
+    if ((rc==125)); then MAIL_RECORD_STATE=UNKNOWN; MAIL_RECORD_TEXT='не проверено: timeout отсутствует'; return; fi
+    if ((rc!=0)); then MAIL_RECORD_STATE=UNKNOWN; MAIL_RECORD_TEXT='DNS-запрос не выполнен'; return; fi
+    count=$(grep -c . <<<"$output" 2>/dev/null || true)
+    if ((count==0)); then MAIL_RECORD_STATE=EMPTY; MAIL_RECORD_TEXT='не обнаружены'
+    elif ((PRIVACY)); then MAIL_RECORD_STATE=OK; MAIL_RECORD_TEXT="обнаружено записей: $count"
+    else MAIL_RECORD_STATE=OK; MAIL_RECORD_TEXT=$(printf '%s\n' "$output" | head -n5 | paste -sd';' - | cut -c1-360); fi
+}
+
+MAIL_TLS_STATE=UNKNOWN
+MAIL_TLS_TEXT='не проверено'
+MAIL_TLS_DETAIL=''
+MAIL_TLS_AUTH='не определены'
+_mail_tls_probe() {
+    local protocol=$1 host=$2 port=$3 mode=$4 auth_hint=${5:-} target payload output='' rc=125 help cert meta end_raw end_epoch now days subject issuer advertised verify_supported=0 verify_ok=0
+    local -a args=()
+    MAIL_TLS_STATE=UNKNOWN; MAIL_TLS_TEXT='не проверено'; MAIL_TLS_DETAIL=''; MAIL_TLS_AUTH='не определены'
+    if [[ $mode == plain ]]; then
+        MAIL_TLS_STATE=INSECURE; MAIL_TLS_TEXT='TLS отключён в клиентском профиле'; MAIL_TLS_AUTH=${auth_hint:-не определены}; return
+    fi
+    if ! have openssl; then MAIL_TLS_TEXT='openssl отсутствует'; return; fi
+    if ! network_probe_limit 6; then MAIL_TLS_STATE=BUDGET; MAIL_TLS_TEXT='не проверено: общий лимит времени'; return; fi
+    if [[ $host == *:* ]]; then target="[$host]:$port"; else target="$host:$port"; fi
+    args=(s_client -connect "$target" -showcerts -verify_return_error)
+    help=$(openssl s_client -help 2>&1 || true)
+    if [[ $host =~ ^[0-9]+(\.[0-9]+){3}$ || $host == *:* ]]; then
+        if grep -q -- '-verify_ip' <<<"$help"; then args+=(-verify_ip "$host"); verify_supported=1; fi
+    else
+        args+=(-servername "$host")
+        if grep -q -- '-verify_hostname' <<<"$help"; then args+=(-verify_hostname "$host"); verify_supported=1; fi
+    fi
+    [[ $mode == starttls ]] && args+=(-starttls "$protocol")
+    if [[ $protocol == imap ]]; then payload=$'a001 CAPABILITY\r\na002 LOGOUT\r\n'
+    else payload=$'EHLO arm-info.invalid\r\nQUIT\r\n'; fi
+    output=$(_arm_run_limited "$NETWORK_PROBE_LIMIT" openssl "${args[@]}" 2>&1 <<<"$payload"); rc=$?
+    output=${output:0:131072}
+    cert=$(awk '/-----BEGIN CERTIFICATE-----/{copy=1} copy{print} /-----END CERTIFICATE-----/{exit}' <<<"$output")
+    [[ $output == *'Verify return code: 0 (ok)'* ]] && verify_ok=1
+    if [[ -z $cert ]]; then
+        case $rc in 124|137) MAIL_TLS_STATE=FAIL; MAIL_TLS_TEXT='тайм-аут TLS handshake';; 125) MAIL_TLS_STATE=UNKNOWN; MAIL_TLS_TEXT='не проверено: timeout отсутствует';; *) MAIL_TLS_STATE=FAIL; MAIL_TLS_TEXT='TLS handshake/сертификат не получен';; esac
+        return
+    fi
+    meta=$(openssl x509 -noout -subject -issuer -enddate 2>/dev/null <<<"$cert" || true)
+    end_raw=$(sed -n 's/^notAfter=//p' <<<"$meta" | head -n1)
+    subject=$(sed -n 's/^subject=//p' <<<"$meta" | head -n1)
+    issuer=$(sed -n 's/^issuer=//p' <<<"$meta" | head -n1)
+    end_epoch=$(date -d "$end_raw" +%s 2>/dev/null || true); now=$(date +%s)
+    if [[ $end_epoch =~ ^[0-9]+$ ]]; then
+        days=$(((end_epoch-now)/86400))
+        MAIL_TLS_TEXT="сертификат до $(date -d "$end_raw" '+%d.%m.%Y %H:%M:%S %Z' 2>/dev/null || printf '%s' "$end_raw"); осталось ${days} дн."
+        if ((days<0)); then MAIL_TLS_STATE=CRIT
+        elif ((days<30)); then MAIL_TLS_STATE=WARN
+        elif ((verify_supported==0)); then MAIL_TLS_STATE=UNKNOWN; MAIL_TLS_TEXT+="; имя не проверено этой версией openssl"
+        elif ((verify_ok==1 || rc==0)); then MAIL_TLS_STATE=OK; MAIL_TLS_TEXT+="; цепочка и имя подтверждены"
+        else MAIL_TLS_STATE=FAIL; MAIL_TLS_TEXT+="; проверка цепочки/имени не пройдена"; fi
+    else
+        MAIL_TLS_STATE=UNKNOWN; MAIL_TLS_TEXT='TLS доступен, срок сертификата не прочитан'
+    fi
+    if ((PRIVACY)); then MAIL_TLS_DETAIL='Subject/Issuer скрыты'
+    else MAIL_TLS_DETAIL=$(printf 'Subject: %s; Issuer: %s' "${subject:-не определён}" "${issuer:-не определён}" | cut -c1-360); fi
+
+    if [[ $protocol == imap ]]; then
+        advertised=$(grep -Eio 'AUTH=[A-Za-z0-9_-]+' <<<"$output" | sed 's/.*=//' | LC_ALL=C sort -u | paste -sd, -)
+    else
+        advertised=$(tr '\r' '\n' <<<"$output" | sed -nE 's/^250[- ]AUTH[ =]*(.*)$/\1/p' | head -n1 | tr ' ' ',')
+    fi
+    if [[ -n $auth_hint && -n $advertised ]]; then MAIL_TLS_AUTH="профиль: $auth_hint; сервер: $advertised"
+    elif [[ -n $auth_hint ]]; then MAIL_TLS_AUTH="профиль: $auth_hint; сервер не объявил методы до входа"
+    elif [[ -n $advertised ]]; then MAIL_TLS_AUTH="сервер: $advertised"
+    else MAIL_TLS_AUTH='не объявлены до аутентификации'; fi
+}
+
+check_mail() {
+    local raw spec domain invalid=0 i idx protocol host port tls source auth host_display dns_text sev rc tcp_text endpoint_value domain_display
+    _mail_reset
+    raw=${ARM_INFO_MAIL_ENDPOINTS:-}
+    [[ -n ${MAIL_CONFIG_ENDPOINTS:-} ]] && raw="${raw:+$raw,}${MAIL_CONFIG_ENDPOINTS}"
+    if [[ -n $raw ]]; then
+        while IFS= read -r spec; do [[ -n $(printf '%s' "$spec" | trim) ]] || continue; _mail_parse_endpoint_uri "$spec" "переменная окружения" || invalid=$((invalid+1)); done < <(printf '%s\n' "$raw" | tr ',;' '\n')
+    fi
+    if declare -p MAIL_ENDPOINT_SPECS >/dev/null 2>&1; then
+        for spec in "${MAIL_ENDPOINT_SPECS[@]}"; do _mail_parse_endpoint_uri "$spec" "параметр CLI" || invalid=$((invalid+1)); done
+    fi
+    raw=${ARM_INFO_MAIL_DOMAINS:-}
+    [[ -n ${MAIL_CONFIG_DOMAINS:-} ]] && raw="${raw:+$raw,}${MAIL_CONFIG_DOMAINS}"
+    if [[ -n $raw ]]; then
+        while IFS= read -r domain; do [[ -n $(printf '%s' "$domain" | trim) ]] || continue; _mail_add_domain "$(printf '%s' "$domain" | trim)" || invalid=$((invalid+1)); done < <(printf '%s\n' "$raw" | tr ',;' '\n')
+    fi
+    if declare -p MAIL_DOMAIN_SPECS >/dev/null 2>&1; then
+        for domain in "${MAIL_DOMAIN_SPECS[@]}"; do _mail_add_domain "$domain" || invalid=$((invalid+1)); done
+    fi
+    _mail_discover_from_prefs
+
+    ((invalid==0)) || add_check "ПОЧТА / MAIL" "mail.config.invalid" "Некорректные настройки" "$invalid endpoint/domain исключено" warn
+    if ((MAIL_DISCOVERY_INCOMPLETE || MAIL_DISCOVERY_TRUNCATED)); then
+        add_check "ПОЧТА / MAIL" "mail.discovery" "Обнаружение настроек" "выполнено не полностью" unknown \
+          "ограничение/ошибка чтения профилей: $MAIL_DISCOVERY_INCOMPLETE; достигнут лимит записей: $MAIL_DISCOVERY_TRUNCATED"
+    fi
+    if ((${#MAIL_HOSTS[@]}==0)); then
+        add_check "ПОЧТА / MAIL" "mail.endpoints" "Почтовые серверы" "не обнаружены; проверка транспорта не выполнялась" info \
+          "Можно повторить запуск с --mail-endpoint без передачи логина или пароля."
+    else
+        add_check "ПОЧТА / MAIL" "mail.endpoints" "Почтовые серверы" "обнаружено: ${#MAIL_HOSTS[@]}" info
+    fi
+
+    for i in "${!MAIL_HOSTS[@]}"; do
+        idx=$((i+1)); protocol=${MAIL_PROTOCOLS[i]}; host=${MAIL_HOSTS[i]}; port=${MAIL_PORTS[i]}
+        tls=${MAIL_TLS_MODES[i]}; source=${MAIL_SOURCES[i]}; auth=${MAIL_AUTH_HINTS[i]}
+        if ((PRIVACY)); then host_display="mail-host-$idx"; else host_display=$host; fi
+        case $tls in implicit) endpoint_value="${protocol^^} $host_display:$port; TLS";; starttls) endpoint_value="${protocol^^} $host_display:$port; STARTTLS";; *) endpoint_value="${protocol^^} $host_display:$port; без TLS";; esac
+        add_check "ПОЧТА / MAIL" "mail.endpoint.$idx" "Почтовый сервер #$idx" "$endpoint_value" info "Источник: $source; аутентификация не выполняется."
+
+        _mail_dns_probe "$host"; dns_text=$MAIL_DNS_TEXT; ((PRIVACY)) && [[ $MAIL_DNS_STATE == OK ]] && dns_text='имя разрешается'
+        case $MAIL_DNS_STATE in OK) sev=ok;; FAIL) sev=warn;; *) sev=unknown;; esac
+        add_check "ПОЧТА / MAIL" "mail.endpoint.$idx.dns" "DNS сервера #$idx" "$dns_text" "$sev"
+
+        if [[ $MAIL_DNS_STATE == FAIL || $MAIL_DNS_STATE == BUDGET ]]; then
+            add_check "ПОЧТА / MAIL" "mail.endpoint.$idx.tcp" "TCP сервера #$idx" "не проверен: DNS/лимит времени" info
+            add_check "ПОЧТА / MAIL" "mail.endpoint.$idx.tls.$tls" "TLS сервера #$idx" "не проверен: TCP не выполнялся" info
+            add_check "ПОЧТА / MAIL" "mail.endpoint.$idx.auth" "AUTH сервера #$idx" "не проверены" info
+            continue
+        fi
+        if ! network_probe_limit 4; then rc=126
+        else _tcp_ok "$host" "$port" "$NETWORK_PROBE_LIMIT"; rc=$?; fi
+        case $rc in
+            0) sev=ok; tcp_text='доступен' ;;
+            124|137) sev=warn; tcp_text='тайм-аут соединения' ;;
+            125) sev=unknown; tcp_text='не проверен: timeout/TCP-средство отсутствует' ;;
+            126) sev=unknown; tcp_text='не проверен: общий лимит времени' ;;
+            *) sev=warn; tcp_text='соединение не установлено' ;;
+        esac
+        add_check "ПОЧТА / MAIL" "mail.endpoint.$idx.tcp" "TCP сервера #$idx" "$tcp_text" "$sev"
+        if ((rc!=0)); then
+            add_check "ПОЧТА / MAIL" "mail.endpoint.$idx.tls.$tls" "TLS сервера #$idx" "не проверен: TCP недоступен" info
+            add_check "ПОЧТА / MAIL" "mail.endpoint.$idx.auth" "AUTH сервера #$idx" "не проверены" info
+            continue
+        fi
+        _mail_tls_probe "$protocol" "$host" "$port" "$tls" "$auth"
+        case $MAIL_TLS_STATE in OK) sev=ok;; WARN|INSECURE) sev=warn;; CRIT) sev=crit;; FAIL) sev=warn;; *) sev=unknown;; esac
+        add_check "ПОЧТА / MAIL" "mail.endpoint.$idx.tls.$tls" "TLS сервера #$idx" "$MAIL_TLS_TEXT" "$sev" "$MAIL_TLS_DETAIL"
+        add_check "ПОЧТА / MAIL" "mail.endpoint.$idx.auth" "AUTH сервера #$idx" "$MAIL_TLS_AUTH" info \
+          "Перечислены только объявленные механизмы и настройка клиента; вход в ящик не выполнялся."
+    done
+
+    # MX/SRV — дополнительная информация. Она проверяется после фактически
+    # настроенных endpoints, чтобы не расходовать общий бюджет раньше TCP/TLS.
+    if ((${#MAIL_DOMAINS[@]}==0)); then
+        add_check "ПОЧТА / MAIL" "mail.domains" "Почтовые домены" "не определены; MX/SRV не проверялись" info
+    else
+        idx=0
+        for domain in "${MAIL_DOMAINS[@]}"; do
+            idx=$((idx+1)); if ((PRIVACY)); then domain_display="mail-domain-$idx"; else domain_display=$domain; fi
+            add_check "ПОЧТА / MAIL" "mail.domain.$idx" "Почтовый домен #$idx" "$domain_display" info
+            _mail_query_record "$domain" MX
+            case $MAIL_RECORD_STATE in OK|EMPTY) sev=info;; *) sev=unknown;; esac
+            add_check "ПОЧТА / MAIL" "mail.domain.$idx.mx" "MX домена #$idx" "$MAIL_RECORD_TEXT" "$sev"
+            _mail_query_record "_imaps._tcp.$domain" SRV
+            case $MAIL_RECORD_STATE in OK|EMPTY) sev=info;; *) sev=unknown;; esac
+            add_check "ПОЧТА / MAIL" "mail.domain.$idx.srv.imap" "SRV IMAPS #$idx" "$MAIL_RECORD_TEXT" "$sev"
+            _mail_query_record "_submission._tcp.$domain" SRV
+            case $MAIL_RECORD_STATE in OK|EMPTY) sev=info;; *) sev=unknown;; esac
+            add_check "ПОЧТА / MAIL" "mail.domain.$idx.srv.smtp" "SRV submission #$idx" "$MAIL_RECORD_TEXT" "$sev"
+        done
+    fi
+    add_check "ПОЧТА / MAIL" "mail.auth.scope" "Проверка почтового ящика" "не выполнялась" info \
+      "Скрипт не читает пароли, не получает Kerberos service ticket, не отправляет письма и не проверяет содержимое ящика."
+}
+
 check_print() {
     local state sev default qcount=0 disabled=0 jobs=0 uris errcount journal_data journal_err journal_rc
     if have systemctl; then
@@ -1917,8 +2417,9 @@ case "$PROFILE" in
     domain) check_domain ;;
     network) check_network ;;
     print) check_print ;;
+    mail) check_mail ;;
     software) check_software ;;
-    enterprise) check_domain; check_network; check_print ;;
+    enterprise) check_domain; check_network; check_print; check_mail ;;
 esac
 
 build_recommendations
@@ -2004,8 +2505,8 @@ arm_info — диагностика технического состояния 
   -q, --quiet             не выводить отчёт в терминал (имеет смысл с сохранением)
   --json                  вывести отчёт в JSON вместо текстового формата
   --config PATH           использовать другой конфигурационный файл
-  -c, --corp              сокращённый запуск corporate-профиля: domain+network+print
-  --profile NAME          domain|network|print|software|enterprise
+  -c, --corp              сокращённый запуск corporate-профиля: domain+network+print+mail
+  --profile NAME          domain|network|print|mail|software|enterprise
   --compare A.json B.json сравнить два JSON-отчёта АРМ
 
 Коды завершения:

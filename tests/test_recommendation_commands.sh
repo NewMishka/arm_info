@@ -14,6 +14,9 @@ grep -q 'MD_DEVICE' "$SCRIPT" || fail 'RAID placeholder missing'
 grep -q 'UNIT_NAME' "$SCRIPT" || fail 'systemd unit placeholder missing'
 grep -q 'DEVICE_PATH' "$SCRIPT" || fail 'device placeholder missing'
 grep -q 'USER_NAME' "$SCRIPT" || fail 'user-context placeholder missing'
+grep -q 'MAIL_HOST' "$SCRIPT" || fail 'mail host placeholder missing'
+grep -q 'MAIL_PORT' "$SCRIPT" || fail 'mail port placeholder missing'
+grep -q 'MAIL_DOMAIN' "$SCRIPT" || fail 'mail domain placeholder missing'
 
 # CIFS recommendation/runtime contract. The recommendation no longer duplicates
 # the production probe as a large shell loop: arm_info itself performs the
@@ -67,6 +70,11 @@ commands=(
   "cancel -a QUEUE_NAME"
   "lpr -P QUEUE_NAME /usr/share/cups/data/testprint"
   "sudo systemctl restart cups"
+  "getent ahosts MAIL_HOST"
+  "timeout 5 nc -vz MAIL_HOST MAIL_PORT"
+  "openssl s_client -connect MAIL_HOST:MAIL_PORT -servername MAIL_HOST -starttls MAIL_PROTOCOL -verify_hostname MAIL_HOST -verify_return_error -showcerts </dev/null"
+  "openssl s_client -connect MAIL_HOST:MAIL_PORT -servername MAIL_HOST -verify_hostname MAIL_HOST -verify_return_error -showcerts </dev/null"
+  "dig +short MAIL_DOMAIN MX"
   "dnf provides '/usr/bin/lpstat'"
   "systemctl status UNIT_NAME --no-pager -l"
   "journalctl -u UNIT_NAME -b --no-pager | tail -120"
