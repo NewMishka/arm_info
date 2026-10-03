@@ -227,6 +227,8 @@ tests/             regression / architecture / performance tests
 
 Текущий stable release: **v1.3.0**.
 
+Текущая версия: **1.3.0**.
+
 Release assets:
 
 - `arm_info.sh`
