@@ -1,29 +1,40 @@
 # arm_info
 
-`arm_info` — Bash-утилита для комплексной диагностики технического состояния рабочих станций под управлением **РЕД ОС 7/8** и совместимых Linux-систем.
+[![CI](https://github.com/NewMishka/arm_info/actions/workflows/ci.yml/badge.svg)](https://github.com/NewMishka/arm_info/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/NewMishka/arm_info)](https://github.com/NewMishka/arm_info/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Shell](https://img.shields.io/github/languages/top/NewMishka/arm_info)
 
-Утилита собирает аппаратные и системные показатели, оценивает состояние накопителей, файловых систем, памяти, CPU, сети и стабильности системы, формирует объяснимый технический индекс и рекомендации в формате **«что обнаружено → влияние → действие → команда»**.
+**Single-file Bash-диагностика рабочих станций РЕД ОС 7/8 и совместимых Linux-систем.**
 
-> Индекс отражает текущее техническое состояние и эксплуатационные риски. Он не является прогнозом остаточного срока службы компьютера.
+`arm_info` собирает аппаратные и системные показатели, проверяет корпоративные сервисы и формирует объяснимый TXT/JSON-отчёт с рекомендациями в формате **«что обнаружено → влияние → действие → команда»**.
 
-## Возможности
+[Документация](https://newmishka.gitbook.io/newmishka-docs/) ·
+[Последний релиз](https://github.com/NewMishka/arm_info/releases/latest) ·
+[Пример отчёта](examples/sample-report.txt) ·
+[Changelog](CHANGELOG.md)
 
-- ОС, ядро, архитектура, модель системы, BIOS, uptime и ориентир возраста установки;
-- CPU: модель, физические ядра/потоки, load, температура по нескольким замерам с выводом медианы;
-- ОЗУ: объём, доступность, модули, тип/частота, swap, OOM;
-- сеть: IP/MAC, gateway, DNS, link, RX/TX errors, `rx_missed_errors`, TX dropped и информационный RX dropped; score учитывает только диагностически значимые ошибки/потери;
-- HDD/SSD/NVMe: SMART, ресурс, температура, Power-On Hours, bad/pending/uncorrectable, NVMe critical/media errors;
-- файловые системы: заполнение, inode, read-only;
-- стабильность системы: failed units, аппаратные/дисковые ошибки ядра, journal `err..alert`, OOM, time sync, признаки аварийной загрузки и ECC/EDAC;
-- дополнительные read-only проверки: NTP/time sync, software RAID, ECC/EDAC, батарея, SMART self-test, SSSD/Kerberos/CUPS;
-- корпоративные профили в том же единственном файле: AD/SSSD/Kerberos/DNS, 802.1X, CIFS/GVFS, CUPS и доступность IMAP/SMTP;
-- сравнение JSON-отчётов двух АРМ;
-- TXT или JSON;
-- privacy-режим для публикации отчётов;
-- настраиваемые пороги через `/etc/arm_info.conf`;
-- стабильные exit codes для автоматизации.
+> **Stable:** последний опубликованный релиз — **v1.3.0**.  
+> Ветка `main` может содержать уже проверенные, но ещё не выпущенные изменения.
+
+## Зачем arm_info
+
+Проект рассчитан на практическую диагностику АРМ без развёртывания отдельного агента: достаточно передать **один `arm_info.sh`**, запустить его и получить читаемый отчёт.
+
+Основные сценарии:
+
+- диагностика ОС, CPU, RAM, накопителей, SMART, файловых систем и стабильности системы;
+- проверка сети, DNS, интерфейсов и сетевых ошибок;
+- корпоративные профили AD/SSSD/Kerberos, 802.1X, CIFS/GVFS/autofs, CUPS и mail;
+- сравнение двух обезличенных JSON-отчётов;
+- автоматизация через стабильные exit codes и machine-readable JSON;
+- privacy-режим для передачи отчёта вне внутреннего контура.
+
+Индекс отражает **текущее техническое состояние и эксплуатационные риски**, а не прогноз остаточного срока службы компьютера.
 
 ## Быстрый запуск
+
+Клонировать репозиторий:
 
 ```bash
 git clone https://github.com/NewMishka/arm_info.git
@@ -31,18 +42,14 @@ cd arm_info
 sudo bash arm_info.sh
 ```
 
-Или установка команды `arm_info`:
+Или установить команду `arm_info`:
 
 ```bash
 sudo bash install.sh
 sudo arm_info
 ```
 
-С версии **1.2.1** вся базовая и корпоративная диагностика находится в одном `arm_info.sh`. Полная форма `--profile enterprise` сохранена для совместимости. Установка через `install.sh` остаётся доступной, но отдельный enterprise-helper больше не требуется.
-
-## Практический сценарий
-
-Для разовой диагностики проблемного АРМ достаточно передать **один файл** и запустить короткий корпоративный профиль:
+Для разовой диагностики проблемного АРМ достаточно передать один файл:
 
 ```bash
 scp arm_info.sh admin@HOST:/tmp/
@@ -50,60 +57,52 @@ ssh admin@HOST
 sudo bash /tmp/arm_info.sh -c
 ```
 
-`-c` — короткий алиас `--corp`; оба варианта запускают один и тот же корпоративный профиль.
+`-c` — короткая форма корпоративного профиля `--corp`.
 
-По умолчанию корпоративный отчёт выводится только в терминал и файл не создаётся. Для сохранения добавьте `-s` или `--save`; при необходимости путь задаётся через `-o/--output`.
+## Что проверяется
 
-`--corp` запускает `domain + network + print + mail` и **не выполняет глобальную инвентаризацию ПО**, поэтому отчёт не раздувается сотнями строк. Почтовая проверка не входит в ящик и не отправляет письма.
+| Область | Примеры |
+|---|---|
+| Система | ОС, ядро, архитектура, модель, BIOS, uptime |
+| CPU | модель, ядра/потоки, load, температура |
+| RAM | объём, доступность, модули, swap, OOM |
+| Накопители | HDD/SSD/NVMe, SMART, ресурс, температура, Power-On Hours |
+| Файловые системы | заполнение, inode, read-only |
+| Стабильность | failed units, journal, kernel errors, OOM, time sync, ECC/EDAC |
+| Сеть | IP/MAC, gateway, DNS, link, errors/drops |
+| Домен | AD join, SSSD, Kerberos, KDC/LDAP, DNS SRV |
+| Ресурсы | CIFS, GVFS/GIO, autofs |
+| Печать | CUPS, очереди, jobs, backend, журнал |
+| Почта | DNS, TCP, TLS/STARTTLS, сертификаты, pre-auth capabilities |
 
-Начиная с **1.2.2** корпоративный TXT-отчёт выровнен по колонкам, экран очищается перед интерактивным TXT-выводом, а JSON остаётся без управляющих последовательностей. Команды в рекомендациях сопровождаются пояснением в скобках, что именно даст каждая команда.
+Корпоративные проверки **не смешиваются с базовым health score** и используют собственные статусы `OK/INFO/WARN/CRIT/N/A`.
 
-В **1.2.3** дополнительно исправлено копирование длинных команд: команда печатается одной физической строкой и может только визуально переноситься терминалом, поэтому при копировании shell pipeline и аргументы остаются цельными. Стандартный анализ использует ту же сетку рекомендаций. Температура CPU выводится как медиана (`NN°C (медиана)`) без одновременного значения максимума.
-
-Анализ накопителей в 1.2.3 ориентирован прежде всего на диск, с которого работает корневая файловая система. Он помечается как `Системный` и выводится первым. Подключённые USB/съёмные носители и оптические устройства показываются как `вне индекса`, не снижают storage score и полноту SMART и не подменяют `Макс. заполнение` внутренних файловых систем.
-
-Блок `802.1X` проверяет все настроенные NetworkManager-профили, отдельно показывает число активных и, когда сертификат доступен как PEM/DER, выводит Subject/Issuer, начало и окончание действия и остаток срока. Если NetworkManager не возвращает certificate reference, выполняется безопасный поиск host-named сертификата-кандидата в `/etc/pki/tls`.
-
-В стандартном отчёте группа `Стабильность системы` показывает оценку из 100, каждый учитываемый сигнал и его штраф. Это оценка устойчивости работы АРМ по системным событиям, а не утверждение о повреждении самой ОС.
-
-В **1.2.4** проведена ревизия всех команд из рекомендаций: исправлены некорректные варианты `nmcli`, исключены заведомо бесполезные проверки отсутствующих утилит, добавлены пользовательский контекст Kerberos, таймауты сетевых проверок, безопасные маркеры (`DOMAIN_FQDN`, `PROFILE_NAME`, `USER_NAME` и т. п.) и явное предупреждение `ИЗМЕНЯЕТ СОСТОЯНИЕ` для команд, меняющих конфигурацию/очередь. Каждая выводимая команда получает отдельное описание результата. CI дополнительно запускает `tests/test_sections.sh`, который проверяет все пользовательские разделы стандартного TXT, основные группы JSON и все секции корпоративных профилей. CIFS-проверка в 1.2.4 использует TARGET одной колонкой и фактическое минимальное чтение каталога с timeout: это исключает ложные WARN из-за пробелов/кириллицы и не считает успешный `stat -f` доказательством доступности содержимого.
-
-## Версия 1.3
-
-В **1.3.0** корпоративная диагностика переведена на нормализованный сбор инфраструктурных объектов и ограниченные по времени активные проверки без изменения single-file поставки.
-
-- корпоративный отчёт строится через конвейер `collect → normalized inventory → probe → checks → output`, не меняя single-file поставку;
-- раздел `DNS / DOMAIN` больше не дублируется; все уникальные DC из Kerberos/LDAP/AD DC SRV выводятся построчно со статусами TCP 88/389;
-- CIFS, autofs, GVFS/FUSE и GIO объединяются без дублей, но сохраняют признаки «настроен», «смонтирован» и «доступен»; неисправный ресурс не скрывает остальные;
-- статические autofs-карты читаются пассивно; `--probe-autofs` явно разрешает проверку, способную вызвать автомонтирование;
-- профиль `mail` проверяет DNS, TCP, TLS/STARTTLS, сертификаты и pre-auth capabilities IMAP/SMTP без входа в ящик и отправки письма;
-- CUPS journal больше не показывает ложный `OK`: реальные записи severity 0–4 дают `WARN`, недоступный журнал — `N/A`; рекомендации используют штатные `cancel`, `cupsenable`, `cupsaccept` и `lpr`;
-- активные проверки DC, CIFS, autofs, GIO и mail ограничены общим `--network-budget`; TCP-проверки DC имеют управляемую параллельность `--network-jobs`;
-- сокращено число внешних процессов при формировании TXT и чтении свойств NetworkManager; добавлены отдельные performance/architecture regression tests.
-
-Полный список изменений и границы проверки: [release notes 1.3.0](docs/releases/v1.3.0.md) и [pre-release checklist](docs/PRE_RELEASE_CHECKLIST.md).
-
-Если отчёт нужно передать вне внутреннего контура или использовать для сравнения АРМ:
+## Основные команды
 
 ```bash
-sudo bash /tmp/arm_info.sh --corp --privacy --json --save -o /tmp/arm-corp.json
+# Стандартная диагностика
+sudo arm_info
+
+# Корпоративный профиль
+sudo arm_info -c
+
+# Обезличенный корпоративный отчёт
+sudo arm_info -c -p
+
+# JSON с сохранением
+sudo arm_info -c -p --json --save -o /tmp/arm-corp.json
+
+# Увеличенный бюджет сетевых проверок
+sudo arm_info -c -p --network-budget 60 --network-jobs 6
+
+# Полная инвентаризация RPM
+sudo arm_info --profile software
+
+# Сравнение двух АРМ
+arm_info --compare arm-a.json arm-b.json
 ```
 
-Полная инвентаризация всех RPM-пакетов запускается только отдельно и явно:
-
-```bash
-sudo bash /tmp/arm_info.sh --profile software
-```
-
-## Release assets
-
-Production release публикует `arm_info.sh` и `SHA256SUMS`. После скачивания обоих файлов целостность single-file скрипта можно проверить:
-
-```bash
-sha256sum -c SHA256SUMS
-```
-
-## CLI
+Ключевые параметры:
 
 ```text
 -h, --help
@@ -124,152 +123,134 @@ sha256sum -c SHA256SUMS
 --compare REPORT_A.json REPORT_B.json
 ```
 
-Примеры:
+Полное описание CLI и сценариев: [GitBook](https://newmishka.gitbook.io/newmishka-docs/) и [docs/USAGE.md](docs/USAGE.md).
 
-```bash
-sudo arm_info --privacy
-sudo arm_info --json --privacy | jq '.summary'
-sudo arm_info --save --output /var/tmp/arm-reports/
-sudo arm_info --config /etc/arm_info.conf
-sudo arm_info --profile domain --privacy
-sudo arm_info --profile mail --mail-endpoint imaps://mail.example.test:993 --mail-endpoint smtp://smtp.example.test:587
-sudo arm_info --corp --privacy --json --save -o /tmp/arm-corp.json
-arm_info --compare arm-a.json arm-b.json
-```
-
-## Корпоративные профили
-
-`arm_info` содержит встроенные профили для типовых проблем корпоративных АРМ РЕД ОС. Они **не смешиваются с базовым health score** и выводят самостоятельные статусы `OK/WARN/CRIT/N/A`.
-
-Для `WARN/CRIT/N/A` формируется максимально подробный блок рекомендаций: возможные причины → влияние → что проверить → действие → команды → контроль результата. В JSON те же данные доступны в `recommendations[]`.
-
-- `domain` — SSSD, AD join, Kerberos ticket/cache, ошибки Kerberos в текущем журнале, time sync, DNS SRV и доступность KDC/LDAP;
-- `network` — DNS/upstream, FQDN, интерфейсы, 802.1X и сроки сертификатов, CIFS/GVFS/Caja;
-- `print` — CUPS service/scheduler, default printer, paused queues, jobs, backend URI и журнал;
-- `mail` — обнаруженные IMAP/SMTP endpoints, DNS, TCP, TLS/STARTTLS, сертификаты и объявленные AUTH-механизмы без аутентификации;
-- `software` — глобальная инвентаризация всех установленных RPM-пакетов, общее число процессов и zombie-процессы;
-- `enterprise` / `-c` / `--corp` — объединяет `domain + network + print + mail`; глобальная инвентаризация ПО **не запускается автоматически** и доступна только отдельно через `--profile software`.
-
-Подробно: [docs/ENTERPRISE_PROFILES.md](docs/ENTERPRISE_PROFILES.md).
-
-Для ресурсов autofs обычный корпоративный отчёт читает статические CIFS-карты (нужен `python3`) без попытки подключения. Несмонтированные ресурсы показываются как настроенные. Активная проверка включается явно: `sudo arm_info -c -p --probe-autofs`; чтение каталога может вызвать автомонтирование, а root использует контекст активного GUI-пользователя.
-
-Активные проверки DC, CIFS, autofs, GIO и mail имеют общий бюджет 30 секунд; TCP-проверки DC выполняются максимум по четыре одновременно. Все обнаруженные ресурсы остаются в отчёте, а не уложившиеся в бюджет получают N/A. Для крупных инфраструктур: `sudo arm_info -c -p --network-budget 60 --network-jobs 6`.
-
-## Сравнение двух АРМ
-
-Для ситуации «на рабочем АРМ всё работает, на проблемном нет» можно получить два обезличенных JSON и сравнить их:
-
-```bash
-sudo arm_info --corp --privacy --json --save -o arm-a.json
-sudo arm_info --corp --privacy --json --save -o arm-b.json
-arm_info --compare arm-a.json arm-b.json
-```
-
-`--compare` возвращает `0`, если сравниваемые поля одинаковы, и `1`, если найдены отличия. Для сравнения требуется `python3`.
-
-## Приватность
+## Privacy и безопасность
 
 Обычный отчёт может содержать инфраструктурные данные. Перед публикацией используйте:
 
 ```bash
 sudo arm_info --privacy
+sudo arm_info --corp --privacy --json
 ```
 
-`-p` — короткая форма `--privacy`, действует во всех профилях.
+Privacy скрывает или маскирует штатные hostname, IP/MAC/DNS, домены, серверы, URI и связанные идентификаторы, но перед передачей отчёт всё равно следует просмотреть.
 
-Privacy-режим скрывает hostname, MAC, DNS, SSSD/почтовые домены, имена почтовых серверов и Subject/Issuer их сертификатов, маскирует IP и заменяет имена интерфейсов. Printer URI всегда очищается от встроенных учётных данных. При явном сохранении автоматическое имя privacy-отчёта не содержит hostname. Подробно: [docs/PRIVACY.md](docs/PRIVACY.md).
+Диагностика по умолчанию **read-only**. Команды, меняющие состояние системы, не выполняются автоматически и в рекомендациях помечаются как `ИЗМЕНЯЕТ СОСТОЯНИЕ`.
 
-## Технический индекс
+Подробнее: [Privacy](docs/PRIVACY.md) · [Команды рекомендаций](docs/COMMANDS.md) · [Security policy](.github/SECURITY.md).
 
-| Группа | Вес |
-|---|---:|
-| Накопители / износ | 40% |
-| Файловые системы | 15% |
-| Стабильность системы | 15% |
-| Оперативная память | 10% |
-| Процессор / температура | 10% |
-| Возраст / наработка | 5% |
-| Сеть | 5% |
+## Форматы и автоматизация
 
-Если группа не может быть достоверно проверена, неизвестное значение не превращается в `100/100`: уменьшается полнота диагностики, а недостоверная группа исключается из соответствующей части расчёта.
+Стандартный `--json` использует schema v1. Корпоративные профили используют schema v2.
 
-Подробно: [docs/SCORING.md](docs/SCORING.md).
+Exit codes:
+
+| Код | Значение |
+|---:|---|
+| 0 | норма, проверка достаточно полная |
+| 1 | предупреждения / неудовлетворительное состояние |
+| 2 | критическое состояние |
+| 3 | состояние нормальное, но проверка неполная |
+| 64 | ошибка CLI |
+
+Подробнее: [docs/AUTOMATION.md](docs/AUTOMATION.md).
 
 ## Зависимости
 
-Базовые: `bash`, `iproute`, `util-linux`, `procps-ng`, `coreutils`.
+Базовые:
 
-Для полной диагностики на РЕД ОС рекомендуется:
+```text
+bash
+iproute
+util-linux
+procps-ng
+coreutils
+```
+
+Для полной аппаратной диагностики на РЕД ОС рекомендуется:
 
 ```bash
 sudo dnf install smartmontools dmidecode lm_sensors
 ```
 
-Дополнительные проверки используют установленные в системе `chronyc`, `sssctl`, `klist`, `lpstat`, `mdadm` и EDAC-интерфейсы, но не требуют их установки для базового запуска.
+Корпоративные профили дополнительно используют доступные в системе `sssd-tools`, `adcli`, `krb5-workstation`, `bind-utils`, `NetworkManager`, `openssl`, `cups-client`, `nc` / `nmap-ncat` и `python3`. Отсутствующая дополнительная утилита не должна превращать непроверенное состояние в ложный `OK`.
 
-Для максимальной полноты корпоративных профилей полезны `sssd-tools`, `adcli`, `krb5-workstation`, `bind-utils`, `NetworkManager`, `openssl`, `cups-client`, `nc`/`nmap-ncat`. `openssl` используется также для TLS/STARTTLS почтовых серверов. `python3` нужен для `--compare` и безопасного разбора статических autofs-карт.
+## Архитектура
 
-## Автоматизация
+Проект сохраняет single-file runtime-поставку, но внутри разделяет сбор фактов и их интерпретацию.
 
-Базовый `--json` выдаёт machine-readable JSON schema v1. Корпоративные профили используют schema v2 (`checks[]` со стабильными ключами). Exit codes:
+Базовый отчёт:
 
-- `0` — норма, проверка достаточно полная;
-- `1` — предупреждения/неудовлетворительное состояние;
-- `2` — критическое состояние;
-- `3` — состояние нормальное, но проверка неполная;
-- `64` — ошибка CLI.
-
-Подробнее: [docs/AUTOMATION.md](docs/AUTOMATION.md).
-
-## Конфигурация
-
-Пример: [config/arm_info.conf.example](config/arm_info.conf.example). Установщик создаёт `/etc/arm_info.conf`, если его ещё нет. Конфигурация не выполняется через `source`: скрипт читает только разрешённый список ключей.
-
-## RPM
-
-В репозитории есть `packaging/arm_info.spec` и helper:
-
-```bash
-sudo dnf install rpm-build
-bash packaging/build-rpm.sh
+```text
+collectors → normalized snapshot → checks/scoring → TXT/JSON
 ```
 
-## Разработка
+Корпоративная диагностика:
+
+```text
+collect → normalized inventory → probe → checks → output
+```
+
+Это позволяет отдельно тестировать сбор данных, scoring/status, privacy и renderers, не добавляя runtime-зависимостей.
+
+Подробнее: [docs/TECHNICAL.md](docs/TECHNICAL.md).
+
+## Разработка и CI
 
 ```bash
-make version   # версия берётся из VERSION
+make version
 make check
 make test
 ```
 
-`Makefile` не содержит отдельной захардкоженной версии: он читает `VERSION` и в `make check` сверяет её с `arm_info.sh` и RPM spec. CI дополнительно проверяет эту же согласованность перед merge/release.
+GitHub Actions проверяет Bash-синтаксис, ShellCheck, regression tests, архитектурные контракты, CLI/JSON/privacy, корпоративные профили, рекомендации, совместимость синтаксиса на Ubuntu/Fedora/Rocky Linux, installer и RPM smoke tests.
 
-CI выполняет `bash -n`, ShellCheck уровня error, базовые CLI/JSON/privacy tests, корпоративные tests, аудит команд рекомендаций, полную проверку разделов отчёта, compatibility syntax, installer smoke, документационный contract и RPM build smoke test.
+Автоматические тесты не заменяют полевой прогон на реальном РЕД ОС 7/8 для аппаратно-, доменно- и пользовательски-зависимых сценариев.
 
-## Документация
+## Структура репозитория
 
-- [Использование](docs/USAGE.md)
-- [Корпоративные профили](docs/ENTERPRISE_PROFILES.md)
-- [Scoring](docs/SCORING.md)
-- [Техническая архитектура](docs/TECHNICAL.md)
-- [Privacy](docs/PRIVACY.md)
-- [Автоматизация](docs/AUTOMATION.md)
-- [Дополнительные проверки](docs/OPTIONAL_CHECKS.md)
-- [Совместимость](docs/COMPATIBILITY.md)
-- [Тестирование](docs/TESTING.md)
-- [Команды рекомендаций](docs/COMMANDS.md)
-- [Pre-release checklist](docs/PRE_RELEASE_CHECKLIST.md)
-- [Release notes 1.3.0](docs/releases/v1.3.0.md)
-- [Security policy](SECURITY.md)
-- [Contributing](CONTRIBUTING.md)
-- [Changelog](CHANGELOG.md)
+```text
+arm_info.sh        основной single-file runtime
+install.sh         установка команды arm_info
+config/            пример конфигурации
+docs/              техническая и пользовательская документация
+examples/          обезличенный пример отчёта
+packaging/         RPM spec и helper сборки
+tests/             regression / architecture / performance tests
+.github/           CI, шаблоны Issues/PR и community-файлы
+```
 
-## Версия
+Навигация по документации: [docs/README.md](docs/README.md).
+
+## Релизы
+
+Текущий stable release: **v1.3.0**.
 
 Текущая версия: **1.3.0**.
 
-Release notes: [arm_info 1.3.0](docs/releases/v1.3.0.md).
+Release assets:
+
+- `arm_info.sh`
+- `SHA256SUMS`
+
+После скачивания обоих файлов:
+
+```bash
+sha256sum -c SHA256SUMS
+```
+
+[Release notes 1.3.0](docs/releases/v1.3.0.md) ·
+[Verification checklist](docs/releases/v1.3.0-checklist.md) ·
+[Все релизы](https://github.com/NewMishka/arm_info/releases)
+
+## Участие в проекте
+
+Перед PR выполните `make check` и `make test`. Не публикуйте реальные внутренние hostname, домены, IP/MAC или необезличенные диагностические отчёты.
+
+[Contributing](.github/CONTRIBUTING.md) ·
+[Code of Conduct](.github/CODE_OF_CONDUCT.md) ·
+[Security](.github/SECURITY.md)
 
 ## Лицензия
 

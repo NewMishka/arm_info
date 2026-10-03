@@ -10,11 +10,6 @@
 
 ```bash
 sudo arm_info --privacy
-```
-
-или:
-
-```bash
 sudo arm_info --privacy --json
 ```
 
