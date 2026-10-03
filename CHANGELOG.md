@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Changed
+- Для неактивных SSSD и CUPS standard JSON дополнен полями `*_result`, `*_error_count` и `*_likely_cause`; причины обезличены и не содержат сырых строк журнала.
 - Этап 4 архитектурного рефакторинга: стандартный аппаратно-системный отчёт переведён на явный конвейер `collectors → normalized snapshot → checks/scoring → TXT/JSON`. Сбор SMART больше не создаёт рекомендации напрямую; TXT и JSON используют один снимок и не повторяют аппаратные probes.
 - Сохранены standard JSON schema v1, TXT-разделы, формулы оценки, рекомендации и exit codes. Корпоративный конвейер DNS/DC/CIFS/autofs/GVFS/GIO этапа 3 не изменён.
 - Добавлен `tests/test_stage4_base_pipeline.sh`, который контролирует границы сборщика, checks/scoring, порядок стадий, единственный emitter и восстановление дисковых рекомендаций из нормализованного снимка.
