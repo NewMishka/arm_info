@@ -3342,7 +3342,7 @@ RX_ERRORS_TOTAL=0; TX_ERRORS_TOTAL=0
 RX_DROPS_TOTAL=0; RX_MISSED_TOTAL=0; TX_DROPS_TOTAL=0
 RX_PACKETS_TOTAL=0; TX_PACKETS_TOTAL=0
 RXTX_ERRORS=0; SCORED_LOSSES_TOTAL=0; RXTX_PACKETS=0
-NET_ROWS=(); NET_BAD_IFACES=()
+NET_ROWS=(); NET_IFACE_PPM_ROWS=()
 for P in /sys/class/net/*; do
     IFACE=$(basename "$P"); [ "$IFACE" = lo ]&&continue
     STATE=$(cat "$P/operstate" 2>/dev/null); [ "$STATE" = up ]||continue
@@ -3362,7 +3362,7 @@ for P in /sys/class/net/*; do
     RXTX_ERRORS=$((RX_ERRORS_TOTAL+TX_ERRORS_TOTAL)); SCORED_LOSSES_TOTAL=$((RX_MISSED_TOTAL+TX_DROPS_TOTAL)); RXTX_PACKETS=$((RX_PACKETS_TOTAL+TX_PACKETS_TOTAL))
     # В score входят errors + реальные пропуски host/NIC + TX drops. Общий
     # rx_dropped остаётся информационным и не создаёт WARN самостоятельно.
-    IF_BAD=$((RX+TX+RXM+TXD)); IF_PKT=$((RXP+TXP)); IF_PPM=0; ((IF_PKT>0))&&IF_PPM=$((IF_BAD*1000000/IF_PKT)); ((IF_PPM>=1000))&&NET_BAD_IFACES+=("$IFACE:${IF_PPM}ppm")
+    IF_BAD=$((RX+TX+RXM+TXD)); IF_PKT=$((RXP+TXP)); IF_PPM=0; ((IF_PKT>0))&&IF_PPM=$((IF_BAD*1000000/IF_PKT)); NET_IFACE_PPM_ROWS+=("$IFACE|$IF_PPM")
 done
 NET_BAD_PPM=0
 NET_ERROR_PPM=0
@@ -3381,15 +3381,6 @@ if ((RXTX_PACKETS>0)); then
 fi
 if ((RX_PACKETS_TOTAL>0)); then
     NET_RX_DROP_PPM_RAW=$((RX_DROPS_TOTAL*1000000/RX_PACKETS_TOTAL))
-fi
-if ((ACTIVE_NET==0)); then
-    NET_STATUS="Нет подключения"
-elif ((NET_ERROR_PPM>=NET_ERROR_CRIT_PPM || NET_DROP_PPM>=NET_DROP_CRIT_PPM)); then
-    NET_STATUS="Проблема"
-elif ((NET_ERROR_PPM>=NET_ERROR_WARN_PPM || NET_DROP_PPM>=NET_DROP_WARN_PPM)); then
-    NET_STATUS="Требует внимания"
-else
-    NET_STATUS="Норма"
 fi
 
 # -------------------- ФАЙЛОВЫЕ СИСТЕМЫ --------------------
@@ -3553,7 +3544,7 @@ case "$DISTRO_ID" in
 esac
 
 # -------------------- ДИСКИ / SMART --------------------
-DISK_ROWS=(); DISK_SYSTEM_ROWS=(); DISK_FIXED_ROWS=(); DISK_REMOVABLE_ROWS=(); DISK_OPTICAL_ROWS=(); DISK_SELFTEST_ROWS=(); DISK_CHECK_ROWS=(); DISK_WORST_SCORE=100; SYSTEM_DISK_SCORE=100; SECONDARY_WORST_KNOWN_SCORE=100; FIXED_DISKS=0; SYSTEM_DISK_COUNT=0; SECONDARY_FIXED_DISKS=0; SECONDARY_KNOWN_COUNT=0; REMOVABLE_DISKS=0; MAX_DISK_HOURS=0; SYSTEM_MAX_DISK_HOURS=0; SMART_UNKNOWN_COUNT=0; SYSTEM_SMART_UNKNOWN_COUNT=0; SECONDARY_CRITICAL=0
+DISK_ROWS=(); DISK_SYSTEM_ROWS=(); DISK_FIXED_ROWS=(); DISK_REMOVABLE_ROWS=(); DISK_OPTICAL_ROWS=(); DISK_SELFTEST_ROWS=(); DISK_CHECK_ROWS=(); FIXED_DISKS=0; SYSTEM_DISK_COUNT=0; SECONDARY_FIXED_DISKS=0; REMOVABLE_DISKS=0; MAX_DISK_HOURS=0; SYSTEM_MAX_DISK_HOURS=0; SMART_UNKNOWN_COUNT=0; SYSTEM_SMART_UNKNOWN_COUNT=0
 while read -r NAME TYPE SIZE ROTA MODEL; do
     case "$TYPE" in disk|rom) ;; *) continue ;; esac
     DEV="/dev/$NAME"; MODEL=$(echo "$MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'); [ -z "$MODEL" ]&&MODEL="-"; [ "${#MODEL}" -gt 28 ]&&MODEL="${MODEL:0:27}…"
@@ -3569,7 +3560,7 @@ while read -r NAME TYPE SIZE ROTA MODEL; do
     else
         DISK_ROLE="Дополнительный"; SECONDARY_FIXED_DISKS=$((SECONDARY_FIXED_DISKS+1))
     fi
-    FIXED_DISKS=$((FIXED_DISKS+1)); DISK_SCORE=100; RESOURCE="-"; SMART="Н/Д"; TEMP="-"; HOURS="-"; REALLOC=0; PENDING=0; UNCORR=0; MEDIAERR=0; CRITWARN=0
+    FIXED_DISKS=$((FIXED_DISKS+1)); RESOURCE="-"; SMART="Н/Д"; TEMP="-"; HOURS="-"; REALLOC=0; PENDING=0; UNCORR=0; MEDIAERR=0; CRITWARN=0; SPARE=-1; SPARE_THR=-1
     if [[ "$NAME" = nvme* ]]; then DISK_TYPE="NVMe SSD"; elif [ "$ROTA" = 0 ]; then DISK_TYPE=SSD; else DISK_TYPE=HDD; fi
     if ((SMARTCTL_AVAILABLE==1)); then
         SMART_ALL=$(run_smart -a "$DEV" 2>/dev/null); SMART_H=$(run_smart -H "$DEV" 2>/dev/null)
@@ -3577,55 +3568,105 @@ while read -r NAME TYPE SIZE ROTA MODEL; do
         _st=$(run_smart -l selftest "$DEV" 2>/dev/null | awk '/^# *1[[:space:]]/{for(i=5;i<=NF;i++){printf "%s%s",$i,(i<NF?" ":"")} exit}')
         [ -n "$_st" ] && SELFTEST="$_st"
         DISK_SELFTEST_ROWS+=("$NAME|$SELFTEST")
-        if echo "$SMART_H"|grep -Eqi 'PASSED|SMART.*OK'; then SMART=OK; elif echo "$SMART_H"|grep -Eqi 'FAILED|SMART.*BAD'; then SMART=FAIL; DISK_SCORE=0; else SMART="Н/Д"; SMART_UNKNOWN_COUNT=$((SMART_UNKNOWN_COUNT+1)); [[ "$DISK_ROLE" == "Системный" ]] && SYSTEM_SMART_UNKNOWN_COUNT=$((SYSTEM_SMART_UNKNOWN_COUNT+1)); fi
+        if echo "$SMART_H"|grep -Eqi 'PASSED|SMART.*OK'; then SMART=OK; elif echo "$SMART_H"|grep -Eqi 'FAILED|SMART.*BAD'; then SMART=FAIL; else SMART="Н/Д"; SMART_UNKNOWN_COUNT=$((SMART_UNKNOWN_COUNT+1)); [[ "$DISK_ROLE" == "Системный" ]] && SYSTEM_SMART_UNKNOWN_COUNT=$((SYSTEM_SMART_UNKNOWN_COUNT+1)); fi
         if [[ "$NAME" = nvme* ]]; then
-            USED=$(printf '%s\n' "$SMART_ALL" | awk -F: '/Percentage Used/{x=$2;gsub(/[% \t]/,"",x);print x;exit}'); if [[ "$USED" =~ ^[0-9]+$ ]]; then REMAIN=$((100-USED)); ((REMAIN<0))&&REMAIN=0; ((REMAIN>100))&&REMAIN=100; RESOURCE="${REMAIN}%"; ((REMAIN<DISK_SCORE))&&DISK_SCORE=$REMAIN; fi
+            USED=$(printf '%s\n' "$SMART_ALL" | awk -F: '/Percentage Used/{x=$2;gsub(/[% \t]/,"",x);print x;exit}'); if [[ "$USED" =~ ^[0-9]+$ ]]; then REMAIN=$((100-USED)); ((REMAIN<0))&&REMAIN=0; ((REMAIN>100))&&REMAIN=100; RESOURCE="${REMAIN}%"; fi
             TEMP=$(printf '%s\n' "$SMART_ALL" | awk -F: '/^Temperature:/{x=$2;gsub(/[^0-9]/,"",x);if(x!=""){print x;exit}}'); HOURS=$(printf '%s\n' "$SMART_ALL" | awk -F: '/Power On Hours/{x=$2;gsub(/[^0-9]/,"",x);if(x!=""){print x;exit}}')
             CRITRAW=$(printf '%s\n' "$SMART_ALL" | awk -F: '/Critical Warning/{x=$2;gsub(/^[ \t]+|[ \t]+$/,"",x);print x;exit}'); if [[ "$CRITRAW" =~ ^0[xX][0-9a-fA-F]+$ ]]; then CRITWARN=$((CRITRAW)); else CRITWARN=$(printf '%s' "$CRITRAW"|tr -cd '0-9'); [[ "$CRITWARN" =~ ^[0-9]+$ ]]||CRITWARN=0; fi
             MEDIAERR=$(printf '%s\n' "$SMART_ALL" | awk -F: '/Media and Data Integrity Errors/{x=$2;gsub(/[^0-9]/,"",x);print x+0;exit}'); [[ "$MEDIAERR" =~ ^[0-9]+$ ]]||MEDIAERR=0
             SPARE=$(printf '%s\n' "$SMART_ALL" | awk -F: '/Available Spare:/{x=$2;gsub(/[^0-9]/,"",x);if(x!=""){print x;exit}}'); SPARE_THR=$(printf '%s\n' "$SMART_ALL" | awk -F: '/Available Spare Threshold:/{x=$2;gsub(/[^0-9]/,"",x);if(x!=""){print x;exit}}'); [[ "$SPARE" =~ ^[0-9]+$ ]]||SPARE=-1; [[ "$SPARE_THR" =~ ^[0-9]+$ ]]||SPARE_THR=-1
-            ((CRITWARN>0))&&DISK_SCORE=$(min_score "$DISK_SCORE" 20); ((MEDIAERR>0))&&DISK_SCORE=$(min_score "$DISK_SCORE" 50); ((SPARE>=0 && SPARE_THR>=0 && SPARE<=SPARE_THR))&&DISK_SCORE=$(min_score "$DISK_SCORE" 40)
         else
             HOURS=$(printf '%s\n' "$SMART_ALL" | awk '/Power_On_Hours/{for(i=10;i<=NF;i++)if($i~/^[0-9]+$/){print $i+0;exit}}'); [[ "$HOURS" =~ ^[0-9]+$ ]]||HOURS="-"
             TEMP=$(printf '%s\n' "$SMART_ALL" | awk '/Temperature_Celsius|Airflow_Temperature_Cel/{for(i=10;i<=NF;i++)if($i~/^[0-9]+$/){print $i+0;exit}}'); [ -z "$TEMP" ]&&TEMP="-"
             REALLOC=$(printf '%s\n' "$SMART_ALL" | awk '/Reallocated_Sector_Ct/{for(i=10;i<=NF;i++)if($i~/^[0-9]+$/){print $i+0;exit}}'); PENDING=$(printf '%s\n' "$SMART_ALL" | awk '/Current_Pending_Sector/{for(i=10;i<=NF;i++)if($i~/^[0-9]+$/){print $i+0;exit}}'); UNCORR=$(printf '%s\n' "$SMART_ALL" | awk '/Offline_Uncorrectable/{for(i=10;i<=NF;i++)if($i~/^[0-9]+$/){print $i+0;exit}}'); [[ "$REALLOC" =~ ^[0-9]+$ ]]||REALLOC=0; [[ "$PENDING" =~ ^[0-9]+$ ]]||PENDING=0; [[ "$UNCORR" =~ ^[0-9]+$ ]]||UNCORR=0
-            if [ "$DISK_TYPE" = SSD ]; then LIFE=$(printf '%s\n' "$SMART_ALL" | awk '$2~/Percent_Lifetime_Remain|SSD_Life_Left|Media_Wearout_Indicator|Remaining_Lifetime/{if($4~/^[0-9]+$/){print $4+0;exit}}'); if [[ "$LIFE" =~ ^[0-9]+$ ]]&&((LIFE<=100)); then RESOURCE="${LIFE}%"; ((LIFE<DISK_SCORE))&&DISK_SCORE=$LIFE; fi; fi
-            if [ "$DISK_TYPE" = HDD ]&&[[ "$HOURS" =~ ^[0-9]+$ ]]; then if ((HOURS>=60000)); then DISK_SCORE=$(min_score "$DISK_SCORE" 55); elif ((HOURS>=40000)); then DISK_SCORE=$(min_score "$DISK_SCORE" 70); elif ((HOURS>=20000)); then DISK_SCORE=$(min_score "$DISK_SCORE" 88); fi; fi
-            ((REALLOC>0))&&DISK_SCORE=$(min_score "$DISK_SCORE" 70); ((REALLOC>10))&&DISK_SCORE=$(min_score "$DISK_SCORE" 50); ((PENDING>0 || UNCORR>0))&&DISK_SCORE=$(min_score "$DISK_SCORE" 30)
+            if [ "$DISK_TYPE" = SSD ]; then LIFE=$(printf '%s\n' "$SMART_ALL" | awk '$2~/Percent_Lifetime_Remain|SSD_Life_Left|Media_Wearout_Indicator|Remaining_Lifetime/{if($4~/^[0-9]+$/){print $4+0;exit}}'); if [[ "$LIFE" =~ ^[0-9]+$ ]]&&((LIFE<=100)); then RESOURCE="${LIFE}%"; fi; fi
         fi
-        if [[ "$TEMP" =~ ^[0-9]+$ ]]; then
-            if [ "$DISK_TYPE" = HDD ]; then ((TEMP>=HDD_TEMP_WARN))&&DISK_SCORE=$(min_score "$DISK_SCORE" 85); ((TEMP>=HDD_TEMP_HIGH))&&DISK_SCORE=$(min_score "$DISK_SCORE" 55); ((TEMP>=HDD_TEMP_CRIT))&&DISK_SCORE=$(min_score "$DISK_SCORE" 30)
-            elif [ "$DISK_TYPE" = "NVMe SSD" ]; then ((TEMP>=NVME_TEMP_WARN))&&DISK_SCORE=$(min_score "$DISK_SCORE" 85); ((TEMP>=NVME_TEMP_HIGH))&&DISK_SCORE=$(min_score "$DISK_SCORE" 60); ((TEMP>=NVME_TEMP_CRIT))&&DISK_SCORE=$(min_score "$DISK_SCORE" 30)
-            else ((TEMP>=SSD_TEMP_WARN))&&DISK_SCORE=$(min_score "$DISK_SCORE" 85); ((TEMP>=SSD_TEMP_HIGH))&&DISK_SCORE=$(min_score "$DISK_SCORE" 60); ((TEMP>=SSD_TEMP_CRIT))&&DISK_SCORE=$(min_score "$DISK_SCORE" 30); fi
-        else TEMP="-"; fi
+        [[ "$TEMP" =~ ^[0-9]+$ ]] || TEMP="-"
     fi
-    DISK_SCORE=$(clamp_score "$DISK_SCORE")
-    ((DISK_SCORE<DISK_WORST_SCORE))&&DISK_WORST_SCORE=$DISK_SCORE
     [[ "$HOURS" =~ ^[0-9]+$ ]]&&((HOURS>MAX_DISK_HOURS))&&MAX_DISK_HOURS=$HOURS
     if [[ "$DISK_ROLE" == "Системный" ]]; then
-        ((DISK_SCORE<SYSTEM_DISK_SCORE))&&SYSTEM_DISK_SCORE=$DISK_SCORE
         [[ "$HOURS" =~ ^[0-9]+$ ]]&&((HOURS>SYSTEM_MAX_DISK_HOURS))&&SYSTEM_MAX_DISK_HOURS=$HOURS
         DISK_SYSTEM_ROWS+=("$NAME|$DISK_ROLE|$DISK_TYPE|$SIZE|$MODEL|$RESOURCE|$SMART|$TEMP|$HOURS")
     else
-        if [[ "$SMART" != "Н/Д" ]]; then
-            SECONDARY_KNOWN_COUNT=$((SECONDARY_KNOWN_COUNT+1))
-            ((DISK_SCORE<SECONDARY_WORST_KNOWN_SCORE))&&SECONDARY_WORST_KNOWN_SCORE=$DISK_SCORE
-        fi
-        ((DISK_SCORE<30))&&SECONDARY_CRITICAL=1
         DISK_FIXED_ROWS+=("$NAME|$DISK_ROLE|$DISK_TYPE|$SIZE|$MODEL|$RESOURCE|$SMART|$TEMP|$HOURS")
     fi
 
-    DISK_CHECK_ROWS+=("$NAME|$DEV|$DISK_TYPE|$SMART|$REALLOC|$PENDING|$UNCORR|$CRITWARN|$MEDIAERR|$RESOURCE|$HOURS|$TEMP")
+    DISK_CHECK_ROWS+=("$NAME|$DEV|$DISK_ROLE|$DISK_TYPE|$SMART|$REALLOC|$PENDING|$UNCORR|$CRITWARN|$MEDIAERR|$RESOURCE|$HOURS|$TEMP|$SPARE|$SPARE_THR")
 
 done < <(lsblk -dn -o NAME,TYPE,SIZE,ROTA,MODEL 2>/dev/null)
 DISK_ROWS=("${DISK_SYSTEM_ROWS[@]}" "${DISK_FIXED_ROWS[@]}" "${DISK_REMOVABLE_ROWS[@]}" "${DISK_OPTICAL_ROWS[@]}")
-((FIXED_DISKS==0))&&DISK_WORST_SCORE=70
+}
+
+evaluate_base_disk_scores() {
+    local row NAME DEV DISK_ROLE DISK_TYPE SMART REALLOC PENDING UNCORR CRITWARN MEDIAERR RESOURCE HOURS TEMP SPARE SPARE_THR DISK_SCORE R
+    DISK_WORST_SCORE=100
+    SYSTEM_DISK_SCORE=100
+    SECONDARY_WORST_KNOWN_SCORE=100
+    SECONDARY_KNOWN_COUNT=0
+    SECONDARY_CRITICAL=0
+
+    for row in "${DISK_CHECK_ROWS[@]}"; do
+        IFS='|' read -r NAME DEV DISK_ROLE DISK_TYPE SMART REALLOC PENDING UNCORR CRITWARN MEDIAERR RESOURCE HOURS TEMP SPARE SPARE_THR <<< "$row"
+        DISK_SCORE=100
+        [ "$SMART" = FAIL ] && DISK_SCORE=0
+
+        if [[ "$RESOURCE" =~ ^([0-9]+)%$ ]]; then
+            R=${BASH_REMATCH[1]}
+            ((R<DISK_SCORE)) && DISK_SCORE=$R
+        fi
+
+        if [ "$DISK_TYPE" = "NVMe SSD" ]; then
+            ((CRITWARN>0)) && DISK_SCORE=$(min_score "$DISK_SCORE" 20)
+            ((MEDIAERR>0)) && DISK_SCORE=$(min_score "$DISK_SCORE" 50)
+            ((SPARE>=0 && SPARE_THR>=0 && SPARE<=SPARE_THR)) && DISK_SCORE=$(min_score "$DISK_SCORE" 40)
+        else
+            if [ "$DISK_TYPE" = HDD ] && [[ "$HOURS" =~ ^[0-9]+$ ]]; then
+                if ((HOURS>=60000)); then DISK_SCORE=$(min_score "$DISK_SCORE" 55)
+                elif ((HOURS>=40000)); then DISK_SCORE=$(min_score "$DISK_SCORE" 70)
+                elif ((HOURS>=20000)); then DISK_SCORE=$(min_score "$DISK_SCORE" 88)
+                fi
+            fi
+            ((REALLOC>0)) && DISK_SCORE=$(min_score "$DISK_SCORE" 70)
+            ((REALLOC>10)) && DISK_SCORE=$(min_score "$DISK_SCORE" 50)
+            ((PENDING>0 || UNCORR>0)) && DISK_SCORE=$(min_score "$DISK_SCORE" 30)
+        fi
+
+        if [[ "$TEMP" =~ ^[0-9]+$ ]]; then
+            if [ "$DISK_TYPE" = HDD ]; then
+                ((TEMP>=HDD_TEMP_WARN)) && DISK_SCORE=$(min_score "$DISK_SCORE" 85)
+                ((TEMP>=HDD_TEMP_HIGH)) && DISK_SCORE=$(min_score "$DISK_SCORE" 55)
+                ((TEMP>=HDD_TEMP_CRIT)) && DISK_SCORE=$(min_score "$DISK_SCORE" 30)
+            elif [ "$DISK_TYPE" = "NVMe SSD" ]; then
+                ((TEMP>=NVME_TEMP_WARN)) && DISK_SCORE=$(min_score "$DISK_SCORE" 85)
+                ((TEMP>=NVME_TEMP_HIGH)) && DISK_SCORE=$(min_score "$DISK_SCORE" 60)
+                ((TEMP>=NVME_TEMP_CRIT)) && DISK_SCORE=$(min_score "$DISK_SCORE" 30)
+            else
+                ((TEMP>=SSD_TEMP_WARN)) && DISK_SCORE=$(min_score "$DISK_SCORE" 85)
+                ((TEMP>=SSD_TEMP_HIGH)) && DISK_SCORE=$(min_score "$DISK_SCORE" 60)
+                ((TEMP>=SSD_TEMP_CRIT)) && DISK_SCORE=$(min_score "$DISK_SCORE" 30)
+            fi
+        fi
+
+        DISK_SCORE=$(clamp_score "$DISK_SCORE")
+        ((DISK_SCORE<DISK_WORST_SCORE)) && DISK_WORST_SCORE=$DISK_SCORE
+        if [[ "$DISK_ROLE" == "Системный" ]]; then
+            ((DISK_SCORE<SYSTEM_DISK_SCORE)) && SYSTEM_DISK_SCORE=$DISK_SCORE
+        else
+            if [[ "$SMART" != "Н/Д" ]]; then
+                SECONDARY_KNOWN_COUNT=$((SECONDARY_KNOWN_COUNT+1))
+                ((DISK_SCORE<SECONDARY_WORST_KNOWN_SCORE)) && SECONDARY_WORST_KNOWN_SCORE=$DISK_SCORE
+            fi
+            ((DISK_SCORE<30)) && SECONDARY_CRITICAL=1
+        fi
+    done
+
+    ((FIXED_DISKS==0)) && DISK_WORST_SCORE=70
 }
 
 evaluate_base_disk_findings() {
-    local row NAME DEV DISK_TYPE SMART REALLOC PENDING UNCORR CRITWARN MEDIAERR RESOURCE HOURS TEMP R TW
+    local row NAME DEV DISK_ROLE DISK_TYPE SMART REALLOC PENDING UNCORR CRITWARN MEDIAERR RESOURCE HOURS TEMP SPARE SPARE_THR R TW
     for row in "${DISK_CHECK_ROWS[@]}"; do
-        IFS='|' read -r NAME DEV DISK_TYPE SMART REALLOC PENDING UNCORR CRITWARN MEDIAERR RESOURCE HOURS TEMP <<< "$row"
+        IFS='|' read -r NAME DEV DISK_ROLE DISK_TYPE SMART REALLOC PENDING UNCORR CRITWARN MEDIAERR RESOURCE HOURS TEMP SPARE SPARE_THR <<< "$row"
         [ "$SMART" = FAIL ]&&add_rec "КРИТИЧНО" "Накопитель $NAME: SMART сообщает отказ" "Высокий риск внезапного отказа и потери данных." "Немедленно сохранить важные данные и заменить накопитель." "smartctl -a $DEV"
         ((REALLOC>0))&&add_rec "ВНИМАНИЕ" "Накопитель $NAME: переназначенные сектора — $REALLOC" "Носитель уже имеет дефектные области; рост счётчика означает деградацию." "Проверить резервное копирование и наблюдать SMART. При росте — заменить диск." "smartctl -A $DEV | grep -i Reallocated"
         ((PENDING>0))&&add_rec "КРИТИЧНО" "Накопитель $NAME: нестабильные сектора — $PENDING" "Возможны ошибки чтения, зависания и повреждение файлов." "Сначала сохранить данные, затем выполнить расширенный SMART-тест и планировать замену." "smartctl -A $DEV | grep -i Pending"
@@ -3638,8 +3679,30 @@ evaluate_base_disk_findings() {
     done
 }
 
+evaluate_base_network_status() {
+    local row IFACE IF_PPM
+    NET_BAD_IFACES=()
+    for row in "${NET_IFACE_PPM_ROWS[@]}"; do
+        IFS='|' read -r IFACE IF_PPM <<< "$row"
+        [[ "$IF_PPM" =~ ^[0-9]+$ ]] || IF_PPM=0
+        ((IF_PPM>=1000)) && NET_BAD_IFACES+=("$IFACE:${IF_PPM}ppm")
+    done
+
+    if ((ACTIVE_NET==0)); then
+        NET_STATUS="Нет подключения"
+    elif ((NET_ERROR_PPM>=NET_ERROR_CRIT_PPM || NET_DROP_PPM>=NET_DROP_CRIT_PPM)); then
+        NET_STATUS="Проблема"
+    elif ((NET_ERROR_PPM>=NET_ERROR_WARN_PPM || NET_DROP_PPM>=NET_DROP_WARN_PPM)); then
+        NET_STATUS="Требует внимания"
+    else
+        NET_STATUS="Норма"
+    fi
+}
+
 evaluate_base_snapshot() {
+    evaluate_base_disk_scores
     evaluate_base_disk_findings
+    evaluate_base_network_status
 
 # Системный накопитель задаёт основную оценку storage. Известный дополнительный
 # внутренний накопитель влияет только на 20% storage-группы. Съёмные носители
