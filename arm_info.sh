@@ -3195,6 +3195,10 @@ run_smart() {
     _arm_run_limited 8 smartctl "$@"
 }
 
+service_error_count() { local service=$1 count=0; ((JOURNAL_AVAILABLE==1)) || { echo 0; return; }; count=$(journalctl -u "$service" -b -p warning..alert -o cat -q --no-pager 2>/dev/null | sed '/^[[:space:]]*$/d' | sort -u | wc -l); [[ $count =~ ^[0-9]+$ ]] || count=0; echo "$count"; }
+sssd_failure_cause() { local logs time_sync=$1; ((JOURNAL_AVAILABLE==1)) || { echo 'Журнал сервиса недоступен'; return; }; logs=$(journalctl -u sssd -b -o cat -q --no-pager 2>/dev/null); if printf '%s\n' "$logs" | grep -Eqi 'sssd\.conf|configuration|permission denied|access denied|syntax'; then echo 'Конфигурация SSSD или права доступа к её файлам'; elif [[ $time_sync == Нет ]] || printf '%s\n' "$logs" | grep -Eqi 'clock skew|time.*sync|time.*skew'; then echo 'Синхронизация времени/NTP, влияющая на Kerberos'; elif printf '%s\n' "$logs" | grep -Eqi 'cannot resolve|dns|server.*offline|backend.*offline|ldap.*(connect|timeout|unreachable)|cannot contact.*kdc'; then echo 'Сеть, DNS или недоступность AD/LDAP/KDC'; else echo 'Причина по доступному журналу не определена'; fi; }
+cups_failure_cause() { local logs; ((JOURNAL_AVAILABLE==1)) || { echo 'Журнал сервиса недоступен'; return; }; logs=$(journalctl -u cups -b -o cat -q --no-pager 2>/dev/null); if printf '%s\n' "$logs" | grep -Eqi 'cupsd\.conf|configuration|permission denied|syntax'; then echo 'Конфигурация CUPS или права доступа'; elif printf '%s\n' "$logs" | grep -Eqi 'address already in use|listen.*socket|bind.*failed'; then echo 'Конфликт порта или сокета CUPS'; elif printf '%s\n' "$logs" | grep -Eqi 'connection refused|network is unreachable|timed out|unable to connect'; then echo 'Сеть или недоступность сервера/принтера'; else echo 'Причина по доступному журналу не определена'; fi; }
+
 read_cpu_temp_once() {
     local h name f raw t z type vals=()
     for h in /sys/class/hwmon/hwmon*; do
@@ -3521,16 +3525,18 @@ for _bat in /sys/class/power_supply/BAT*; do
 done
 
 # Опциональные сервисы: не влияют на базовую аппаратную оценку, но дают контекст АРМ.
-SSSD_STATUS="Не установлен"; SSSD_DOMAINS="-"
+SSSD_STATUS="Не установлен"; SSSD_DOMAINS="-"; SSSD_RESULT="-"; SSSD_ERROR_COUNT=0; SSSD_CAUSE="-"
 if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files sssd.service --no-legend 2>/dev/null | grep -q '^sssd.service'; then
     SSSD_STATUS=$(systemctl is-active sssd 2>/dev/null || true); [ -z "$SSSD_STATUS" ] && SSSD_STATUS="неактивен"
+    SSSD_RESULT=$(systemctl show sssd -p Result --value 2>/dev/null); [ -z "$SSSD_RESULT" ] && SSSD_RESULT="не определён"; if [[ $SSSD_STATUS != active ]]; then SSSD_ERROR_COUNT=$(service_error_count sssd); SSSD_CAUSE=$(sssd_failure_cause "$TIME_SYNC"); fi
     if command -v sssctl >/dev/null 2>&1; then SSSD_DOMAINS=$(sssctl domain-list 2>/dev/null | paste -sd ',' -); [ -z "$SSSD_DOMAINS" ] && SSSD_DOMAINS="-"; fi
 fi
 KRB_STATUS="Не установлен"
 if command -v klist >/dev/null 2>&1; then if klist -s 2>/dev/null; then KRB_STATUS="Есть билет (текущий контекст)"; else KRB_STATUS="Билета нет (текущий контекст)"; fi; fi
-CUPS_STATUS="Не установлен"; CUPS_QUEUES=0
+CUPS_STATUS="Не установлен"; CUPS_QUEUES=0; CUPS_RESULT="-"; CUPS_ERROR_COUNT=0; CUPS_CAUSE="-"
 if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files cups.service --no-legend 2>/dev/null | grep -q '^cups.service'; then
     CUPS_STATUS=$(systemctl is-active cups 2>/dev/null || true); [ -z "$CUPS_STATUS" ] && CUPS_STATUS="неактивен"
+    CUPS_RESULT=$(systemctl show cups -p Result --value 2>/dev/null); [ -z "$CUPS_RESULT" ] && CUPS_RESULT="не определён"; if [[ $CUPS_STATUS != active ]]; then CUPS_ERROR_COUNT=$(service_error_count cups); CUPS_CAUSE=$(cups_failure_cause); fi
     if command -v lpstat >/dev/null 2>&1; then CUPS_QUEUES=$(lpstat -p 2>/dev/null | grep -c '^printer '); fi
 fi
 
@@ -3933,8 +3939,24 @@ fi
 ((ECC_UE>0)) && add_rec "КРИТИЧНО" "ECC: обнаружены неисправимые ошибки памяти ($ECC_UE)" "Неисправимые ошибки памяти могут приводить к повреждению данных и аварийному завершению процессов." "Провести аппаратный тест ОЗУ и заменить неисправный модуль/слот." "grep -R . /sys/devices/system/edac/mc/mc*/ue_count 2>/dev/null"
 ((ECC_UE==0 && ECC_CE>0)) && add_rec "ПРОВЕРКА" "ECC: исправленных ошибок памяти — $ECC_CE" "ECC исправил ошибки, но рост счётчика может указывать на деградацию памяти." "Зафиксировать значения и проверить их рост при повторной диагностике." "grep -R . /sys/devices/system/edac/mc/mc*/ce_count 2>/dev/null"
 if [[ "$BATTERY_HEALTH" =~ ^([0-9]+)%$ ]] && ((BASH_REMATCH[1]<60)); then add_rec "ПЛАНОВО" "Износ батареи: остаточная ёмкость около ${BATTERY_HEALTH}" "Снижается автономность; при дальнейшем износе возможны внезапные отключения без питания." "Проверить батарею и запланировать замену при неудовлетворительной автономности." "grep -H . /sys/class/power_supply/BAT*/{capacity,energy_full,energy_full_design,charge_full,charge_full_design,cycle_count} 2>/dev/null"; fi
-if [ "$SSSD_STATUS" != "Не установлен" ] && [ "$SSSD_STATUS" != "active" ]; then add_rec "ВНИМАНИЕ" "SSSD установлен, но состояние: $SSSD_STATUS" "Может не работать доменная аутентификация, разрешение пользователей и групп." "Проверить службу SSSD, конфигурацию и журнал." "systemctl status sssd --no-pager -l; journalctl -u sssd -b --no-pager | tail -150; sssctl config-check"; fi
-if [ "$CUPS_STATUS" != "Не установлен" ] && [ "$CUPS_STATUS" != "active" ] && ((CUPS_QUEUES>0)); then add_rec "ВНИМАНИЕ" "CUPS не активен при наличии очередей печати" "Локальная печать через CUPS недоступна." "Запустить CUPS и проверить причину остановки." "systemctl status cups --no-pager -l; journalctl -u cups -b --no-pager | tail -150; lpstat -r"; fi
+if [[ $SSSD_STATUS != 'Не установлен' && $SSSD_STATUS != active ]]; then
+    SSSD_ACTION='Проверить состояние unit, конфигурацию SSSD и журнал; устранить первичную причину до перезапуска.'
+    case "$SSSD_CAUSE" in
+        Синхронизация*) SSSD_ACTION='Восстановить NTP-синхронизацию, затем проверить Kerberos и SSSD.' ;;
+        Сеть*) SSSD_ACTION='Проверить DNS, маршрут и доступность AD/LDAP/KDC, затем повторить проверку SSSD.' ;;
+        Конфигурация*) SSSD_ACTION='Проверить права и синтаксис /etc/sssd/sssd.conf, затем журнал SSSD.' ;;
+    esac
+    add_rec "ВНИМАНИЕ" "SSSD установлен, но состояние: $SSSD_STATUS" "Может не работать доменная аутентификация, разрешение пользователей и групп. Result: $SSSD_RESULT; уникальных ошибок: $SSSD_ERROR_COUNT; вероятная причина: $SSSD_CAUSE." "$SSSD_ACTION" "systemctl status sssd --no-pager; journalctl -u sssd -b -p warning..alert --no-pager"
+fi
+if [[ $CUPS_STATUS != 'Не установлен' && $CUPS_STATUS != active ]] && ((CUPS_QUEUES>0)); then
+    CUPS_ACTION='Проверить состояние CUPS и журнал; устранить первичную причину, затем восстановить сервис.'
+    case "$CUPS_CAUSE" in
+        Конфликт*) CUPS_ACTION='Проверить владельца порта/сокета CUPS и конфигурацию Listen, затем восстановить сервис.' ;;
+        Сеть*) CUPS_ACTION='Проверить сетевую доступность сервера печати или принтера и состояние CUPS.' ;;
+        Конфигурация*) CUPS_ACTION='Проверить права и синтаксис конфигурации CUPS, затем журнал сервиса.' ;;
+    esac
+    add_rec "ВНИМАНИЕ" "CUPS не активен при наличии очередей печати" "Локальная печать через CUPS недоступна. Result: $CUPS_RESULT; уникальных ошибок: $CUPS_ERROR_COUNT; вероятная причина: $CUPS_CAUSE." "$CUPS_ACTION" "systemctl status cups --no-pager; journalctl -u cups -b -p warning..alert --no-pager"
+fi
 
 # -------------------- ЗАКЛЮЧЕНИЕ --------------------
 if ((TOTAL_SCORE>=80))&&[[ "$STATE" != КРИТИЧЕСКОЕ ]]; then if ((CONFIDENCE>=80)); then CONCLUSION="По результатам диагностики техническое состояние АРМ соответствует требованиям, предъявляемым к выполнению текущих задач."; else CONCLUSION="По доступным данным техническое состояние АРМ соответствует требованиям текущих задач, однако полнота проверки составляет ${CONFIDENCE}%; требуется устранить ограничения диагностики."; fi
@@ -4201,9 +4223,9 @@ emit_base_json() {
     printf '  "stability": {"failed_units":%s,"hardware_errors":%s,"journal_errors":%s,"oom_detected":%s,"time_sync":"%s","unclean_boot_signs":%s,"ecc_ce":%s,"ecc_ue":%s,"penalty_failed_units":%s,"penalty_hardware":%s,"penalty_journal":%s,"penalty_oom":%s,"penalty_time":%s,"penalty_unclean_boot":%s,"penalty_ecc_ce":%s,"ecc_ue_score_cap":%s,"score":%s},\n' \
         "$FAILED_COUNT" "$HW_ERR_COUNT" "$JOURNAL_ERR_COUNT" "$([ "$OOM_DETECTED" -eq 1 ] && echo true || echo false)" "$(json_escape "$TIME_SYNC")" "$UNCLEAN_BOOT_SIGNS" "$ECC_CE" "$ECC_UE" \
         "$STAB_PENALTY_FAILED" "$STAB_PENALTY_HW" "$STAB_PENALTY_JOURNAL" "$STAB_PENALTY_OOM" "$STAB_PENALTY_TIME" "$STAB_PENALTY_UNCLEAN" "$STAB_PENALTY_ECC_CE" "$STAB_ECC_UE_CAP" "$STAB_SCORE"
-    printf '  "diagnostics": {"time_sync":"%s","unclean_boot_signs":%s,"raid":"%s","ecc":"%s","battery_health":"%s","sssd":"%s","kerberos":"%s","cups":"%s","support_tier":"%s"},\n' \
+    printf '  "diagnostics": {"time_sync":"%s","unclean_boot_signs":%s,"raid":"%s","ecc":"%s","battery_health":"%s","sssd":"%s","sssd_result":"%s","sssd_error_count":%s,"sssd_likely_cause":"%s","kerberos":"%s","cups":"%s","cups_result":"%s","cups_error_count":%s,"cups_likely_cause":"%s","support_tier":"%s"},\n' \
         "$(json_escape "$TIME_SYNC")" "$UNCLEAN_BOOT_SIGNS" "$(json_escape "$RAID_STATUS")" "$(json_escape "$ECC_STATUS")" "$(json_escape "$BATTERY_HEALTH")" \
-        "$(json_escape "$SSSD_STATUS")" "$(json_escape "$KRB_STATUS")" "$(json_escape "$CUPS_STATUS")" "$(json_escape "$SUPPORT_TIER")"
+        "$(json_escape "$SSSD_STATUS")" "$(json_escape "$SSSD_RESULT")" "$SSSD_ERROR_COUNT" "$(json_escape "$SSSD_CAUSE")" "$(json_escape "$KRB_STATUS")" "$(json_escape "$CUPS_STATUS")" "$(json_escape "$CUPS_RESULT")" "$CUPS_ERROR_COUNT" "$(json_escape "$CUPS_CAUSE")" "$(json_escape "$SUPPORT_TIER")"
     printf '  "summary": {"state":"%s","score":%s,"confidence":%s,"conclusion":"%s"},\n' \
         "$(json_escape "$STATE_DISPLAY")" "$TOTAL_SCORE" "$CONFIDENCE" "$(json_escape "$CONCLUSION")"
     printf '  "recommendations": ['
