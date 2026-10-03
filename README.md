@@ -174,7 +174,7 @@ coreutils
 sudo dnf install smartmontools dmidecode lm_sensors
 ```
 
-Корпоративные профили дополнительно используют доступные в системе `sssd-tools`, `adcli`, `krb5-workstation`, `bind-utils`, `NetworkManager`, `openssl`, `cups-client`, `nc`/ `nmap-ncat` и `python3`. Отсутствующая дополнительная утилита не должна превращать непроверенное состояние в ложный `OK`.
+Корпоративные профили дополнительно используют доступные в системе `sssd-tools`, `adcli`, `krb5-workstation`, `bind-utils`, `NetworkManager`, `openssl`, `cups-client`, `nc` / `nmap-ncat` и `python3`. Отсутствующая дополнительная утилита не должна превращать непроверенное состояние в ложный `OK`.
 
 ## Архитектура
 
