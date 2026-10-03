@@ -143,7 +143,7 @@
 - GitHub Actions CI, ShellCheck и базовые тесты CLI/JSON/privacy.
 - Makefile, installer/uninstaller и RPM spec/helper.
 - Документация по использованию, scoring, privacy, автоматизации, совместимости и тестированию.
-- `CONTRIBUTING.md`, `SECURITY.md`, шаблон issue и PR template.
+- `.github/CONTRIBUTING.md`, `.github/SECURITY.md`, шаблон issue и PR template.
 
 ### Changed
 - Уточнена оценка памяти: swap не штрафует систему при достаточном `MemAvailable` без OOM.
