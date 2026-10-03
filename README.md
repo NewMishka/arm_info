@@ -138,7 +138,7 @@ Privacy скрывает или маскирует штатные hostname, IP/M
 
 Диагностика по умолчанию **read-only**. Команды, меняющие состояние системы, не выполняются автоматически и в рекомендациях помечаются как `ИЗМЕНЯЕТ СОСТОЯНИЕ`.
 
-Подробнее: [Privacy](docs/PRIVACY.md) · [Security policy](.github/SECURITY.md).
+Подробнее: [Privacy](docs/PRIVACY.md) · [Команды рекомендаций](docs/COMMANDS.md) · [Security policy](.github/SECURITY.md).
 
 ## Форматы и автоматизация
 
