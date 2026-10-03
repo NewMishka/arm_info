@@ -88,7 +88,7 @@ sudo bash arm_info.sh --profile software
 
 ## Полевые проверки кандидата 1.3
 
-Автотесты не заменяют реальные DNS SRV, Kerberos multiuser CIFS, desktop D-Bus, autofs и CUPS journal. Перед выпуском 1.3.0 обязательны сценарии из [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md), в том числе:
+Автотесты не заменяют реальные DNS SRV, Kerberos multiuser CIFS, desktop D-Bus, autofs и CUPS journal. Перед выпуском 1.3.0 обязательны сценарии из [release checklist v1.3.0](releases/v1.3.0-checklist.md), в том числе:
 
 - один раздел `DNS / DOMAIN` в enterprise и полный список DC с TCP 88/389;
 - несколько SMB-ресурсов разного происхождения, включая рабочий, недоступный и настроенный, но не смонтированный;
