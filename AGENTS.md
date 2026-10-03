@@ -1,74 +1,74 @@
-# Project workflow
+# Правила работы с проектом
 
-## Repository safety
+## Безопасность репозитория
 
-- Every completed change to this repository must be committed and pushed to the current task branch before the task is handed back to the user.
-- Keep commits focused and run the relevant checks or tests before pushing.
-- After pushing, verify that the remote branch points to the intended commit and report the CI status when CI is available.
-- Do not push directly to `main`, merge a pull request, bump the release version, create a tag, publish a GitHub Release, delete release branches, or publish GitBook changes unless the user explicitly requests that operation.
-- If authentication, permissions, conflicts, or CI prevent the push, preserve the branch/commit state and report the exact blocker instead of claiming that Git is up to date.
+- Каждое завершённое изменение в этом репозитории должно быть закоммичено и отправлено в текущую рабочую ветку до передачи результата пользователю.
+- Делай коммиты сфокусированными и перед отправкой запускай соответствующие проверки или тесты.
+- После отправки проверяй, что удалённая ветка указывает на нужный commit, и сообщай статус CI, если CI доступен.
+- Не отправляй изменения напрямую в `main`, не выполняй merge pull request, не повышай версию релиза, не создавай tag, не публикуй GitHub Release, не удаляй релизные ветки и не публикуй изменения GitBook без явного запроса пользователя.
+- Если отправке мешают аутентификация, права, конфликты или CI, сохрани состояние ветки/commit и сообщи точную причину блокировки вместо утверждения, что Git находится в актуальном состоянии.
 
-## Source of truth
+## Источник актуального состояния
 
-- GitHub is the source of truth for the current code, tests, version, issues, pull requests, and release state.
-- Inspect the current branch, relevant files, recent commits, open issues/PRs, and available CI before making non-trivial changes.
-- Do not rely on stale conversation context when repository state can be checked directly.
+- GitHub является источником актуального состояния кода, тестов, версии, issues, pull requests и релизов.
+- Перед нетривиальными изменениями проверяй текущую ветку, связанные файлы, последние commits, открытые issues/PR и доступный CI.
+- Не полагайся на устаревший контекст разговора, если актуальное состояние репозитория можно проверить напрямую.
 
-## Superpowers workflow
+## Workflow Superpowers
 
-Use the installed Superpowers skills as the default development methodology when they apply.
+Используй установленные skills Superpowers как методологию разработки по умолчанию во всех случаях, где они применимы.
 
-- Before feature work or behavior changes, use `brainstorming` and classify the task as spike, bounded, or architectural.
-- For bugs, test failures, or unexpected behavior, use `systematic-debugging` before proposing a fix.
-- For implementation changes, use `test-driven-development`: reproduce with a failing test first, then make the smallest fix, then run the full relevant suite.
-- For architectural or multi-step work, use `writing-plans` before implementation.
-- When multiple independent tasks can proceed without shared state, use `dispatching-parallel-agents` or `subagent-driven-development` when available and useful.
-- Before claiming a change is complete, use `verification-before-completion` and cite fresh verification evidence.
-- Before merge/release, and for substantial changes, use `requesting-code-review`; address Critical and Important findings before proceeding.
-- Use `finishing-a-development-branch` when implementation is complete and the task is ready for integration decisions.
-- Preserve the user's approval gates from Superpowers. Do not treat approval of an idea as approval to merge, release, or publish.
+- Перед разработкой новой функциональности или изменением поведения используй `brainstorming` и классифицируй задачу как spike, bounded или architectural.
+- Для ошибок, падения тестов или неожиданного поведения используй `systematic-debugging` до предложения исправления.
+- Для изменений реализации используй `test-driven-development`: сначала воспроизведи проблему или новое требование падающим тестом, затем внеси минимальное исправление и после этого запусти полный релевантный набор тестов.
+- Для архитектурных или многошаговых задач используй `writing-plans` до начала реализации.
+- Если несколько независимых задач можно выполнять без общего изменяемого состояния, используй `dispatching-parallel-agents` или `subagent-driven-development`, когда это доступно и действительно полезно.
+- Перед утверждением, что изменение завершено, используй `verification-before-completion` и опирайся на свежие результаты проверки.
+- Перед merge/release, а также для существенных изменений, используй `requesting-code-review`; устраняй замечания уровня Critical и Important до продолжения работы.
+- Используй `finishing-a-development-branch`, когда реализация завершена и задача готова к решению об интеграции.
+- Соблюдай точки подтверждения пользователя, предусмотренные Superpowers. Одобрение идеи не означает разрешения на merge, release или публикацию.
 
-## arm_info project constraints
+## Ограничения проекта arm_info
 
-- Preserve backward compatibility unless the user explicitly approves a breaking change.
-- Treat RED OS 7.x and 8.x compatibility as a primary target when changing platform-sensitive diagnostics.
-- Pay special attention to Kerberos/SSSD, LDAP/AD, SMB/GVFS/autofs, CUPS/printing, DNS/network checks, Citrix-related diagnostics, certificate/token handling, privacy mode, and corporate report output.
-- Avoid regressions in runtime performance. Bounded network and discovery checks must remain bounded; do not introduce unbounded waits or expensive scans without explicit approval.
-- Keep existing CLI behavior stable, including short/long option compatibility, unless a change is explicitly approved.
-- When changing behavior, add or update regression coverage in `tests/` where practical.
-- Prefer focused edits over unrelated refactoring.
+- Сохраняй обратную совместимость, если пользователь явно не согласовал несовместимое изменение.
+- Совместимость с RED OS 7.x и 8.x считать одной из основных целей при изменении платформозависимой диагностики.
+- Особое внимание уделяй Kerberos/SSSD, LDAP/AD, SMB/GVFS/autofs, CUPS/печати, DNS/сетевой диагностике, диагностике Citrix, работе с сертификатами/токенами, режиму приватности и корпоративному отчёту.
+- Не допускай регрессий производительности. Сетевые проверки и discovery должны оставаться ограниченными по времени и объёму; не добавляй неограниченные ожидания или дорогие сканирования без явного согласования.
+- Сохраняй существующее поведение CLI, включая совместимость коротких и длинных ключей, если изменение явно не согласовано.
+- При изменении поведения добавляй или обновляй регрессионное покрытие в `tests/`, когда это практически возможно.
+- Предпочитай точечные изменения несвязанному рефакторингу.
 
-## Verification
+## Проверка
 
-- Use the repository's existing commands as the baseline:
-  - `make check` for version consistency, shell syntax, and shellcheck when available.
-  - `make test` for the full automated test suite.
-- Run narrower tests during development when useful, but run the relevant full suite before claiming completion.
-- If a full test cannot be run in the current environment, state exactly what was and was not verified; do not infer success.
-- For documentation-only or agent-policy-only changes, verify the resulting diff/content and confirm no production files changed.
+- Используй существующие команды репозитория как базовые:
+  - `make check` — проверка согласованности версии, синтаксиса shell и ShellCheck, если он доступен.
+  - `make test` — полный набор автоматизированных тестов.
+- Во время разработки при необходимости запускай более узкие тесты, но перед заявлением о завершении запускай полный релевантный набор.
+- Если полный тест невозможно выполнить в текущем окружении, точно укажи, что было и что не было проверено; не делай вывод об успехе без проверки.
+- Для изменений только документации или правил агента проверяй итоговый diff/содержимое и подтверждай, что production-файлы не изменялись.
 
 ## Context7
 
-- Use Context7 when a change depends on external libraries, APIs, frameworks, or behavior that may have changed.
-- Resolve the exact library/project first, then query only the documentation needed for the task.
-- Do not use Context7 mechanically when the change is fully internal to the shell script or repository.
+- Используй Context7, когда изменение зависит от внешних библиотек, API, frameworks или поведения, которое могло измениться.
+- Сначала определи точный library/project, затем запрашивай только ту документацию, которая нужна для текущей задачи.
+- Не используй Context7 механически, если изменение полностью внутреннее для shell-скрипта или самого репозитория.
 
 ## GitBook
 
-- Keep GitBook documentation synchronized with implemented and verified project behavior when documentation is affected.
-- Prepare GitBook edits through a Change Request.
-- Do not merge/publish the GitBook Change Request without explicit user approval.
-- Do not document planned behavior as already implemented.
+- Поддерживай документацию GitBook синхронной с реализованным и проверенным поведением проекта, когда изменение затрагивает документацию.
+- Подготавливай изменения GitBook через Change Request.
+- Не выполняй merge/publish Change Request в GitBook без явного подтверждения пользователя.
+- Не описывай запланированное поведение как уже реализованное.
 
-## Release preparation
+## Подготовка релиза
 
-When the user asks to prepare a release:
+Когда пользователь просит подготовить релиз:
 
-1. Read the current version and recent changes from GitHub.
-2. Review open issues/PRs that affect the release.
-3. Run or inspect the relevant verification and CI.
-4. Check version consistency, changelog, README, release notes, and user-facing documentation.
-5. Review likely regressions and compatibility risks.
-6. Synchronize GitBook through a Change Request when needed.
-7. Present a release-readiness report with what changed, what was verified, remaining risks, and any manual/field checks still outstanding.
-8. Stop before merge, version bump, tag, GitHub Release publication, or GitBook publication unless the user explicitly approves those operations.
+1. Получи из GitHub текущую версию и последние изменения.
+2. Проверь открытые issues/PR, влияющие на релиз.
+3. Запусти или проверь релевантные проверки и CI.
+4. Проверь согласованность версии, changelog, README, release notes и пользовательской документации.
+5. Проверь вероятные регрессии и риски совместимости.
+6. При необходимости синхронизируй GitBook через Change Request.
+7. Подготовь отчёт о готовности релиза: что изменилось, что проверено, какие риски остались и какие ручные/полевые проверки ещё требуются.
+8. Остановись до merge, повышения версии, создания tag, публикации GitHub Release или публикации GitBook, если пользователь явно не одобрил соответствующее действие.
