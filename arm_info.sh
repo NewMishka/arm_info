@@ -3660,7 +3660,8 @@ evaluate_base_disk_scores() {
         fi
     done
 
-    ((FIXED_DISKS==0)) && DISK_WORST_SCORE=70
+    if ((FIXED_DISKS==0)); then DISK_WORST_SCORE=70; fi
+    return 0
 }
 
 evaluate_base_disk_findings() {
