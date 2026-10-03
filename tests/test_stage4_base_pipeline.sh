@@ -18,9 +18,16 @@ for fn in collect_base_snapshot evaluate_base_disk_findings evaluate_base_snapsh
     declare -F "$fn" >/dev/null || fail "$fn missing"
 done
 
-# Collectors capture/normalize facts. Recommendations belong to checks/scoring.
-! declare -f collect_base_snapshot | grep -Fq 'add_rec ' || \
+# Collectors capture and normalize facts only. Recommendations, thresholds,
+# status classification and scoring belong to checks/scoring.
+collector_body=$(declare -f collect_base_snapshot)
+! grep -Fq 'add_rec ' <<<"$collector_body" || \
     fail 'base collector mixes collection with recommendations'
+! grep -Eq '(^|[^[:alnum:]_])[A-Z0-9_]+_SCORE[[:space:]]*=' <<<"$collector_body" || \
+    fail 'base collector performs score calculation'
+! grep -Eq 'min_score|clamp_score|NET_STATUS[[:space:]]*=|NET_BAD_IFACES\+=' <<<"$collector_body" || \
+    fail 'base collector performs checks/status evaluation'
+
 declare -f evaluate_base_snapshot | grep -Fq 'evaluate_base_disk_findings' || \
     fail 'base evaluator bypasses normalized disk findings'
 declare -f evaluate_base_snapshot | grep -Fq 'add_rec ' || \
