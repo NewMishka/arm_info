@@ -63,6 +63,10 @@ run_base_pipeline
 [[ ${TRACE[*]} == 'collect evaluate view json' ]] || fail "JSON pipeline order: ${TRACE[*]}"
 
 # Disk scoring is reconstructed from normalized facts, outside the collector.
+# These helpers are defined before the extracted pipeline in production; provide
+# equivalent test-local implementations so the architecture test stays host-free.
+min_score() { if (($1<$2)); then printf '%s\n' "$1"; else printf '%s\n' "$2"; fi; }
+clamp_score() { local x=$1; ((x<0))&&x=0; ((x>100))&&x=100; printf '%s\n' "$x"; }
 HDD_TEMP_WARN=50
 HDD_TEMP_HIGH=60
 HDD_TEMP_CRIT=70
