@@ -1,2 +1,5 @@
-blank_issues_enabled: true
-contact_links: []
+blank_issues_enabled: false
+contact_links:
+  - name: Документация arm_info
+    url: https://newmishka.gitbook.io/newmishka-docs/
+    about: Перед созданием Issue проверьте руководство и раздел решения проблем.
