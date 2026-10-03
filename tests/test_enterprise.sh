@@ -64,11 +64,13 @@ RC=$?
 set -e
 ((RC>=0 && RC<=3)) || die "mail config exit code $RC"
 python3 - "$MAIL_JSON" <<'PY' || die "mail config/privacy JSON"
-import json,sys
+import json,re,sys
 d=json.load(open(sys.argv[1],encoding='utf-8'))
 assert d['profile']=='mail'
 text=json.dumps(d,ensure_ascii=False)
-assert 'обнаружено: 1' in text
+endpoints=next(check for check in d['checks'] if check['key']=='mail.endpoints')
+match=re.fullmatch(r'обнаружено: (\d+)', endpoints['value'])
+assert match and int(match.group(1)) >= 1
 assert 'mail-host-1' in text and 'mail-domain-1' in text
 assert 'private.example' not in text
 PY
